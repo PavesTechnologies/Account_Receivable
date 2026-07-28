@@ -18,13 +18,45 @@ public class BillingConfigurationResponseDto {
 
     private UUID clientId;
 
+    private String clientName;
+
     private Long projectId;
 
+    private String projectName;
+
     private BillingConfigurationStatus status;
+
+    private UUID billingTypeId;
+
+    private String billingTypeName;
+
+    private UUID currencyId;
+
+    private String currencyCode;
+
+    private UUID paymentTermId;
+
+    private String paymentTermName;
+
+    private UUID billingFrequencyId;
+
+    private String billingFrequencyName;
+
+    private UUID taxRegionId;
+
+    private String taxRegionName;
+
+    private Boolean expenseBillingEligible;
+
+    private Boolean isActive;
 
     private LocalDate effectiveFrom;
 
     private LocalDate effectiveTo;
+
+    private LocalDateTime createdAt;
+
+    private LocalDateTime updatedAt;
 
     private Integer versionNo;
 
