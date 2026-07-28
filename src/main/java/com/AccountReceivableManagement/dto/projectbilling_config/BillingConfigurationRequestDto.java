@@ -18,6 +18,24 @@ public class BillingConfigurationRequestDto {
     @NotNull(message = "Project is required.")
     private Long projectId;
 
+    @NotNull(message = "Billing Type is required.")
+    private UUID billingTypeId;
+
+    @NotNull(message = "Currency is required.")
+    private UUID currencyId;
+
+    @NotNull(message = "Payment Term is required.")
+    private UUID paymentTermId;
+
+    @NotNull(message = "Billing Frequency is required.")
+    private UUID billingFrequencyId;
+
+    @NotNull(message = "Tax Region is required.")
+    private UUID taxRegionId;
+
+    @NotNull(message = "Expense Billing Eligibility is required.")
+    private Boolean expenseBillingEligible;
+
     @NotNull(message = "Effective From Date is required.")
     private LocalDate effectiveFrom;
 

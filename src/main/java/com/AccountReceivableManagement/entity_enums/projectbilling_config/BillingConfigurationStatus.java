@@ -11,5 +11,7 @@ public enum BillingConfigurationStatus {
 
     REJECTED,
 
-    ARCHIVED
+    ARCHIVED,
+
+    INACTIVE
 }
