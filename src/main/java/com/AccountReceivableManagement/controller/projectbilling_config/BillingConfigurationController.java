@@ -8,6 +8,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -33,5 +35,19 @@ public class BillingConfigurationController {
                         .message("Billing configuration created successfully.")
                         .data(response)
                         .build());
+    }
+
+    @GetMapping("/project/{projectId}")
+    public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> getApprovedByProjectId(
+            @PathVariable Long projectId) {
+
+        BillingConfigurationResponseDto response =
+                billingConfigurationService.getApprovedByProjectId(projectId);
+
+        return ResponseEntity.ok(ApiResponse.<BillingConfigurationResponseDto>builder()
+                .success(true)
+                .message("Billing configuration retrieved successfully.")
+                .data(response)
+                .build());
     }
 }

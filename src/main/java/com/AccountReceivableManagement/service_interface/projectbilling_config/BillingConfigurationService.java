@@ -5,4 +5,6 @@ import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigur
 
 public interface BillingConfigurationService {
     BillingConfigurationResponseDto create(BillingConfigurationRequestDto requestDto);
+
+    BillingConfigurationResponseDto getApprovedByProjectId(Long projectId);
 }

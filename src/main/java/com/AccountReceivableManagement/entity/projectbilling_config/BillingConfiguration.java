@@ -2,10 +2,12 @@ package com.AccountReceivableManagement.entity.projectbilling_config;
 
 import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -50,6 +52,31 @@ public class BillingConfiguration {
     private LocalDate effectiveFrom;
 
     private LocalDate effectiveTo;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "billing_type")
+    private BillingType billingType;
+
+    @Column(name = "currency_code")
+    private String currencyCode;
+
+    @Column(name = "payment_term_code")
+    private String paymentTermCode;
+
+    @Column(name = "billing_frequency")
+    private String billingFrequency;
+
+    @Column(name = "tax_region_code")
+    private String taxRegionCode;
+
+    @Column(name = "hourly_rate")
+    private BigDecimal hourlyRate;
+
+    @Column(name = "contract_value")
+    private BigDecimal contractValue;
+
+    @Column(name = "expense_billing_eligible")
+    private Boolean expenseBillingEligible;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

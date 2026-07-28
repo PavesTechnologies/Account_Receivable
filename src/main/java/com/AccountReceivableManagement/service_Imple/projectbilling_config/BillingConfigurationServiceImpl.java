@@ -67,6 +67,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         billingConfiguration.setEffectiveFrom(request.getEffectiveFrom());
         billingConfiguration.setEffectiveTo(request.getEffectiveTo());
 
+        billingConfiguration.setBillingType(request.getBillingType());
+        billingConfiguration.setCurrencyCode(request.getCurrencyCode());
+        billingConfiguration.setPaymentTermCode(request.getPaymentTermCode());
+        billingConfiguration.setBillingFrequency(request.getBillingFrequency());
+        billingConfiguration.setTaxRegionCode(request.getTaxRegionCode());
+        billingConfiguration.setHourlyRate(request.getHourlyRate());
+        billingConfiguration.setContractValue(request.getContractValue());
+        billingConfiguration.setExpenseBillingEligible(request.getExpenseBillingEligible());
+
         billingConfiguration.setStatus(BillingConfigurationStatus.DRAFT);
         billingConfiguration.setIsActive(false);
 
@@ -77,14 +86,40 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 billingConfigurationRepository.save(billingConfiguration);
 
         // Response
+        return toResponseDto(saved);
+    }
+
+    @Override
+    public BillingConfigurationResponseDto getApprovedByProjectId(Long projectId) {
+        BillingConfiguration billingConfiguration =
+                billingConfigurationRepository
+                        .findByProject_PmsProjectIdAndStatusAndIsActive(
+                                projectId,
+                                BillingConfigurationStatus.APPROVED,
+                                true)
+                        .orElseThrow(() -> new ResourceNotFoundException(
+                                "No approved billing configuration found for project " + projectId + "."));
+
+        return toResponseDto(billingConfiguration);
+    }
+
+    private BillingConfigurationResponseDto toResponseDto(BillingConfiguration billingConfiguration) {
         return BillingConfigurationResponseDto.builder()
-                .billingConfigurationId(saved.getBillingConfigurationId())
-                .clientId(saved.getClient().getClientId())
-                .projectId(saved.getProject().getPmsProjectId())
-                .status(saved.getStatus())
-                .effectiveFrom(saved.getEffectiveFrom())
-                .effectiveTo(saved.getEffectiveTo())
-                .active(saved.getIsActive())
+                .billingConfigurationId(billingConfiguration.getBillingConfigurationId())
+                .clientId(billingConfiguration.getClient().getClientId())
+                .projectId(billingConfiguration.getProject().getPmsProjectId())
+                .status(billingConfiguration.getStatus())
+                .effectiveFrom(billingConfiguration.getEffectiveFrom())
+                .effectiveTo(billingConfiguration.getEffectiveTo())
+                .active(billingConfiguration.getIsActive())
+                .billingType(billingConfiguration.getBillingType())
+                .currencyCode(billingConfiguration.getCurrencyCode())
+                .paymentTermCode(billingConfiguration.getPaymentTermCode())
+                .billingFrequency(billingConfiguration.getBillingFrequency())
+                .taxRegionCode(billingConfiguration.getTaxRegionCode())
+                .hourlyRate(billingConfiguration.getHourlyRate())
+                .contractValue(billingConfiguration.getContractValue())
+                .expenseBillingEligible(billingConfiguration.getExpenseBillingEligible())
                 .build();
     }
 }
