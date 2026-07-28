@@ -1,0 +1,8 @@
+package com.AccountReceivableManagement.service_interface.projectbilling_config;
+
+import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationRequestDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto;
+
+public interface BillingConfigurationService {
+    BillingConfigurationResponseDto create(BillingConfigurationRequestDto requestDto);
+}
