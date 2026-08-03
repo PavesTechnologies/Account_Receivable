@@ -117,6 +117,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         billingConfiguration.setEffectiveFrom(request.getEffectiveFrom());
         billingConfiguration.setEffectiveTo(request.getEffectiveTo());
 
+        billingConfiguration.setHourlyRate(request.getHourlyRate());
+        billingConfiguration.setContractValue(request.getContractValue());
+
         billingConfiguration.setStatus(BillingConfigurationStatus.DRAFT);
         billingConfiguration.setIsActive(false);
 
@@ -127,28 +130,21 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 billingConfigurationRepository.save(billingConfiguration);
 
         // Response
-        return BillingConfigurationResponseDto.builder()
-                .billingConfigurationId(saved.getBillingConfigurationId())
-                .clientId(saved.getClient().getClientId())
-                .clientName(saved.getClient().getClientName())
-                .projectId(saved.getProject().getPmsProjectId())
-                .projectName(saved.getProject().getProjectName())
-                .billingTypeId(saved.getBillingType().getBillingTypeId())
-                .billingTypeName(saved.getBillingType().getBillingTypeName())
-                .currencyId(saved.getCurrency().getCurrencyId())
-                .currencyCode(saved.getCurrency().getCurrencyCode())
-                .paymentTermId(saved.getPaymentTerm().getPaymentTermId())
-                .paymentTermName(saved.getPaymentTerm().getPaymentTermName())
-                .billingFrequencyId(saved.getBillingFrequency().getBillingFrequencyId())
-                .billingFrequencyName(saved.getBillingFrequency().getBillingFrequencyName())
-                .taxRegionId(saved.getTaxRegion().getTaxRegionId())
-                .taxRegionName(saved.getTaxRegion().getTaxRegionName())
-                .expenseBillingEligible(saved.getExpenseBillingEligible())
-                .status(saved.getStatus())
-                .effectiveFrom(saved.getEffectiveFrom())
-                .effectiveTo(saved.getEffectiveTo())
-                .isActive(saved.getIsActive())
-                .build();
+        return mapToResponse(saved);
+    }
+
+    @Override
+    public BillingConfigurationResponseDto getApprovedByProjectId(Long projectId) {
+        BillingConfiguration billingConfiguration =
+                billingConfigurationRepository
+                        .findByProject_PmsProjectIdAndStatusAndIsActive(
+                                projectId,
+                                BillingConfigurationStatus.APPROVED,
+                                true)
+                        .orElseThrow(() -> new ResourceNotFoundException(
+                                "No approved billing configuration found for project " + projectId + "."));
+
+        return mapToResponse(billingConfiguration);
     }
 
     @Override
@@ -200,40 +196,51 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         return mapToResponse(saved);
     }
 
-    private BillingConfigurationResponseDto mapToResponse(BillingConfiguration saved) {
+    private BillingConfigurationResponseDto mapToResponse(BillingConfiguration configuration) {
+
+        BillingTypeMaster billingType = configuration.getBillingType();
+        CurrencyMaster currency = configuration.getCurrency();
+        PaymentTermsMaster paymentTerm = configuration.getPaymentTerm();
+        BillingFrequencyMaster billingFrequency = configuration.getBillingFrequency();
+        TaxRegionMaster taxRegion = configuration.getTaxRegion();
 
         return BillingConfigurationResponseDto.builder()
-                .billingConfigurationId(saved.getBillingConfigurationId())
+                .billingConfigurationId(configuration.getBillingConfigurationId())
 
-                .clientId(saved.getClient().getClientId())
-                .clientName(saved.getClient().getClientName())
+                .clientId(configuration.getClient().getClientId())
+                .clientName(configuration.getClient().getClientName())
 
-                .projectId(saved.getProject().getPmsProjectId())
-                .projectName(saved.getProject().getProjectName())
+                .projectId(configuration.getProject().getPmsProjectId())
+                .projectName(configuration.getProject().getProjectName())
 
-                .billingTypeId(saved.getBillingType().getBillingTypeId())
-                .billingTypeName(saved.getBillingType().getBillingTypeName())
+                .billingTypeId(billingType.getBillingTypeId())
+                .billingTypeName(billingType.getBillingTypeName())
 
-                .currencyId(saved.getCurrency().getCurrencyId())
-                .currencyCode(saved.getCurrency().getCurrencyCode())
+                .currencyId(currency.getCurrencyId())
+                .currencyCode(currency.getCurrencyCode())
 
-                .paymentTermId(saved.getPaymentTerm().getPaymentTermId())
-                .paymentTermName(saved.getPaymentTerm().getPaymentTermName())
+                .paymentTermId(paymentTerm.getPaymentTermId())
+                .paymentTermName(paymentTerm.getPaymentTermName())
 
-                .billingFrequencyId(saved.getBillingFrequency().getBillingFrequencyId())
-                .billingFrequencyName(saved.getBillingFrequency().getBillingFrequencyName())
+                .billingFrequencyId(billingFrequency.getBillingFrequencyId())
+                .billingFrequencyName(billingFrequency.getBillingFrequencyName())
 
-                .taxRegionId(saved.getTaxRegion().getTaxRegionId())
-                .taxRegionName(saved.getTaxRegion().getTaxRegionName())
+                .taxRegionId(taxRegion.getTaxRegionId())
+                .taxRegionName(taxRegion.getTaxRegionName())
+                .taxRegionCode(taxRegion.getTaxRegionCode())
 
-                .expenseBillingEligible(saved.getExpenseBillingEligible())
+                .expenseBillingEligible(configuration.getExpenseBillingEligible())
 
-                .status(saved.getStatus())
-                .effectiveFrom(saved.getEffectiveFrom())
-                .effectiveTo(saved.getEffectiveTo())
-                .isActive(saved.getIsActive())
-                .createdAt(saved.getCreatedAt())
-                .updatedAt(saved.getUpdatedAt())
+                .status(configuration.getStatus())
+                .effectiveFrom(configuration.getEffectiveFrom())
+                .effectiveTo(configuration.getEffectiveTo())
+                .isActive(configuration.getIsActive())
+
+                .hourlyRate(configuration.getHourlyRate())
+                .contractValue(configuration.getContractValue())
+
+                .createdAt(configuration.getCreatedAt())
+                .updatedAt(configuration.getUpdatedAt())
                 .build();
     }
 

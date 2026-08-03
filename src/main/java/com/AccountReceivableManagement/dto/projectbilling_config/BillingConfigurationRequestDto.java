@@ -3,6 +3,7 @@ package com.AccountReceivableManagement.dto.projectbilling_config;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
 
@@ -40,4 +41,8 @@ public class BillingConfigurationRequestDto {
     private LocalDate effectiveFrom;
 
     private LocalDate effectiveTo;
+
+    private BigDecimal hourlyRate;
+
+    private BigDecimal contractValue;
 }

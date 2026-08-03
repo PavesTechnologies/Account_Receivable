@@ -111,7 +111,7 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         BillingSnapshot snapshot = billingSnapshotBuilder.build(context);
         BillingSnapshot savedSnapshot = persistSnapshot(snapshot);
 
-        BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(savedSnapshot);
+        BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(savedSnapshot, configuration);
         return ApiResponse.success("Billing Snapshot created successfully.", responseDto);
     }
 
