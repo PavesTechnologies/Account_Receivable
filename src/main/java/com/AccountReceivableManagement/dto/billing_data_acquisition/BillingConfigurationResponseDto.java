@@ -28,13 +28,31 @@ public class BillingConfigurationResponseDto {
 
     private Long projectId;
 
+    /**
+     * Internal dispatch key only, derived from Epic 1's Billing Type master
+     * name at acquisition time so the service layer can resolve a
+     * {@code BillingAcquisitionStrategy}. Never persisted;
+     * {@link #billingTypeId} is the master reference of record.
+     */
     private BillingType billingType;
+
+    private UUID billingTypeId;
+
+    private String billingTypeName;
+
+    private UUID currencyId;
 
     private String currencyCode;
 
-    private String paymentTermCode;
+    private UUID paymentTermId;
 
-    private String billingFrequency;
+    private String paymentTermName;
+
+    private UUID billingFrequencyId;
+
+    private String billingFrequencyName;
+
+    private UUID taxRegionId;
 
     private String taxRegionCode;
 

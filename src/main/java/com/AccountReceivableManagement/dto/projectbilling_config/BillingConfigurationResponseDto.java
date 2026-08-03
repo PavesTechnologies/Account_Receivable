@@ -1,6 +1,5 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
-import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import lombok.*;
 
@@ -20,13 +19,47 @@ public class BillingConfigurationResponseDto {
 
     private UUID clientId;
 
+    private String clientName;
+
     private Long projectId;
 
+    private String projectName;
+
     private BillingConfigurationStatus status;
+
+    private UUID billingTypeId;
+
+    private String billingTypeName;
+
+    private UUID currencyId;
+
+    private String currencyCode;
+
+    private UUID paymentTermId;
+
+    private String paymentTermName;
+
+    private UUID billingFrequencyId;
+
+    private String billingFrequencyName;
+
+    private UUID taxRegionId;
+
+    private String taxRegionName;
+
+    private String taxRegionCode;
+
+    private Boolean expenseBillingEligible;
+
+    private Boolean isActive;
 
     private LocalDate effectiveFrom;
 
     private LocalDate effectiveTo;
+
+    private LocalDateTime createdAt;
+
+    private LocalDateTime updatedAt;
 
     private Integer versionNo;
 
@@ -36,20 +69,8 @@ public class BillingConfigurationResponseDto {
 
     private Boolean active;
 
-    private BillingType billingType;
-
-    private String currencyCode;
-
-    private String paymentTermCode;
-
-    private String billingFrequency;
-
-    private String taxRegionCode;
-
     private BigDecimal hourlyRate;
 
     private BigDecimal contractValue;
-
-    private Boolean expenseBillingEligible;
 
 }

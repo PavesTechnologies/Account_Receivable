@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.integration.billing_data_acquisition;
 
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingConfigurationResponseDto;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import lombok.RequiredArgsConstructor;
@@ -28,14 +29,44 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
         return BillingConfigurationResponseDto.builder()
                 .billingConfigurationId(epic1Configuration.getBillingConfigurationId())
                 .projectId(epic1Configuration.getProjectId())
-                .billingType(epic1Configuration.getBillingType())
+                .billingType(toBillingTypeEnum(epic1Configuration.getBillingTypeName()))
+                .billingTypeId(epic1Configuration.getBillingTypeId())
+                .billingTypeName(epic1Configuration.getBillingTypeName())
+                .currencyId(epic1Configuration.getCurrencyId())
                 .currencyCode(epic1Configuration.getCurrencyCode())
-                .paymentTermCode(epic1Configuration.getPaymentTermCode())
-                .billingFrequency(epic1Configuration.getBillingFrequency())
+                .paymentTermId(epic1Configuration.getPaymentTermId())
+                .paymentTermName(epic1Configuration.getPaymentTermName())
+                .billingFrequencyId(epic1Configuration.getBillingFrequencyId())
+                .billingFrequencyName(epic1Configuration.getBillingFrequencyName())
+                .taxRegionId(epic1Configuration.getTaxRegionId())
                 .taxRegionCode(epic1Configuration.getTaxRegionCode())
                 .hourlyRate(epic1Configuration.getHourlyRate())
                 .expenseEligible(Boolean.TRUE.equals(epic1Configuration.getExpenseBillingEligible()))
                 .approved(epic1Configuration.getStatus() == BillingConfigurationStatus.APPROVED)
                 .build();
+    }
+
+    /**
+     * Maps a Billing Type master name onto the {@link BillingType} enum that
+     * Epic 2 dispatches its acquisition strategies on, e.g.
+     * {@code "Time & Material" -> TIME_AND_MATERIAL}. Returns {@code null}
+     * when the master row has no corresponding enum constant.
+     */
+    private static BillingType toBillingTypeEnum(String billingTypeName) {
+        if (billingTypeName == null) {
+            return null;
+        }
+
+        String normalized = billingTypeName.trim()
+                .replace("&", "AND")
+                .replaceAll("[^A-Za-z0-9]+", "_")
+                .replaceAll("^_+|_+$", "")
+                .toUpperCase();
+
+        try {
+            return BillingType.valueOf(normalized);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 }

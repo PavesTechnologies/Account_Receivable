@@ -1,6 +1,5 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
-import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 
@@ -20,24 +19,30 @@ public class BillingConfigurationRequestDto {
     @NotNull(message = "Project is required.")
     private Long projectId;
 
+    @NotNull(message = "Billing Type is required.")
+    private UUID billingTypeId;
+
+    @NotNull(message = "Currency is required.")
+    private UUID currencyId;
+
+    @NotNull(message = "Payment Term is required.")
+    private UUID paymentTermId;
+
+    @NotNull(message = "Billing Frequency is required.")
+    private UUID billingFrequencyId;
+
+    @NotNull(message = "Tax Region is required.")
+    private UUID taxRegionId;
+
+    @NotNull(message = "Expense Billing Eligibility is required.")
+    private Boolean expenseBillingEligible;
+
     @NotNull(message = "Effective From Date is required.")
     private LocalDate effectiveFrom;
 
     private LocalDate effectiveTo;
 
-    private BillingType billingType;
-
-    private String currencyCode;
-
-    private String paymentTermCode;
-
-    private String billingFrequency;
-
-    private String taxRegionCode;
-
     private BigDecimal hourlyRate;
 
     private BigDecimal contractValue;
-
-    private Boolean expenseBillingEligible;
 }

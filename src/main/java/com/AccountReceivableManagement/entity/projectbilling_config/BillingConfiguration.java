@@ -2,8 +2,8 @@ package com.AccountReceivableManagement.entity.projectbilling_config;
 
 import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
-import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
+
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -46,6 +46,50 @@ public class BillingConfiguration {
     @Column(name = "status")
     private BillingConfigurationStatus status;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "billing_type_id",
+            referencedColumnName = "billing_type_id",
+            nullable = false
+    )
+    private BillingTypeMaster billingType;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "currency_id",
+            referencedColumnName = "currency_id",
+            nullable = false
+    )
+    private CurrencyMaster currency;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "payment_term_id",
+            referencedColumnName = "payment_term_id",
+            nullable = false
+    )
+    private PaymentTermsMaster paymentTerm;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "billing_frequency_id",
+            referencedColumnName = "billing_frequency_id",
+            nullable = false
+    )
+    private BillingFrequencyMaster billingFrequency;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "tax_region_id",
+            referencedColumnName = "tax_region_id",
+            nullable = false
+    )
+    private TaxRegionMaster taxRegion;
+
+    @Column(name = "expense_billing_eligible", nullable = false)
+    @Builder.Default
+    private Boolean expenseBillingEligible = false;
+
     @Column(name = "is_active")
     private Boolean isActive;
 
@@ -53,30 +97,11 @@ public class BillingConfiguration {
 
     private LocalDate effectiveTo;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "billing_type")
-    private BillingType billingType;
-
-    @Column(name = "currency_code")
-    private String currencyCode;
-
-    @Column(name = "payment_term_code")
-    private String paymentTermCode;
-
-    @Column(name = "billing_frequency")
-    private String billingFrequency;
-
-    @Column(name = "tax_region_code")
-    private String taxRegionCode;
-
     @Column(name = "hourly_rate")
     private BigDecimal hourlyRate;
 
     @Column(name = "contract_value")
     private BigDecimal contractValue;
-
-    @Column(name = "expense_billing_eligible")
-    private Boolean expenseBillingEligible;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

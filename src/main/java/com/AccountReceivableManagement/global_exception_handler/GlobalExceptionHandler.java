@@ -56,6 +56,18 @@ public class GlobalExceptionHandler {
                         .build());
     }
 
+    @ExceptionHandler(DuplicateResourceException.class)
+    public ResponseEntity<ApiResponse<Object>> handleDuplicateResource(
+            DuplicateResourceException ex) {
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.builder()
+                        .success(false)
+                        .message(ex.getMessage())
+                        .data(null)
+                        .build());
+    }
+
     /**
      * Resource Not Found Exception
      */
@@ -72,6 +84,16 @@ public class GlobalExceptionHandler {
     public static class DuplicateBillingConfigurationException extends RuntimeException {
 
         public DuplicateBillingConfigurationException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Duplicate Resource Exception
+     */
+    public static class DuplicateResourceException extends RuntimeException {
+
+        public DuplicateResourceException(String message) {
             super(message);
         }
     }

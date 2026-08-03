@@ -2,13 +2,16 @@ package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.ClientResponseDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.ProjectResponseDto;
 import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
-import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.*;
+import com.AccountReceivableManagement.entity_enums.client.RecordStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
-import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.*;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler.ResourceNotFoundException;
@@ -17,6 +20,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
 
 @Service
 @Transactional
@@ -25,6 +30,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingConfigurationRepository billingConfigurationRepository;
     private final ClientRepository clientRepository;
     private final ProjectMasterReferenceRepository projectRepository;
+    private final BillingTypeMasterRepository billingTypeRepository;
+    private final CurrencyMasterRepository currencyRepository;
+    private final PaymentTermsMasterRepository paymentTermsRepository;
+    private final BillingFrequencyMasterRepository billingFrequencyRepository;
+    private final TaxRegionMasterRepository taxRegionRepository;
+    private final BillingTMRateCardRepository billingTMRateCardRepository;
 
     @Override
     public BillingConfigurationResponseDto create(BillingConfigurationRequestDto request) {
@@ -38,6 +49,33 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         ProjectMasterReference project = projectRepository.findById(request.getProjectId())
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Project not found."));
+
+        // Validate Billing Type
+        BillingTypeMaster billingType = billingTypeRepository
+                .findByBillingTypeIdAndIsActiveTrue(request.getBillingTypeId())
+                .orElseThrow(() ->
+                        new ValidationException(
+                                "Selected Billing Type is inactive or does not exist."));
+
+// Validate Currency
+        CurrencyMaster currency = currencyRepository.findById(request.getCurrencyId())
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Currency not found."));
+
+// Validate Payment Term
+        PaymentTermsMaster paymentTerm = paymentTermsRepository.findById(request.getPaymentTermId())
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Payment Term not found."));
+
+// Validate Billing Frequency
+        BillingFrequencyMaster billingFrequency = billingFrequencyRepository.findById(request.getBillingFrequencyId())
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Billing Frequency not found."));
+
+// Validate Tax Region
+        TaxRegionMaster taxRegion = taxRegionRepository.findById(request.getTaxRegionId())
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Tax Region not found."));
 
         // Validate Project belongs to Client
         if (!project.getClientId().equals(client.getClientId())) {
@@ -63,18 +101,24 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         billingConfiguration.setClient(client);
         billingConfiguration.setProject(project);
+        billingConfiguration.setBillingType(billingType);
+
+        billingConfiguration.setCurrency(currency);
+
+        billingConfiguration.setPaymentTerm(paymentTerm);
+
+        billingConfiguration.setBillingFrequency(billingFrequency);
+
+        billingConfiguration.setTaxRegion(taxRegion);
+
+        billingConfiguration.setExpenseBillingEligible(
+                request.getExpenseBillingEligible());
 
         billingConfiguration.setEffectiveFrom(request.getEffectiveFrom());
         billingConfiguration.setEffectiveTo(request.getEffectiveTo());
 
-        billingConfiguration.setBillingType(request.getBillingType());
-        billingConfiguration.setCurrencyCode(request.getCurrencyCode());
-        billingConfiguration.setPaymentTermCode(request.getPaymentTermCode());
-        billingConfiguration.setBillingFrequency(request.getBillingFrequency());
-        billingConfiguration.setTaxRegionCode(request.getTaxRegionCode());
         billingConfiguration.setHourlyRate(request.getHourlyRate());
         billingConfiguration.setContractValue(request.getContractValue());
-        billingConfiguration.setExpenseBillingEligible(request.getExpenseBillingEligible());
 
         billingConfiguration.setStatus(BillingConfigurationStatus.DRAFT);
         billingConfiguration.setIsActive(false);
@@ -86,7 +130,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 billingConfigurationRepository.save(billingConfiguration);
 
         // Response
-        return toResponseDto(saved);
+        return mapToResponse(saved);
     }
 
     @Override
@@ -100,26 +144,146 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         .orElseThrow(() -> new ResourceNotFoundException(
                                 "No approved billing configuration found for project " + projectId + "."));
 
-        return toResponseDto(billingConfiguration);
+        return mapToResponse(billingConfiguration);
     }
 
-    private BillingConfigurationResponseDto toResponseDto(BillingConfiguration billingConfiguration) {
+    @Override
+    public BillingConfigurationResponseDto approve(UUID billingConfigurationId) {
+
+        BillingConfiguration configuration =
+                billingConfigurationRepository.findById(billingConfigurationId)
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Billing Configuration not found."));
+
+        BillingTypeMaster billingType = configuration.getBillingType();
+
+        if (!Boolean.TRUE.equals(billingType.getIsActive())) {
+            throw new ValidationException(
+                    "Selected Billing Type is inactive and cannot be approved.");
+        }
+
+        boolean configurationExists =
+                billingConfigurationRepository
+                        .existsByProject_PmsProjectIdAndStatusAndIsActive(
+                                configuration.getProject().getPmsProjectId(),
+                                BillingConfigurationStatus.APPROVED,
+                                true);
+
+        if (configurationExists) {
+            throw new GlobalExceptionHandler.DuplicateBillingConfigurationException(
+                    "An active billing configuration already exists for this project.");
+        }
+
+        if (billingType.getBillingTypeName().equalsIgnoreCase("Time & Material")) {
+
+            if (!billingTMRateCardRepository.existsByBillingConfigurationAndIsActiveTrue(configuration)) {
+
+                throw new ValidationException(
+                        "At least one Time & Material Rate Card must be configured before approval.");
+            }
+        }
+
+        configuration.setStatus(BillingConfigurationStatus.APPROVED);
+
+        configuration.setIsActive(true);
+
+        configuration.setUpdatedAt(LocalDateTime.now());
+
+        BillingConfiguration saved =
+                billingConfigurationRepository.save(configuration);
+
+        return mapToResponse(saved);
+    }
+
+    private BillingConfigurationResponseDto mapToResponse(BillingConfiguration configuration) {
+
+        BillingTypeMaster billingType = configuration.getBillingType();
+        CurrencyMaster currency = configuration.getCurrency();
+        PaymentTermsMaster paymentTerm = configuration.getPaymentTerm();
+        BillingFrequencyMaster billingFrequency = configuration.getBillingFrequency();
+        TaxRegionMaster taxRegion = configuration.getTaxRegion();
+
         return BillingConfigurationResponseDto.builder()
-                .billingConfigurationId(billingConfiguration.getBillingConfigurationId())
-                .clientId(billingConfiguration.getClient().getClientId())
-                .projectId(billingConfiguration.getProject().getPmsProjectId())
-                .status(billingConfiguration.getStatus())
-                .effectiveFrom(billingConfiguration.getEffectiveFrom())
-                .effectiveTo(billingConfiguration.getEffectiveTo())
-                .active(billingConfiguration.getIsActive())
-                .billingType(billingConfiguration.getBillingType())
-                .currencyCode(billingConfiguration.getCurrencyCode())
-                .paymentTermCode(billingConfiguration.getPaymentTermCode())
-                .billingFrequency(billingConfiguration.getBillingFrequency())
-                .taxRegionCode(billingConfiguration.getTaxRegionCode())
-                .hourlyRate(billingConfiguration.getHourlyRate())
-                .contractValue(billingConfiguration.getContractValue())
-                .expenseBillingEligible(billingConfiguration.getExpenseBillingEligible())
+                .billingConfigurationId(configuration.getBillingConfigurationId())
+
+                .clientId(configuration.getClient().getClientId())
+                .clientName(configuration.getClient().getClientName())
+
+                .projectId(configuration.getProject().getPmsProjectId())
+                .projectName(configuration.getProject().getProjectName())
+
+                .billingTypeId(billingType.getBillingTypeId())
+                .billingTypeName(billingType.getBillingTypeName())
+
+                .currencyId(currency.getCurrencyId())
+                .currencyCode(currency.getCurrencyCode())
+
+                .paymentTermId(paymentTerm.getPaymentTermId())
+                .paymentTermName(paymentTerm.getPaymentTermName())
+
+                .billingFrequencyId(billingFrequency.getBillingFrequencyId())
+                .billingFrequencyName(billingFrequency.getBillingFrequencyName())
+
+                .taxRegionId(taxRegion.getTaxRegionId())
+                .taxRegionName(taxRegion.getTaxRegionName())
+                .taxRegionCode(taxRegion.getTaxRegionCode())
+
+                .expenseBillingEligible(configuration.getExpenseBillingEligible())
+
+                .status(configuration.getStatus())
+                .effectiveFrom(configuration.getEffectiveFrom())
+                .effectiveTo(configuration.getEffectiveTo())
+                .isActive(configuration.getIsActive())
+
+                .hourlyRate(configuration.getHourlyRate())
+                .contractValue(configuration.getContractValue())
+
+                .createdAt(configuration.getCreatedAt())
+                .updatedAt(configuration.getUpdatedAt())
                 .build();
+    }
+
+    @Override
+    public List<ClientResponseDto> getClients() {
+
+        return clientRepository
+                .findByStatusOrderByClientNameAsc(RecordStatus.ACTIVE)
+                .stream()
+                .map(client -> ClientResponseDto.builder()
+                        .clientId(client.getClientId())
+                        .clientName(client.getClientName())
+                        .build())
+                .toList();
+    }
+
+    @Override
+    public List<ProjectResponseDto> getProjects(UUID clientId) {
+
+        return projectRepository.findByClientIdOrderByProjectNameAsc(clientId)
+                .stream()
+                .map(project -> ProjectResponseDto.builder()
+                        .projectId(project.getPmsProjectId())
+                        .projectName(project.getProjectName())
+                        .build())
+                .toList();
+    }
+
+    @Override
+    public BillingConfigurationResponseDto getBillingConfiguration(UUID billingConfigurationId) {
+
+        BillingConfiguration billingConfiguration = billingConfigurationRepository.findById(billingConfigurationId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Billing Configuration not found with id: " + billingConfigurationId));
+
+        return mapToResponse(billingConfiguration);
+    }
+
+    @Override
+    public List<BillingConfigurationResponseDto> getAllBillingConfigurations() {
+        return billingConfigurationRepository.findAll()
+                .stream()
+                .map(this::mapToResponse)
+                .toList();
     }
 }
