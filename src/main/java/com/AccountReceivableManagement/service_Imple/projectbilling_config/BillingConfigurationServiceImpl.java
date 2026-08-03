@@ -35,6 +35,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final PaymentTermsMasterRepository paymentTermsRepository;
     private final BillingFrequencyMasterRepository billingFrequencyRepository;
     private final TaxRegionMasterRepository taxRegionRepository;
+    private final BillingTMRateCardRepository billingTMRateCardRepository;
 
     @Override
     public BillingConfigurationResponseDto create(BillingConfigurationRequestDto request) {
@@ -50,9 +51,11 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         new ResourceNotFoundException("Project not found."));
 
         // Validate Billing Type
-        BillingTypeMaster billingType = billingTypeRepository.findById(request.getBillingTypeId())
+        BillingTypeMaster billingType = billingTypeRepository
+                .findByBillingTypeIdAndIsActiveTrue(request.getBillingTypeId())
                 .orElseThrow(() ->
-                        new ResourceNotFoundException("Billing Type not found."));
+                        new ValidationException(
+                                "Selected Billing Type is inactive or does not exist."));
 
 // Validate Currency
         CurrencyMaster currency = currencyRepository.findById(request.getCurrencyId())
@@ -156,6 +159,14 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
+
+        BillingTypeMaster billingType = configuration.getBillingType();
+
+        if (!Boolean.TRUE.equals(billingType.getIsActive())) {
+            throw new ValidationException(
+                    "Selected Billing Type is inactive and cannot be approved.");
+        }
+
         boolean configurationExists =
                 billingConfigurationRepository
                         .existsByProject_PmsProjectIdAndStatusAndIsActive(
@@ -166,6 +177,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         if (configurationExists) {
             throw new GlobalExceptionHandler.DuplicateBillingConfigurationException(
                     "An active billing configuration already exists for this project.");
+        }
+
+        if (billingType.getBillingTypeName().equalsIgnoreCase("Time & Material")) {
+
+            if (!billingTMRateCardRepository.existsByBillingConfigurationAndIsActiveTrue(configuration)) {
+
+                throw new ValidationException(
+                        "At least one Time & Material Rate Card must be configured before approval.");
+            }
         }
 
         configuration.setStatus(BillingConfigurationStatus.APPROVED);

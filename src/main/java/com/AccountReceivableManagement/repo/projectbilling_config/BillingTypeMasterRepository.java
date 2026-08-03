@@ -17,4 +17,10 @@ public interface BillingTypeMasterRepository extends JpaRepository<BillingTypeMa
     List<BillingTypeMaster> findByIsActiveTrueOrderByBillingTypeNameAsc();
 
     BillingTypeMaster save(BillingTypeMaster billingType);
+
+    Optional<BillingTypeMaster> findByBillingTypeIdAndIsActiveTrue(UUID billingTypeId);
+
+
+
+
 }
