@@ -5,7 +5,9 @@ import com.AccountReceivableManagement.cdc.mapping.ColumnMapping;
 import com.AccountReceivableManagement.cdc.parsing.CdcValueConverter;
 import com.AccountReceivableManagement.cdc.payload.CdcEventPayload;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
+import com.AccountReceivableManagement.repo.client.ClientBudgetSummaryRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
+import com.AccountReceivableManagement.service_interface.client.ClientBudgetSummaryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,6 +23,7 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
 
     private final ProjectMasterReferenceRepository projectMasterReferenceRepository;
     private final CdcValueConverter valueConverter;
+    private final ClientBudgetSummaryService clientBudgetSummaryService;
 
     @Override
     @Transactional
@@ -81,7 +84,10 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
         ProjectMasterReference project = new ProjectMasterReference();
         updateProjectFromMap(data, project);
         project.setPmsProjectId(pmsProjectId); // Ensure the ID is set
-        projectMasterReferenceRepository.save(project);
+        ProjectMasterReference savedProject =
+                projectMasterReferenceRepository.save(project);
+
+        clientBudgetSummaryService.refreshClientBudget(savedProject.getClientId());
         log.info("Created project with PMS ID: {}", project.getPmsProjectId());
     }
 
@@ -96,21 +102,36 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
                 .orElseThrow(() -> new IllegalArgumentException("Project not found for update with PMS ID: " + pmsProjectId));
 
         updateProjectFromMap(data, existingProject);
-        projectMasterReferenceRepository.save(existingProject);
+        ProjectMasterReference updatedProject =
+                projectMasterReferenceRepository.save(existingProject);
+
+        clientBudgetSummaryService.refreshClientBudget(updatedProject.getClientId());
         log.info("Updated project with PMS ID: {}", pmsProjectId);
     }
 
     private void handleDelete(Map<String, Object> data) {
+
         Long pmsProjectId = getPmsProjectId(data);
+
         if (pmsProjectId == null) {
             log.error("PMS Project ID is null for delete operation.");
             throw new IllegalArgumentException("PMS Project ID cannot be null for delete operations.");
         }
 
-        projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId).ifPresent(project -> {
-            projectMasterReferenceRepository.delete(project);
-            log.info("Deleted project with PMS ID: {}", pmsProjectId);
-        });
+        projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId)
+                .ifPresent(project -> {
+
+                    // Get clientId before deleting
+                    var clientId = project.getClientId();
+
+                    // Delete project
+                    projectMasterReferenceRepository.delete(project);
+
+                    // Refresh summary
+                    clientBudgetSummaryService.refreshClientBudget(clientId);
+
+                    log.info("Deleted project with PMS ID: {}", pmsProjectId);
+                });
     }
 
     private void updateProjectFromMap(Map<String, Object> data, ProjectMasterReference project) {
