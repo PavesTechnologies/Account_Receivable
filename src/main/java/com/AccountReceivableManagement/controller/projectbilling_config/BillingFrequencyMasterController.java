@@ -20,6 +20,7 @@ public class BillingFrequencyMasterController {
 
     private final BillingFrequencyMasterService billingFrequencyService;
 
+
     @PostMapping
     public ResponseEntity<ApiResponse<BillingFrequencyResponseDto>> createBillingFrequency(
             @Valid @RequestBody BillingFrequencyRequestDto request) {

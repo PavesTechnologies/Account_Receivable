@@ -1,7 +1,6 @@
 package com.AccountReceivableManagement.entity.billing_data_acquisition;
 
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
-import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -63,21 +62,20 @@ public class BillingSnapshot {
     @Column(name = "project_id", nullable = false)
     private Long projectId;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "billing_type", nullable = false, length = 40)
-    private BillingType billingType;
+    @Column(name = "billing_type_id", nullable = false)
+    private UUID billingTypeId;
 
-    @Column(name = "currency_code", nullable = false, length = 3)
-    private String currencyCode;
+    @Column(name = "currency_id", nullable = false)
+    private UUID currencyId;
 
-    @Column(name = "payment_term_code", length = 20)
-    private String paymentTermCode;
+    @Column(name = "payment_term_id")
+    private UUID paymentTermId;
 
-    @Column(name = "billing_frequency", length = 30)
-    private String billingFrequency;
+    @Column(name = "billing_frequency_id")
+    private UUID billingFrequencyId;
 
-    @Column(name = "tax_region_code", length = 20)
-    private String taxRegionCode;
+    @Column(name = "tax_region_id")
+    private UUID taxRegionId;
 
     @Column(name = "billing_period_start", nullable = false)
     private LocalDate billingPeriodStart;

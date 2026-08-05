@@ -11,6 +11,8 @@ import java.util.UUID;
 public interface BillingConfigurationService {
     BillingConfigurationResponseDto create(BillingConfigurationRequestDto requestDto);
 
+    BillingConfigurationResponseDto getApprovedByProjectId(Long projectId);
+
     BillingConfigurationResponseDto approve(UUID billingConfigurationId);
 
     List<ClientResponseDto> getClients();

@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.entity_enums.projectbilling_config.Billin
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -95,6 +96,12 @@ public class BillingConfiguration {
     private LocalDate effectiveFrom;
 
     private LocalDate effectiveTo;
+
+    @Column(name = "hourly_rate")
+    private BigDecimal hourlyRate;
+
+    @Column(name = "contract_value")
+    private BigDecimal contractValue;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

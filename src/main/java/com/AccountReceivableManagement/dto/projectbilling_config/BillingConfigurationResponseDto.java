@@ -3,6 +3,7 @@ package com.AccountReceivableManagement.dto.projectbilling_config;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -46,6 +47,8 @@ public class BillingConfigurationResponseDto {
 
     private String taxRegionName;
 
+    private String taxRegionCode;
+
     private Boolean expenseBillingEligible;
 
     private Boolean isActive;
@@ -65,5 +68,9 @@ public class BillingConfigurationResponseDto {
     private LocalDateTime createdDate;
 
     private Boolean active;
+
+    private BigDecimal hourlyRate;
+
+    private BigDecimal contractValue;
 
 }

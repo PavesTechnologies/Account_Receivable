@@ -18,6 +18,11 @@ public interface BillingConfigurationRepository extends JpaRepository<BillingCon
             BillingConfigurationStatus status,
             Boolean isActive);
 
+    Optional<BillingConfiguration> findByProject_PmsProjectIdAndStatusAndIsActive(
+            Long projectId,
+            BillingConfigurationStatus status,
+            Boolean isActive);
+
     boolean existsByProjectAndStatusAndIsActiveTrue(
             ProjectMasterReference project,
             BillingConfigurationStatus status);

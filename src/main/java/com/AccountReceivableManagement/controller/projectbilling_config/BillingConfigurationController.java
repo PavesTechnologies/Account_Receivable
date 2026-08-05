@@ -37,6 +37,20 @@ public class BillingConfigurationController {
                         .build());
     }
 
+    @GetMapping("/project/{projectId}")
+    public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> getApprovedByProjectId(
+            @PathVariable Long projectId) {
+
+        BillingConfigurationResponseDto response =
+                billingConfigurationService.getApprovedByProjectId(projectId);
+
+        return ResponseEntity.ok(ApiResponse.<BillingConfigurationResponseDto>builder()
+                .success(true)
+                .message("Billing configuration retrieved successfully.")
+                .data(response)
+                .build());
+    }
+
     @PutMapping("/{billingConfigurationId}/approve")
     public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> approve(
             @PathVariable UUID billingConfigurationId) {

@@ -1,7 +1,6 @@
 package com.AccountReceivableManagement.dto.billing_data_acquisition;
 
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
-import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -48,30 +47,52 @@ public class BillingSnapshotResponseDto {
     private UUID clientId;
 
     /**
-     * Billing type read from Epic 1's approved Billing Configuration
-     * at acquisition time.
+     * Billing Type master reference recorded on the snapshot at acquisition time.
      */
-    private BillingType billingType;
+    private UUID billingTypeId;
 
     /**
-     * ISO currency code (e.g. {@code USD}) copied from Epic 1 at acquisition time.
+     * Billing Type master name, resolved from Epic 1 at read time.
+     */
+    private String billingTypeName;
+
+    /**
+     * Currency master reference recorded on the snapshot at acquisition time.
+     */
+    private UUID currencyId;
+
+    /**
+     * ISO currency code (e.g. {@code USD}), resolved from Epic 1 at read time.
      */
     private String currencyCode;
 
     /**
-     * Payment term code (e.g. {@code NET30}) copied from Epic 1 at acquisition time.
+     * Payment Terms master reference recorded on the snapshot at acquisition time.
      */
-    private String paymentTermCode;
+    private UUID paymentTermId;
 
     /**
-     * Billing frequency copied from Epic 1 at acquisition time. Kept as a
-     * plain string — Epic 1 owns this master data and hasn't finalized its
-     * allowed value set, so Epic 2 does not model it as an enum.
+     * Payment Terms master name, resolved from Epic 1 at read time.
      */
-    private String billingFrequency;
+    private String paymentTermName;
 
     /**
-     * Tax region code copied from Epic 1 at acquisition time.
+     * Billing Frequency master reference recorded on the snapshot at acquisition time.
+     */
+    private UUID billingFrequencyId;
+
+    /**
+     * Billing Frequency master name, resolved from Epic 1 at read time.
+     */
+    private String billingFrequencyName;
+
+    /**
+     * Tax Region master reference recorded on the snapshot at acquisition time.
+     */
+    private UUID taxRegionId;
+
+    /**
+     * Tax region code, resolved from Epic 1 at read time.
      */
     private String taxRegionCode;
 
