@@ -6,7 +6,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableScheduling
-public class AccountReceivableManagementApplication {
+public class 	AccountReceivableManagementApplication {
 
 	public static void main(String[] args) {
 		SpringApplication.run(AccountReceivableManagementApplication.class, args);
