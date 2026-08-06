@@ -103,6 +103,9 @@ public class BillingConfiguration {
     @Column(name = "contract_value")
     private BigDecimal contractValue;
 
+    @Column(name = "rejection_reason", length = 500)
+    private String rejectionReason;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

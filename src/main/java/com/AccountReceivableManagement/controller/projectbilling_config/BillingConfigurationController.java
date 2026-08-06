@@ -1,10 +1,7 @@
 package com.AccountReceivableManagement.controller.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
-import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationRequestDto;
-import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto;
-import com.AccountReceivableManagement.dto.projectbilling_config.ClientResponseDto;
-import com.AccountReceivableManagement.dto.projectbilling_config.ProjectResponseDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.*;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +32,21 @@ public class BillingConfigurationController {
                         .message("Billing configuration created successfully.")
                         .data(response)
                         .build());
+    }
+
+    @PutMapping("/{billingConfigurationId}")
+    public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> update(
+            @PathVariable UUID billingConfigurationId,
+            @Valid @RequestBody BillingConfigurationRequestDto request) {
+
+        BillingConfigurationResponseDto response =
+                billingConfigurationService.updateBillingConfiguration(billingConfigurationId, request);
+
+        return ResponseEntity.ok(ApiResponse.<BillingConfigurationResponseDto>builder()
+                .success(true)
+                .message("Billing configuration updated successfully.")
+                .data(response)
+                .build());
     }
 
     @GetMapping("/project/{projectId}")
@@ -99,5 +111,36 @@ public class BillingConfigurationController {
 
         return ResponseEntity.ok(
                 billingConfigurationService.getAllBillingConfigurations());
+    }
+
+    @PatchMapping("/{billingConfigurationId}/deactivate")
+    public ResponseEntity<ApiResponse<String>> deactivateBillingConfiguration(
+            @PathVariable UUID billingConfigurationId) {
+
+        billingConfigurationService
+                .deactivateBillingConfiguration(billingConfigurationId);
+
+        return ResponseEntity.ok(
+                ApiResponse.<String>builder()
+                        .success(true)
+                        .message("Billing Configuration deactivated successfully.")
+                        .data("SUCCESS")
+                        .build());
+    }
+
+    @PutMapping("/{billingConfigurationId}/reject")
+    public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> reject(
+            @PathVariable UUID billingConfigurationId,
+            @Valid @RequestBody BillingConfigurationRejectRequestDto request) {
+
+        return ResponseEntity.ok(
+                ApiResponse.<BillingConfigurationResponseDto>builder()
+                        .success(true)
+                        .message("Billing Configuration rejected successfully.")
+                        .data(
+                                billingConfigurationService.reject(
+                                        billingConfigurationId,
+                                        request))
+                        .build());
     }
 }

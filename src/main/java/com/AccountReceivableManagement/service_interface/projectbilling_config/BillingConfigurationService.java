@@ -1,9 +1,6 @@
 package com.AccountReceivableManagement.service_interface.projectbilling_config;
 
-import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationRequestDto;
-import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto;
-import com.AccountReceivableManagement.dto.projectbilling_config.ClientResponseDto;
-import com.AccountReceivableManagement.dto.projectbilling_config.ProjectResponseDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.*;
 
 import java.util.List;
 import java.util.UUID;
@@ -23,8 +20,12 @@ public interface BillingConfigurationService {
 
     List<BillingConfigurationResponseDto> getAllBillingConfigurations();
 
+    BillingConfigurationResponseDto updateBillingConfiguration(
+            UUID billingConfigurationId,
+            BillingConfigurationRequestDto request);
 
-//    BillingConfigurationResponseDto updateBillingConfiguration(
-//            UUID billingConfigurationId,
-//            BillingConfigurationRequestDto request);
+    void deactivateBillingConfiguration(
+            UUID billingConfigurationId);
+
+    BillingConfigurationResponseDto reject(UUID billingConfigurationId, BillingConfigurationRejectRequestDto request);
 }

@@ -35,6 +35,10 @@ public class BillingConfigurationResponseDto {
 
     private String currencyCode;
 
+    private BigDecimal projectBudget;
+
+    private String projectBudgetCurrency;
+
     private UUID paymentTermId;
 
     private String paymentTermName;
@@ -50,6 +54,8 @@ public class BillingConfigurationResponseDto {
     private String taxRegionCode;
 
     private Boolean expenseBillingEligible;
+
+    private String rejectionReason;
 
     private Boolean isActive;
 
