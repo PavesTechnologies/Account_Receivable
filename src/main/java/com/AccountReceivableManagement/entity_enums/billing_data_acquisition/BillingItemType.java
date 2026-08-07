@@ -5,5 +5,7 @@ public enum BillingItemType {
     EXPENSE,
     MILESTONE,
     FIXED_PRICE,
-    RETAINER
+    RETAINER,
+    SOFTWARE,
+    TOOL_CHARGE
 }

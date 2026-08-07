@@ -7,7 +7,6 @@ import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionH
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingFrequencyMasterRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingFrequencyMasterService;
 import lombok.RequiredArgsConstructor;
-import lombok.Setter;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
