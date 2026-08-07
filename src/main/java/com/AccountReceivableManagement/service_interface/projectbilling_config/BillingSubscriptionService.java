@@ -3,7 +3,6 @@ package com.AccountReceivableManagement.service_interface.projectbilling_config;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingSubscriptionRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingSubscriptionResponseDto;
 
-import java.util.List;
 import java.util.UUID;
 
 public interface BillingSubscriptionService {
