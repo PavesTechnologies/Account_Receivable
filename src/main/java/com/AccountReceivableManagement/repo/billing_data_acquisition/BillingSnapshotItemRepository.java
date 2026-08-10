@@ -4,6 +4,7 @@ import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSn
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -12,4 +13,11 @@ import java.util.UUID;
  */
 @Repository
 public interface BillingSnapshotItemRepository extends JpaRepository<BillingSnapshotItem, UUID> {
+
+    boolean existsBySourceReferenceId(String sourceReferenceId);
+
+    boolean existsBySourceReferenceIdAndBillingSnapshot_BillingPeriodStartAndBillingSnapshot_BillingPeriodEnd(
+            String sourceReferenceId,
+            LocalDate billingPeriodStart,
+            LocalDate billingPeriodEnd);
 }

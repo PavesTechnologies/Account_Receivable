@@ -9,8 +9,6 @@ import com.AccountReceivableManagement.service_interface.projectbilling_config.P
 import lombok.RequiredArgsConstructor;
 import org.apache.kafka.common.errors.DuplicateResourceException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;

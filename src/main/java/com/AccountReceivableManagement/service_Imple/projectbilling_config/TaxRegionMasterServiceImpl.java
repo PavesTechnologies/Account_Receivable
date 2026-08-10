@@ -6,9 +6,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.TaxRegionMas
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.TaxRegionMasterService;
-import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
-import org.hibernate.annotations.SecondaryRow;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
