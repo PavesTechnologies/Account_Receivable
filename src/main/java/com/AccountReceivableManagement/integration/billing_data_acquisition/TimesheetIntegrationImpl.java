@@ -73,7 +73,10 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
                 .resourceId(entry.getResourceId())
                 .resourceName(entry.getResourceName())
                 .sourceReferenceId(entry.getTimesheetId())
+                .workDate(entry.getWorkDate())
                 .hours(entry.getHours())
+                .role(entry.getRole())
+                .approvalStatus(entry.getApprovalStatus())
                 .approved(true)
                 .billable(true)
                 .build();

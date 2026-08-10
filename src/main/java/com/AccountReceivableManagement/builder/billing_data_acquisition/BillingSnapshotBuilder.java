@@ -30,6 +30,9 @@ public class BillingSnapshotBuilder {
                     .quantity(timesheet.getHours())
                     .rate(timesheet.getHourlyRate())
                     .amount(timesheet.getHours().multiply(timesheet.getHourlyRate()))
+                    .workDate(timesheet.getWorkDate())
+                    .approvalStatus(timesheet.getApprovalStatus())
+                    .role(timesheet.getRole())
                     .build());
         }
 
