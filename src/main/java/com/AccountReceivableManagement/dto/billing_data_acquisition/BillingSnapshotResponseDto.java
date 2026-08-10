@@ -10,6 +10,8 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -130,4 +132,41 @@ public class BillingSnapshotResponseDto {
      * Current lifecycle status of the snapshot.
      */
     private BillingSnapshotStatus status;
+
+    /**
+     * Timesheet line items acquired from TMS — returned so the UI can
+     * immediately render the Labor Charges Preview table without a
+     * second round-trip. Each entry mirrors one TMS timesheet row with
+     * the commercial rate merged in from the Billing Configuration.
+     */
+    @Builder.Default
+    private List<TimesheetLineItemDto> timesheets = new ArrayList<>();
+
+
+    /**
+     * One row in the Labor Charges Preview table shown in AcquireDataStep.jsx.
+     */
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class TimesheetLineItemDto {
+        /** Shown as "Employee" column. */
+        private String employee;
+        /** Shown as "Work Date" column (ISO YYYY-MM-DD). */
+        private LocalDate workDate;
+        /** Shown as "Hours" column. */
+        private BigDecimal hours;
+        /** Shown as "Rate" column — sourced from AR Billing Config, not TMS. */
+        private BigDecimal rate;
+        /** Shown as "Amount" column = hours × rate. */
+        private BigDecimal amount;
+        /** Shown as "Approval Status" column — always "APPROVED" per TMS contract. */
+        private String approvalStatus;
+        /** TMS source reference id for audit. */
+        private String sourceReferenceId;
+        /** Project role — used for ROLE_BASED billing rate lookup. */
+        private String role;
+    }
 }

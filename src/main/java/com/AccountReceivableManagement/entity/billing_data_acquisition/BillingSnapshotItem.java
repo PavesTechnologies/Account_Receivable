@@ -17,6 +17,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -61,4 +62,19 @@ public class BillingSnapshotItem {
 
     @Column(name = "amount", precision = 19, scale = 2)
     private BigDecimal amount;
+
+    /** Date work was performed — sourced from TMS. Shown as "Work Date" column in UI. */
+    @Column(name = "work_date")
+    private LocalDate workDate;
+
+    /**
+     * TMS approval status (always "APPROVED" per TMS contract).
+     * Shown as "Approval Status" column in the Labor Charges Preview table.
+     */
+    @Column(name = "approval_status", length = 30)
+    private String approvalStatus;
+
+    /** Project role sourced from TMS — used for ROLE_BASED rate lookup. */
+    @Column(name = "role", length = 100)
+    private String role;
 }
