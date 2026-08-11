@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingRatePeriod;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -14,12 +15,14 @@ import java.time.LocalDate;
 @NoArgsConstructor
 @Builder
 public class BillingTMRateCardRequestDto {
-    @NotBlank(message = "Role Name is required.")
     private String roleName;
 
-    @NotNull(message = "Hourly Rate is required.")
-    @DecimalMin(value = "0.01")
-    private BigDecimal hourlyRate;
+    @NotNull(message = "Rate is required.")
+    @DecimalMin(value = "0.01", message = "Rate must be greater than zero.")
+    private BigDecimal rate;
+
+    @NotNull(message = "Rate period is required.")
+    private BillingRatePeriod ratePeriod;
 
     private LocalDate effectiveFrom;
 

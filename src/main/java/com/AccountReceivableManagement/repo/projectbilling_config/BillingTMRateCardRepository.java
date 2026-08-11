@@ -23,4 +23,7 @@ public interface BillingTMRateCardRepository extends JpaRepository<BillingTMRate
     boolean existsByBillingConfigurationAndIsActiveTrue(
             BillingConfiguration billingConfiguration);
 
+    long countByBillingConfigurationAndIsActiveTrue(
+            BillingConfiguration billingConfiguration);
+
 }
