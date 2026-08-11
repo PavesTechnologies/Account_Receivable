@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingRatePeriod;
 import lombok.*;
 
 import java.math.BigDecimal;
@@ -18,7 +19,9 @@ public class BillingTMRateCardResponseDto {
 
     private String roleName;
 
-    private BigDecimal hourlyRate;
+    private BigDecimal rate;
+
+    private BillingRatePeriod ratePeriod;
 
     private LocalDate effectiveFrom;
 

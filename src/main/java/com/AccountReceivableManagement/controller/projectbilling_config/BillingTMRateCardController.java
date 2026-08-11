@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/billing-tm-rate-card")
+@RequestMapping("/api/billing-tm-rate-card")
 @RequiredArgsConstructor
 public class BillingTMRateCardController {
     private final BillingTMRateCardService billingTMRateCardService;

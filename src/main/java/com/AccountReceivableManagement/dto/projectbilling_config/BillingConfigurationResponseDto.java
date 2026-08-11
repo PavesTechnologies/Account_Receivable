@@ -33,6 +33,8 @@ public class BillingConfigurationResponseDto {
 
     private String billingTypeName;
 
+    private Long projectcode;
+
 //    private UUID currencyId;
 //
 //    private String currencyCode;

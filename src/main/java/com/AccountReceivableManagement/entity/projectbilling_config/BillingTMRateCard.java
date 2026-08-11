@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.entity.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingRatePeriod;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -30,11 +31,15 @@ public class BillingTMRateCard{
     )
     private BillingConfiguration billingConfiguration;
 
-    @Column(name = "role_name", nullable = false, length = 100)
+    @Column(name = "role_name", length = 100)
     private String roleName;
 
-    @Column(name = "hourly_rate", nullable = false, precision = 12, scale = 2)
-    private BigDecimal hourlyRate;
+    @Column(name = "rate", nullable = false, precision = 12, scale = 2)
+    private BigDecimal rate;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "rate_period", nullable = false, length = 20)
+    private BillingRatePeriod ratePeriod;
 
     @Column(name = "effective_from")
     private LocalDate effectiveFrom;
