@@ -28,4 +28,6 @@ public interface BillingConfigurationService {
             UUID billingConfigurationId);
 
     BillingConfigurationResponseDto reject(UUID billingConfigurationId, BillingConfigurationRejectRequestDto request);
+
+    BillingConfigurationResponseDto activate(UUID billingConfigurationId);
 }

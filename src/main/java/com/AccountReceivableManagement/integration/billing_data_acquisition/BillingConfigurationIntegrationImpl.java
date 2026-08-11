@@ -23,26 +23,41 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
 
     @Override
     public BillingConfigurationResponseDto getApprovedBillingConfiguration(Long projectId) {
+
         com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto epic1Configuration =
                 billingConfigurationService.getApprovedByProjectId(projectId);
 
         return BillingConfigurationResponseDto.builder()
                 .billingConfigurationId(epic1Configuration.getBillingConfigurationId())
                 .projectId(epic1Configuration.getProjectId())
-                .billingType(toBillingTypeEnum(epic1Configuration.getBillingTypeName()))
+
+                .billingType(toBillingTypeEnum(
+                        epic1Configuration.getBillingTypeName()))
+
                 .billingTypeId(epic1Configuration.getBillingTypeId())
                 .billingTypeName(epic1Configuration.getBillingTypeName())
-                .currencyId(epic1Configuration.getCurrencyId())
-                .currencyCode(epic1Configuration.getCurrencyCode())
+
+                .currencyCode(epic1Configuration.getCurrency())
+
                 .paymentTermId(epic1Configuration.getPaymentTermId())
                 .paymentTermName(epic1Configuration.getPaymentTermName())
+
                 .billingFrequencyId(epic1Configuration.getBillingFrequencyId())
                 .billingFrequencyName(epic1Configuration.getBillingFrequencyName())
+
                 .taxRegionId(epic1Configuration.getTaxRegionId())
                 .taxRegionCode(epic1Configuration.getTaxRegionCode())
+
                 .hourlyRate(epic1Configuration.getHourlyRate())
-                .expenseEligible(Boolean.TRUE.equals(epic1Configuration.getExpenseBillingEligible()))
-                .approved(epic1Configuration.getStatus() == BillingConfigurationStatus.APPROVED)
+
+                .expenseEligible(
+                        Boolean.TRUE.equals(
+                                epic1Configuration.getExpenseBillingEligible()))
+
+                .approved(
+                        epic1Configuration.getStatus()
+                                == BillingConfigurationStatus.APPROVED)
+
                 .build();
     }
 

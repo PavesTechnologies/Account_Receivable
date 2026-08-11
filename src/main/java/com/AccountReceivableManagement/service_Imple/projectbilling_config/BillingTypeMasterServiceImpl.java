@@ -106,6 +106,24 @@ public class BillingTypeMasterServiceImpl implements BillingTypeMasterService {
         billingTypeRepository.save(billingType);
     }
 
+    @Override
+    public BillingTypeResponseDto activateBillingType(UUID billingTypeId) {
+
+        BillingTypeMaster billingType = billingTypeRepository.findById(billingTypeId)
+                .orElseThrow(() ->
+                        new GlobalExceptionHandler.ResourceNotFoundException("Billing Type not found."));
+
+        if (Boolean.TRUE.equals(billingType.getIsActive())) {
+            throw new GlobalExceptionHandler.ValidationException("Billing Type is already active.");
+        }
+
+        billingType.setIsActive(true);
+
+        BillingTypeMaster updated = billingTypeRepository.save(billingType);
+
+        return mapToResponse(updated);
+    }
+
     private BillingTypeResponseDto mapToResponse(BillingTypeMaster billingType) {
 
         return BillingTypeResponseDto.builder()

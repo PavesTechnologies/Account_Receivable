@@ -4,6 +4,8 @@ import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -48,8 +50,7 @@ public class BillingConfiguration {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(
-            name = "billing_type_id",
-            referencedColumnName = "billing_type_id",
+            name = "billing_type_id", referencedColumnName = "billing_type_id",
             nullable = false
     )
     private BillingTypeMaster billingType;
@@ -61,6 +62,9 @@ public class BillingConfiguration {
             nullable = false
     )
     private CurrencyMaster currency;
+
+//    @Column(name = "currency")
+//    private String currency;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(
@@ -100,11 +104,19 @@ public class BillingConfiguration {
     @Column(name = "hourly_rate")
     private BigDecimal hourlyRate;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "invoice_generation_type", nullable = false)
+    private InvoiceGenerationType invoiceGenerationType;
+
     @Column(name = "contract_value")
     private BigDecimal contractValue;
 
     @Column(name = "rejection_reason", length = 500)
     private String rejectionReason;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "pricing_model")
+    private PricingModel pricingModel;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

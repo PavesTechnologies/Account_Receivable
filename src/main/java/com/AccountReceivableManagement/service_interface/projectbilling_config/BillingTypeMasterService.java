@@ -20,4 +20,6 @@ public interface BillingTypeMasterService {
     List<BillingTypeResponseDto> getActiveBillingTypes();
 
     void deleteBillingType(UUID billingTypeId);
+
+    BillingTypeResponseDto activateBillingType(UUID billingTypeId);
 }

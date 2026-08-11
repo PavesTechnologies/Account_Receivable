@@ -1,5 +1,7 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 
@@ -22,8 +24,11 @@ public class BillingConfigurationRequestDto {
     @NotNull(message = "Billing Type is required.")
     private UUID billingTypeId;
 
+//    @NotNull(message = "Currency is required.")
+//    private UUID currencyId;
+
     @NotNull(message = "Currency is required.")
-    private UUID currencyId;
+    private String currency;
 
     @NotNull(message = "Payment Term is required.")
     private UUID paymentTermId;
@@ -33,6 +38,12 @@ public class BillingConfigurationRequestDto {
 
     @NotNull(message = "Tax Region is required.")
     private UUID taxRegionId;
+
+    @NotNull(message = "Pricing Model is required.")
+    private PricingModel pricingModel;
+
+    @NotNull(message = "Invoice Generation Type is required.")
+    private InvoiceGenerationType invoiceGenerationType;
 
     @NotNull(message = "Expense Billing Eligibility is required.")
     private Boolean expenseBillingEligible;

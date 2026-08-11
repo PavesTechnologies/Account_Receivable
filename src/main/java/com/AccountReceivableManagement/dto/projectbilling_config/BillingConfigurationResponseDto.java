@@ -1,6 +1,8 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import lombok.*;
 
 import java.math.BigDecimal;
@@ -31,9 +33,10 @@ public class BillingConfigurationResponseDto {
 
     private String billingTypeName;
 
-    private UUID currencyId;
-
-    private String currencyCode;
+//    private UUID currencyId;
+//
+//    private String currencyCode;
+private String currency;
 
     private BigDecimal projectBudget;
 
@@ -48,6 +51,10 @@ public class BillingConfigurationResponseDto {
     private String billingFrequencyName;
 
     private UUID taxRegionId;
+
+    private PricingModel pricingModel;
+
+    private InvoiceGenerationType invoiceGenerationType;
 
     private String taxRegionName;
 
