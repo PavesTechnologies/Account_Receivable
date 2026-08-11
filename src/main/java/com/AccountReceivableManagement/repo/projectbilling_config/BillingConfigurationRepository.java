@@ -2,6 +2,7 @@ package com.AccountReceivableManagement.repo.projectbilling_config;
 
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.CurrencyMaster;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
@@ -32,4 +33,6 @@ public interface BillingConfigurationRepository extends JpaRepository<BillingCon
     List<BillingConfiguration> findByClientClientId(UUID clientId);
 
     List<BillingConfiguration> findByProjectPmsProjectId(Long projectId);
+
+//    Optional<CurrencyMaster> findByCurrencyCodeIgnoreCase(String currencyCode);
 }

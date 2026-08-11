@@ -23,4 +23,6 @@ public interface PaymentTermsMasterService {
     List<PaymentTermsResponseDto> getActivePaymentTerms();
 
     void deletePaymentTerm(UUID paymentTermId);
+
+    void activatePaymentTerm(UUID paymentTermId);
 }

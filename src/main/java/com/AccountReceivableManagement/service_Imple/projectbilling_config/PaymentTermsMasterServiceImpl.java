@@ -101,6 +101,25 @@ public class PaymentTermsMasterServiceImpl implements PaymentTermsMasterService 
         paymentTermsRepository.save(paymentTerm);
     }
 
+    @Override
+    public void activatePaymentTerm(UUID paymentTermId) {
+
+        PaymentTermsMaster paymentTerm =
+                paymentTermsRepository.findById(paymentTermId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "Payment Term not found."));
+
+        if (Boolean.TRUE.equals(paymentTerm.getIsActive())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Payment Term is already active.");
+        }
+
+        paymentTerm.setIsActive(true);
+
+        paymentTermsRepository.save(paymentTerm);
+    }
+
     private PaymentTermsResponseDto mapToResponse(PaymentTermsMaster paymentTerm) {
 
         return PaymentTermsResponseDto.builder()

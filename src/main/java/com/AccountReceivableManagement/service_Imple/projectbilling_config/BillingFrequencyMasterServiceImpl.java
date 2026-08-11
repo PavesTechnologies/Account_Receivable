@@ -99,6 +99,24 @@ public class BillingFrequencyMasterServiceImpl implements BillingFrequencyMaster
         billingFrequencyMasterRepository.save(billingFrequency);
     }
 
+    @Override
+    public BillingFrequencyResponseDto activateBillingFrequency(UUID billingFrequencyId) {
+
+        BillingFrequencyMaster billingFrequency = billingFrequencyMasterRepository.findById(billingFrequencyId)
+                .orElseThrow(() ->
+                        new GlobalExceptionHandler.ResourceNotFoundException("Billing Frequency not found."));
+
+        if (Boolean.TRUE.equals(billingFrequency.getIsActive())) {
+            throw new GlobalExceptionHandler.ValidationException("Billing Frequency is already active.");
+        }
+
+        billingFrequency.setIsActive(true);
+
+        BillingFrequencyMaster updated = billingFrequencyMasterRepository.save(billingFrequency);
+
+        return mapToResponse(updated);
+    }
+
     private BillingFrequencyResponseDto mapToResponse(BillingFrequencyMaster billingFrequency) {
 
         return BillingFrequencyResponseDto.builder()

@@ -102,4 +102,18 @@ public class BillingFrequencyMasterController {
                 .data(null)
                 .build());
     }
+
+    @PatchMapping("/{billingFrequencyId}/activate")
+    public ResponseEntity<ApiResponse<BillingFrequencyResponseDto>> activateBillingFrequency(
+            @PathVariable UUID billingFrequencyId) {
+
+        BillingFrequencyResponseDto response =
+                billingFrequencyService.activateBillingFrequency(billingFrequencyId);
+
+        return ResponseEntity.ok(ApiResponse.<BillingFrequencyResponseDto>builder()
+                .success(true)
+                .message("Billing Frequency activated successfully.")
+                .data(response)
+                .build());
+    }
 }

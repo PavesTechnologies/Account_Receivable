@@ -98,6 +98,21 @@ public class PaymentTermsMasterController {
         );
     }
 
+    @PutMapping("/{paymentTermId}/activate")
+    public ResponseEntity<ApiResponse<Void>> activatePaymentTerm(
+            @PathVariable UUID paymentTermId) {
+
+        paymentTermsService.activatePaymentTerm(paymentTermId);
+
+        return ResponseEntity.ok(
+                ApiResponse.<Void>builder()
+                        .success(true)
+                        .message("Payment Term activated successfully.")
+                        .data(null)
+                        .build()
+        );
+    }
+
     @DeleteMapping("/{paymentTermId}")
     public ResponseEntity<ApiResponse<Void>> deletePaymentTerm(
             @PathVariable UUID paymentTermId) {

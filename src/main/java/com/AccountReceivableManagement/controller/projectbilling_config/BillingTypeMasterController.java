@@ -107,4 +107,19 @@ public class BillingTypeMasterController {
                         .data(null)
                         .build());
     }
+
+    @PatchMapping("/{billingTypeId}/activate")
+    public ResponseEntity<ApiResponse<BillingTypeResponseDto>> activateBillingType(
+            @PathVariable UUID billingTypeId) {
+
+        BillingTypeResponseDto response =
+                billingTypeService.activateBillingType(billingTypeId);
+
+        return ResponseEntity.ok(
+                ApiResponse.<BillingTypeResponseDto>builder()
+                        .success(true)
+                        .message("Billing Type activated successfully.")
+                        .data(response)
+                        .build());
+    }
 }

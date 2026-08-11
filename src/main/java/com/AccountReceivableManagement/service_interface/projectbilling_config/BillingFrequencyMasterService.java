@@ -19,4 +19,6 @@ public interface BillingFrequencyMasterService {
     List<BillingFrequencyResponseDto> getActiveBillingFrequencies();
 
     void deleteBillingFrequency(UUID billingFrequencyId);
+
+    BillingFrequencyResponseDto activateBillingFrequency(UUID billingFrequencyId);
 }

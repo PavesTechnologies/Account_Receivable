@@ -143,4 +143,19 @@ public class BillingConfigurationController {
                                         request))
                         .build());
     }
+
+    @PutMapping("/{billingConfigurationId}/activate")
+    public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> activate(
+            @PathVariable UUID billingConfigurationId) {
+
+        return ResponseEntity.ok(
+                ApiResponse.<BillingConfigurationResponseDto>builder()
+                        .success(true)
+                        .message("Billing Configuration activated successfully.")
+                        .data(billingConfigurationService.activate(billingConfigurationId))
+                        .build());
+    }
+
+
+
 }
