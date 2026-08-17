@@ -35,16 +35,19 @@ public class BillingConfigurationResponseDto {
 
     private Long projectcode;
 
-//    private UUID currencyId;
-//
-//    private String currencyCode;
-private String currency;
+    private UUID currencyId;
+
+    private String currencyCode;
+
+    private String currency;
 
     private BigDecimal projectBudget;
 
     private String projectBudgetCurrency;
 
     private UUID paymentTermId;
+
+    private String paymentTermCode;
 
     private String paymentTermName;
 

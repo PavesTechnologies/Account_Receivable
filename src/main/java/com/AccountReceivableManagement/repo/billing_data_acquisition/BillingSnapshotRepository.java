@@ -17,5 +17,8 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
     boolean existsByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
             Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
 
+    Optional<BillingSnapshot> findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+            Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
+
     Optional<BillingSnapshot> findBySnapshotNumber(String snapshotNumber);
 }

@@ -399,9 +399,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 .billingTypeId(billingType.getBillingTypeId())
                 .billingTypeName(billingType.getBillingTypeName())
 
-                .currency(configuration.getCurrency().getCurrencyCode())
+                .currencyId(configuration.getCurrency() != null ? configuration.getCurrency().getCurrencyId() : null)
+                .currencyCode(configuration.getCurrency() != null ? configuration.getCurrency().getCurrencyCode() : null)
+                .currency(configuration.getCurrency() != null ? configuration.getCurrency().getCurrencyCode() : null)
 
                 .paymentTermId(paymentTerm.getPaymentTermId())
+                .paymentTermCode(paymentTerm.getPaymentTermName())
                 .paymentTermName(paymentTerm.getPaymentTermName())
 
                 .billingFrequencyId(billingFrequency.getBillingFrequencyId())

@@ -42,10 +42,15 @@ public class BillingSnapshotBuilder {
                 .clientId(context.getClientId())
                 .projectId(context.getRequest().getProjectId())
                 .billingTypeId(context.getConfiguration().getBillingTypeId())
+                .billingType(context.getConfiguration().getBillingTypeName() != null ? context.getConfiguration().getBillingTypeName() : (context.getConfiguration().getBillingType() != null ? context.getConfiguration().getBillingType().name() : null))
                 .currencyId(context.getConfiguration().getCurrencyId())
+                .currencyCode(context.getConfiguration().getCurrencyCode())
                 .paymentTermId(context.getConfiguration().getPaymentTermId())
+                .paymentTermCode(context.getConfiguration().getPaymentTermCode() != null ? context.getConfiguration().getPaymentTermCode() : context.getConfiguration().getPaymentTermName())
                 .billingFrequencyId(context.getConfiguration().getBillingFrequencyId())
+                .billingFrequency(context.getConfiguration().getBillingFrequencyName())
                 .taxRegionId(context.getConfiguration().getTaxRegionId())
+                .taxRegionCode(context.getConfiguration().getTaxRegionCode())
                 .billingPeriodStart(context.getRequest().getBillingPeriodStart())
                 .billingPeriodEnd(context.getRequest().getBillingPeriodEnd())
                 .status(context.getStatus())
@@ -54,6 +59,8 @@ public class BillingSnapshotBuilder {
                 .totalAmount(context.getTotalAmount())
                 .items(items)
                 .createdBy(context.getCreatedBy())
+                .createdDate(java.time.LocalDateTime.now())
+                .updatedDate(java.time.LocalDateTime.now())
                 .build();
 
         items.forEach(item -> item.setBillingSnapshot(snapshot));

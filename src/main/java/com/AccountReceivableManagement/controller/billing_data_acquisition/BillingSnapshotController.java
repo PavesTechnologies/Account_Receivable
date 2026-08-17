@@ -6,8 +6,11 @@ import com.AccountReceivableManagement.dto.common.ApiResponse;
 import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingSnapshotService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDate;
 
 /**
  * REST Controller for Billing Snapshot operations.
@@ -25,40 +28,52 @@ import org.springframework.web.bind.annotation.*;
  */
 @RestController
 @RequestMapping("/api/v1/billing-snapshots")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class BillingSnapshotController {
 
-    private final BillingSnapshotService billingSnapshotService;
+        private final BillingSnapshotService billingSnapshotService;
 
-    /**
-     * Creates a Billing Snapshot.
-     *
-     * Flow:
-     * Request
-     *      ↓
-     * Service
-     *      ↓
-     * Integration
-     *      ↓
-     * Strategy
-     *      ↓
-     * Validator
-     *      ↓
-     * Builder
-     *      ↓
-     * Repository
-     *
-     * @param request Billing Snapshot request
-     * @return Billing Snapshot response
-     */
-    @PostMapping
-    public ResponseEntity<ApiResponse<BillingSnapshotResponseDto>> createBillingSnapshot(
-            @Valid @RequestBody BillingSnapshotCreateRequestDto request) {
+        /**
+         * Creates a Billing Snapshot.
+         *
+         * Flow:
+         * Request
+         * ↓
+         * Service
+         * ↓
+         * Integration
+         * ↓
+         * Strategy
+         * ↓
+         * Validator
+         * ↓
+         * Builder
+         * ↓
+         * Repository
+         *
+         * @param request Billing Snapshot request
+         * @return Billing Snapshot response
+         */
+        @PostMapping
+        public ResponseEntity<ApiResponse<BillingSnapshotResponseDto>> createBillingSnapshot(
+                        @Valid @RequestBody BillingSnapshotCreateRequestDto request) {
 
-        ApiResponse<BillingSnapshotResponseDto> response =
-                billingSnapshotService.createBillingSnapshot(request);
+                ApiResponse<BillingSnapshotResponseDto> response = billingSnapshotService
+                                .createBillingSnapshot(request);
 
-        return ResponseEntity.ok(response);
-    }
+                return ResponseEntity.ok(response);
+        }
+
+        @GetMapping("/by-period")
+        public ResponseEntity<ApiResponse<BillingSnapshotResponseDto>> getByProjectAndPeriod(
+                        @RequestParam Long projectId,
+                        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate billingPeriodStart,
+                        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate billingPeriodEnd) {
+
+                ApiResponse<BillingSnapshotResponseDto> response = billingSnapshotService
+                                .getByProjectAndPeriod(projectId, billingPeriodStart, billingPeriodEnd);
+
+                return ResponseEntity.ok(response);
+        }
+
 }

@@ -33,6 +33,7 @@ public class BillingSnapshotMapper {
 
         return BillingSnapshotResponseDto.builder()
                 .snapshotId(snapshot.getId())
+                .acquisitionStatus("READY")
                 .snapshotNumber(snapshot.getSnapshotNumber())
                 .projectId(snapshot.getProjectId())
                 .clientId(snapshot.getClientId())
