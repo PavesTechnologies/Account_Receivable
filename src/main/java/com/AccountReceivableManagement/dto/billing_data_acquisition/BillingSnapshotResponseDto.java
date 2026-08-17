@@ -34,6 +34,11 @@ public class BillingSnapshotResponseDto {
     private UUID snapshotId;
 
     /**
+     * Acquisition status determined by the snapshot engine (e.g. READY | PARTIALLY_READY).
+     */
+    private String acquisitionStatus;
+
+    /**
      * Human-readable, business-facing identifier (e.g. {@code BS-20260724153015}).
      */
     private String snapshotNumber;

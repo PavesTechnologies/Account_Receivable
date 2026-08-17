@@ -4,6 +4,8 @@ import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnaps
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnapshotResponseDto;
 import com.AccountReceivableManagement.dto.common.ApiResponse;
 
+import java.time.LocalDate;
+
 /**
  * Orchestrates Billing Data Acquisition for Story 2.1: reads the approved
  * Billing Configuration, resolves the client, acquires and validates
@@ -13,4 +15,6 @@ import com.AccountReceivableManagement.dto.common.ApiResponse;
 public interface BillingSnapshotService {
 
     ApiResponse<BillingSnapshotResponseDto> createBillingSnapshot(BillingSnapshotCreateRequestDto request);
+
+    ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
 }

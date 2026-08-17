@@ -3,6 +3,7 @@ package com.AccountReceivableManagement.entity.projectbilling_config;
 import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.GenerationMode;
 
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
@@ -110,6 +111,10 @@ public class BillingConfiguration {
 
     @Column(name = "contract_value")
     private BigDecimal contractValue;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "generation_mode")
+    private GenerationMode generationMode;
 
     @Column(name = "rejection_reason", length = 500)
     private String rejectionReason;

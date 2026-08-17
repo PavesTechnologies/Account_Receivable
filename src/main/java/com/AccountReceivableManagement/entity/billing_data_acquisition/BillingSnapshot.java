@@ -65,17 +65,32 @@ public class BillingSnapshot {
     @Column(name = "billing_type_id", nullable = false)
     private UUID billingTypeId;
 
+    @Column(name = "billing_type", length = 100)
+    private String billingType;
+
     @Column(name = "currency_id", nullable = false)
     private UUID currencyId;
+
+    @Column(name = "currency_code", nullable = false, length = 10)
+    private String currencyCode;
 
     @Column(name = "payment_term_id")
     private UUID paymentTermId;
 
+    @Column(name = "payment_term_code", length = 100)
+    private String paymentTermCode;
+
     @Column(name = "billing_frequency_id")
     private UUID billingFrequencyId;
 
+    @Column(name = "billing_frequency", length = 100)
+    private String billingFrequency;
+
     @Column(name = "tax_region_id")
     private UUID taxRegionId;
+
+    @Column(name = "tax_region_code", length = 100)
+    private String taxRegionCode;
 
     @Column(name = "billing_period_start", nullable = false)
     private LocalDate billingPeriodStart;

@@ -4,26 +4,29 @@ import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingAcqui
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnapshotCreateRequestDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.TimesheetDto;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingTMRateCard;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.integration.billing_data_acquisition.TimesheetIntegration;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingTMRateCardRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Story 2.1: acquires approved timesheets from the TMS for Time &amp;
- * Material billing. This is the one place operational data (TMS hours)
- * and commercial data (Epic 1's hourly rate) come together — TMS never
- * knows the rate, and the Validator/Builder downstream never need to know
- * where it came from. Acquisition and this one merge step only; validation,
- * entity mapping, and totals belong to later layers.
+ * Acquires approved timesheets from TMS for Time & Material billing
+ * and retrieves active hourly rates from billing_tm_rate_card for the configuration.
  */
 @Component
 @RequiredArgsConstructor
 public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrategy {
 
     private final TimesheetIntegration timesheetIntegration;
+    private final BillingTMRateCardRepository billingTMRateCardRepository;
 
     @Override
     public BillingType getSupportedBillingType() {
@@ -35,9 +38,42 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
         List<TimesheetDto> timesheets = timesheetIntegration.getApprovedTimesheets(
                 request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
 
-        timesheets.forEach(timesheet -> timesheet.setHourlyRate(configuration.getHourlyRate()));
+        if (timesheets == null) {
+            timesheets = Collections.emptyList();
+        }
+
+        UUID configId = request.getBillingConfigurationId() != null
+                ? request.getBillingConfigurationId()
+                : (configuration != null ? configuration.getBillingConfigurationId() : null);
+
+        for (TimesheetDto timesheet : timesheets) {
+            LocalDate workDate = timesheet.getWorkDate() != null ? timesheet.getWorkDate() : request.getBillingPeriodStart();
+            BigDecimal hourlyRate = null;
+
+            if (configId != null) {
+                List<BillingTMRateCard> activeRates = billingTMRateCardRepository
+                        .findActiveRatesByConfigurationAndDate(configId, workDate);
+
+                if (activeRates != null && !activeRates.isEmpty()) {
+                    hourlyRate = activeRates.get(0).getRate();
+                } else {
+                    List<BillingTMRateCard> allActive = billingTMRateCardRepository
+                            .findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(configId);
+                    if (allActive != null && !allActive.isEmpty()) {
+                        hourlyRate = allActive.get(0).getRate();
+                    }
+                }
+            }
+
+            if (hourlyRate == null && configuration != null && configuration.getHourlyRate() != null) {
+                hourlyRate = configuration.getHourlyRate();
+            }
+
+            timesheet.setHourlyRate(hourlyRate);
+        }
 
         return BillingAcquisitionResultDto.builder()
+                .billingConfigurationId(configId)
                 .timesheets(timesheets)
                 .build();
     }

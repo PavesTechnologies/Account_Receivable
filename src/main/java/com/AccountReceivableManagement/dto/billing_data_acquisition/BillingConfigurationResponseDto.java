@@ -46,6 +46,8 @@ public class BillingConfigurationResponseDto {
 
     private UUID paymentTermId;
 
+    private String paymentTermCode;
+
     private String paymentTermName;
 
     private UUID billingFrequencyId;
