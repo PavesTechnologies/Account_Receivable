@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.LocalDate;
+import java.util.UUID;
 
 /**
  * Request body for {@code POST /billing-snapshots} — the minimal input
@@ -23,6 +24,11 @@ public class BillingSnapshotCreateRequestDto {
 
     @NotNull(message = "Project is required.")
     private Long projectId;
+
+    /**
+     * Unique identifier of the Billing Configuration selected in Project Billing Setup.
+     */
+    private UUID billingConfigurationId;
 
     @NotNull(message = "Billing period start date is required.")
     private LocalDate billingPeriodStart;

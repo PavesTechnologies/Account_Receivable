@@ -7,14 +7,8 @@ import com.AccountReceivableManagement.service_interface.projectbilling_config.B
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
-/**
- * Reads the approved Billing Configuration from Epic 1. Epic 1 lives in
- * this same application (see {@code projectbilling_config}), so this is a
- * direct in-process call to its service — no HTTP hop, no separate base
- * URL, no token forwarding required. This is the only class in Epic 2 that
- * knows Epic 1's own response shape; everything downstream only ever sees
- * this class's own {@code BillingConfigurationResponseDto}.
- */
+import java.util.UUID;
+
 @Component
 @RequiredArgsConstructor
 public class BillingConfigurationIntegrationImpl implements BillingConfigurationIntegration {
@@ -23,52 +17,46 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
 
     @Override
     public BillingConfigurationResponseDto getApprovedBillingConfiguration(Long projectId) {
-
         com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto epic1Configuration =
                 billingConfigurationService.getApprovedByProjectId(projectId);
+        return mapToDto(epic1Configuration);
+    }
+
+    @Override
+    public BillingConfigurationResponseDto getApprovedBillingConfigurationById(UUID billingConfigurationId) {
+        com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto epic1Configuration =
+                billingConfigurationService.getBillingConfiguration(billingConfigurationId);
+        return mapToDto(epic1Configuration);
+    }
+
+    private BillingConfigurationResponseDto mapToDto(com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto epic1Configuration) {
+        if (epic1Configuration == null) {
+            return null;
+        }
 
         return BillingConfigurationResponseDto.builder()
                 .billingConfigurationId(epic1Configuration.getBillingConfigurationId())
                 .projectId(epic1Configuration.getProjectId())
-
-                .billingType(toBillingTypeEnum(
-                        epic1Configuration.getBillingTypeName()))
-
+                .billingType(toBillingTypeEnum(epic1Configuration.getBillingTypeName()))
                 .billingTypeId(epic1Configuration.getBillingTypeId())
                 .billingTypeName(epic1Configuration.getBillingTypeName())
-
-                .currencyCode(epic1Configuration.getCurrency())
-
+                .currencyId(epic1Configuration.getCurrencyId())
+                .currencyCode(epic1Configuration.getCurrency() != null ? epic1Configuration.getCurrency() : epic1Configuration.getCurrencyCode())
                 .paymentTermId(epic1Configuration.getPaymentTermId())
+                .paymentTermCode(epic1Configuration.getPaymentTermCode() != null ? epic1Configuration.getPaymentTermCode() : epic1Configuration.getPaymentTermName())
                 .paymentTermName(epic1Configuration.getPaymentTermName())
-
                 .billingFrequencyId(epic1Configuration.getBillingFrequencyId())
                 .billingFrequencyName(epic1Configuration.getBillingFrequencyName())
-
                 .taxRegionId(epic1Configuration.getTaxRegionId())
                 .taxRegionCode(epic1Configuration.getTaxRegionCode())
-
                 .hourlyRate(epic1Configuration.getHourlyRate())
-
-                .expenseEligible(
-                        Boolean.TRUE.equals(
-                                epic1Configuration.getExpenseBillingEligible()))
-
-                .approved(
-                        epic1Configuration.getStatus()
-                                == BillingConfigurationStatus.APPROVED)
-
+                .expenseEligible(Boolean.TRUE.equals(epic1Configuration.getExpenseBillingEligible()))
+                .approved(epic1Configuration.getStatus() == BillingConfigurationStatus.APPROVED)
                 .build();
     }
 
-    /**
-     * Maps a Billing Type master name onto the {@link BillingType} enum that
-     * Epic 2 dispatches its acquisition strategies on, e.g.
-     * {@code "Time & Material" -> TIME_AND_MATERIAL}. Returns {@code null}
-     * when the master row has no corresponding enum constant.
-     */
     private static BillingType toBillingTypeEnum(String billingTypeName) {
-        if (billingTypeName == null) {
+        if (billingTypeName == null || billingTypeName.isBlank()) {
             return null;
         }
 
@@ -78,10 +66,23 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
                 .replaceAll("^_+|_+$", "")
                 .toUpperCase();
 
+        if (normalized.contains("TIMESHEET") || normalized.contains("TIME_MATERIAL") || normalized.contains("TIME_AND_MATERIAL")) {
+            return BillingType.TIME_AND_MATERIAL;
+        }
+        if (normalized.contains("FIXED")) {
+            return BillingType.FIXED_PRICE;
+        }
+        if (normalized.contains("MILESTONE")) {
+            return BillingType.MILESTONE;
+        }
+        if (normalized.contains("RECURRING") || normalized.contains("SUBSCRIPTION") || normalized.contains("RETAINER")) {
+            return BillingType.RETAINER;
+        }
+
         try {
             return BillingType.valueOf(normalized);
         } catch (IllegalArgumentException ex) {
-            return null;
+            return BillingType.TIME_AND_MATERIAL;
         }
     }
 }

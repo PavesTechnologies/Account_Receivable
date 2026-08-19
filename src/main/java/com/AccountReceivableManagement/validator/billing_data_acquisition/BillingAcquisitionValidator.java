@@ -43,8 +43,11 @@ public class BillingAcquisitionValidator {
                         "Timesheet [" + timesheet.getSourceReferenceId() + "] has invalid hours.");
             }
             if (timesheet.getHourlyRate() == null || timesheet.getHourlyRate().compareTo(BigDecimal.ZERO) <= 0) {
+                String configIdStr = acquisitionResult.getBillingConfigurationId() != null
+                        ? acquisitionResult.getBillingConfigurationId().toString()
+                        : "N/A";
                 return ValidationResultDto.failure(
-                        "Timesheet [" + timesheet.getSourceReferenceId() + "] has invalid hourly rate.");
+                        "No active hourly rate found for billing configuration " + configIdStr + " and work date " + timesheet.getWorkDate() + ".");
             }
             if (!seenSourceReferenceIds.add(timesheet.getSourceReferenceId())) {
                 return ValidationResultDto.failure(
