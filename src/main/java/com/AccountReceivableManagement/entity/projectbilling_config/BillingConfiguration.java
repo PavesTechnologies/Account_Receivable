@@ -60,7 +60,7 @@ public class BillingConfiguration {
     @JoinColumn(
             name = "currency_id",
             referencedColumnName = "currency_id",
-            nullable = false
+            nullable = true
     )
     private CurrencyMaster currency;
 
@@ -71,7 +71,7 @@ public class BillingConfiguration {
     @JoinColumn(
             name = "payment_term_id",
             referencedColumnName = "payment_term_id",
-            nullable = false
+            nullable = true
     )
     private PaymentTermsMaster paymentTerm;
 
@@ -79,7 +79,7 @@ public class BillingConfiguration {
     @JoinColumn(
             name = "billing_frequency_id",
             referencedColumnName = "billing_frequency_id",
-            nullable = false
+            nullable = true
     )
     private BillingFrequencyMaster billingFrequency;
 
@@ -87,7 +87,7 @@ public class BillingConfiguration {
     @JoinColumn(
             name = "tax_region_id",
             referencedColumnName = "tax_region_id",
-            nullable = false
+            nullable = true
     )
     private TaxRegionMaster taxRegion;
 
@@ -106,11 +106,11 @@ public class BillingConfiguration {
     private BigDecimal hourlyRate;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "invoice_generation_type", nullable = false)
+    @Column(name = "invoice_generation_type", nullable = true)
     private InvoiceGenerationType invoiceGenerationType;
 
-    @Column(name = "contract_value")
-    private BigDecimal contractValue;
+//    @Column(name = "contract_value")
+//    private BigDecimal contractValue;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "generation_mode")
