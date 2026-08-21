@@ -125,7 +125,7 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         BillingAmountSummary amounts = calculateAmounts(validationResult.getAcquisitionResult().getTimesheets());
         String snapshotNumber = generateSnapshotNumber();
         String createdBy = "SYSTEM";
-        BillingSnapshotStatus status = BillingSnapshotStatus.READY_FOR_TAX;
+        BillingSnapshotStatus status = BillingSnapshotStatus.READY_TO_TAX;
 
         BillingSnapshotBuilderContext context = buildContext(
                 configuration, request, validationResult.getAcquisitionResult(),
