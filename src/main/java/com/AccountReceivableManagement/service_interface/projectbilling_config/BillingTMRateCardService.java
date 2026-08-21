@@ -24,4 +24,8 @@ public interface BillingTMRateCardService {
     void deleteRateCard(
             UUID rateCardId);
 
+    BillingTMRateCardResponseDto saveRateCard(
+            UUID billingConfigurationId,
+            BillingTMRateCardRequestDto request);
+
 }

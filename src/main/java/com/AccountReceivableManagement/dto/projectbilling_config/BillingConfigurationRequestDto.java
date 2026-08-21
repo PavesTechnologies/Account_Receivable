@@ -39,7 +39,6 @@ public class BillingConfigurationRequestDto {
     @NotNull(message = "Tax Region is required.")
     private UUID taxRegionId;
 
-    @NotNull(message = "Pricing Model is required.")
     private PricingModel pricingModel;
 
     @NotNull(message = "Invoice Generation Type is required.")
@@ -55,5 +54,11 @@ public class BillingConfigurationRequestDto {
 
     private BigDecimal hourlyRate;
 
-    private BigDecimal contractValue;
+    /**
+     * When true, this is the final "Create Billing Setup" operation.
+     * The configuration will be activated with status=ACTIVE and isActive=true.
+     * When false or null, this is a normal save/update and remains DRAFT.
+     */
+    private Boolean finalize;
+
 }

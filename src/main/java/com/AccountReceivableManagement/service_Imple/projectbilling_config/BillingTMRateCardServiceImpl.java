@@ -331,6 +331,46 @@ public class BillingTMRateCardServiceImpl implements BillingTMRateCardService {
                 .build();
     }
 
+    @Override
+    @Transactional
+    public BillingTMRateCardResponseDto saveRateCard(
+            UUID billingConfigurationId,
+            BillingTMRateCardRequestDto request) {
 
+        // Only verify that the Billing Configuration exists
+        BillingConfiguration configuration =
+                billingConfigurationRepository.findById(billingConfigurationId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "Billing Configuration not found with ID: "
+                                                + billingConfigurationId));
+
+        // Validate only the rate-card-specific data
+        if (request.getEffectiveFrom() != null
+                && request.getEffectiveTo() != null
+                && request.getEffectiveFrom().isAfter(request.getEffectiveTo())) {
+
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Effective From cannot be after Effective To.");
+        }
+
+        BillingTMRateCard rateCard = BillingTMRateCard.builder()
+                .billingConfiguration(configuration)
+                .roleName(request.getRoleName())
+                .rate(request.getRate())
+                .ratePeriod(request.getRatePeriod())
+                .effectiveFrom(request.getEffectiveFrom())
+                .effectiveTo(request.getEffectiveTo())
+                .remarks(request.getRemarks())
+                .isActive(true)
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+
+        BillingTMRateCard savedRateCard =
+                billingTMRateCardRepository.save(rateCard);
+
+        return mapToResponse(savedRateCard);
+    }
 
 }

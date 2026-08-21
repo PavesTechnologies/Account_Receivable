@@ -14,12 +14,15 @@ public interface BillingFixedPriceRepository extends JpaRepository<BillingFixedP
 
     Optional<BillingFixedPriceConfiguration>
     findByBillingConfigurationAndIsActiveTrue(
-            BillingConfiguration billingConfiguration);
+            BillingConfiguration billingConfiguration
+    );
 
     boolean existsByBillingConfigurationAndIsActiveTrue(
-            BillingConfiguration billingConfiguration);
+            BillingConfiguration billingConfiguration
+    );
 
     List<BillingFixedPriceConfiguration>
     findAllByBillingConfigurationAndIsActiveTrue(
-            BillingConfiguration billingConfiguration);
+            BillingConfiguration billingConfiguration
+    );
 }

@@ -1,94 +1,97 @@
-package com.AccountReceivableManagement.dto.projectbilling_config;
+    package com.AccountReceivableManagement.dto.projectbilling_config;
 
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
-import lombok.*;
+    import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
+    import com.AccountReceivableManagement.entity_enums.projectbilling_config.GenerationMode;
+    import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
+    import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
+    import lombok.*;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.util.UUID;
+    import java.math.BigDecimal;
+    import java.time.LocalDate;
+    import java.time.LocalDateTime;
+    import java.util.UUID;
 
-@Getter
-@Setter
-@NoArgsConstructor
-@AllArgsConstructor
-@Builder
-public class BillingConfigurationResponseDto {
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public class BillingConfigurationResponseDto {
 
-    private UUID billingConfigurationId;
+        private UUID billingConfigurationId;
 
-    private UUID clientId;
+        private UUID clientId;
 
-    private String clientName;
+        private String clientName;
 
-    private Long projectId;
+        private Long projectId;
 
-    private String projectName;
+        private String projectName;
 
-    private BillingConfigurationStatus status;
+        private BillingConfigurationStatus status;
 
-    private UUID billingTypeId;
+        private UUID billingTypeId;
 
-    private String billingTypeName;
+        private String billingTypeName;
 
-    private Long projectcode;
+        private Long projectcode;
 
-    private UUID currencyId;
+        private UUID currencyId;
 
-    private String currencyCode;
+        private String currencyCode;
 
-    private String currency;
+        private String currency;
 
-    private BigDecimal projectBudget;
+        private BigDecimal projectBudget;
 
-    private String projectBudgetCurrency;
+        private String projectBudgetCurrency;
 
-    private UUID paymentTermId;
+        private UUID paymentTermId;
 
-    private String paymentTermCode;
+        private String paymentTermCode;
 
-    private String paymentTermName;
+        private String paymentTermName;
 
-    private UUID billingFrequencyId;
+        private UUID billingFrequencyId;
 
-    private String billingFrequencyName;
+        private String billingFrequencyName;
 
-    private UUID taxRegionId;
+        private UUID taxRegionId;
 
-    private PricingModel pricingModel;
+        private PricingModel pricingModel;
 
-    private InvoiceGenerationType invoiceGenerationType;
+        private InvoiceGenerationType invoiceGenerationType;
 
-    private String taxRegionName;
+        private GenerationMode generationMode;
 
-    private String taxRegionCode;
+        private String taxRegionName;
 
-    private Boolean expenseBillingEligible;
+        private String taxRegionCode;
 
-    private String rejectionReason;
+        private Boolean expenseBillingEligible;
 
-    private Boolean isActive;
+        private String rejectionReason;
 
-    private LocalDate effectiveFrom;
+        private Boolean isActive;
 
-    private LocalDate effectiveTo;
+        private LocalDate effectiveFrom;
 
-    private LocalDateTime createdAt;
+        private LocalDate effectiveTo;
 
-    private LocalDateTime updatedAt;
+        private LocalDateTime createdAt;
 
-    private Integer versionNo;
+        private LocalDateTime updatedAt;
 
-    private String createdBy;
+        private Integer versionNo;
 
-    private LocalDateTime createdDate;
+        private String createdBy;
 
-    private Boolean active;
+        private LocalDateTime createdDate;
 
-    private BigDecimal hourlyRate;
+        private Boolean active;
 
-    private BigDecimal contractValue;
+        private BigDecimal hourlyRate;
 
-}
+
+
+    }

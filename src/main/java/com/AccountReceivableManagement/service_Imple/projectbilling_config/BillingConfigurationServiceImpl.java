@@ -15,6 +15,7 @@ import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionH
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler.ResourceNotFoundException;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler.ValidationException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @Transactional
 @RequiredArgsConstructor
@@ -40,9 +42,17 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingTMRateCardRepository billingTMRateCardRepository;
     private final BillingFixedPriceRepository billingFixedPriceRepository;
     private final BillingSubscriptionConfigurationRepository billingSubscriptionConfigurationRepository;
+    private final ProjectMasterReferenceRepository projectMasterReferenceRepository;
+    private final BillingTypeMasterRepository billingTypeMasterRepository;
+    private final BillingFrequencyMasterRepository billingFrequencyMasterRepository;
+
+    // =========================================================
+    // CREATE BILLING CONFIGURATION
+    // =========================================================
 
     @Override
-    public BillingConfigurationResponseDto create(BillingConfigurationRequestDto request) {
+    public BillingConfigurationResponseDto create(
+            BillingConfigurationRequestDto request) {
 
         // Validate Client
         Client client = clientRepository.findById(request.getClientId())
@@ -50,42 +60,50 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         new ResourceNotFoundException("Client not found."));
 
         // Validate Project
-        ProjectMasterReference project = projectRepository.findById(request.getProjectId())
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Project not found."));
+        ProjectMasterReference project =
+                projectRepository.findById(request.getProjectId())
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException("Project not found."));
 
         // Validate Billing Type
-        BillingTypeMaster billingType = billingTypeRepository
-                .findByBillingTypeIdAndIsActiveTrue(request.getBillingTypeId())
-                .orElseThrow(() ->
-                        new ValidationException(
-                                "Selected Billing Type is inactive or does not exist."));
+        BillingTypeMaster billingType =
+                billingTypeRepository
+                        .findByBillingTypeIdAndIsActiveTrue(
+                                request.getBillingTypeId())
+                        .orElseThrow(() ->
+                                new ValidationException(
+                                        "Selected Billing Type is inactive or does not exist."));
 
-//// Validate Currency
-//        CurrencyMaster currency = currencyRepository.findById(request.getCurrencyId())
-//                .orElseThrow(() ->
-//                        new ResourceNotFoundException("Currency not found."));
-
-// Validate Payment Term
-        PaymentTermsMaster paymentTerm = paymentTermsRepository.findById(request.getPaymentTermId())
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Payment Term not found."));
+        // Validate Payment Term
+        PaymentTermsMaster paymentTerm =
+                paymentTermsRepository.findById(
+                                request.getPaymentTermId())
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Payment Term not found."));
 
         if (!Boolean.TRUE.equals(paymentTerm.getIsActive())) {
             throw new ValidationException(
                     "Selected Payment Term is inactive.");
         }
 
-// Validate Billing Frequency
-        BillingFrequencyMaster billingFrequency = billingFrequencyRepository.findById(request.getBillingFrequencyId())
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Billing Frequency not found."));
+        // Validate Billing Frequency
+        BillingFrequencyMaster billingFrequency =
+                billingFrequencyRepository.findById(
+                                request.getBillingFrequencyId())
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Billing Frequency not found."));
 
-// Validate Tax Region
-        TaxRegionMaster taxRegion = taxRegionRepository.findById(request.getTaxRegionId())
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Tax Region not found."));
+        // Validate Tax Region
+        TaxRegionMaster taxRegion =
+                taxRegionRepository.findById(
+                                request.getTaxRegionId())
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Tax Region not found."));
 
+        // Validate Invoice Generation Type
         if (request.getInvoiceGenerationType() == null) {
             throw new ValidationException(
                     "Invoice Generation Type is required.");
@@ -106,19 +124,20 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 true);
 
         if (configurationExists) {
-            throw new GlobalExceptionHandler.DuplicateBillingConfigurationException(
+            throw new GlobalExceptionHandler
+                    .DuplicateBillingConfigurationException(
                     "An active billing configuration already exists for this project.");
         }
 
         // Create Billing Configuration
-        BillingConfiguration billingConfiguration = new BillingConfiguration();
+        BillingConfiguration billingConfiguration =
+                new BillingConfiguration();
 
         billingConfiguration.setClient(client);
         billingConfiguration.setProject(project);
         billingConfiguration.setBillingType(billingType);
 
-// Currency comes from PMS project
-        // Resolve CurrencyMaster using project currency code
+        // Currency comes from PMS project
         if (project.getProjectBudgetCurrency() == null ||
                 project.getProjectBudgetCurrency().isBlank()) {
 
@@ -126,28 +145,33 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                     "Project Currency is not available from PMS.");
         }
 
-        CurrencyMaster currency = currencyRepository
-                .findByCurrencyCodeIgnoreCase(project.getProjectBudgetCurrency())
-                .orElseThrow(() ->
-                        new ResourceNotFoundException(
-                                "Currency not found: "
-                                        + project.getProjectBudgetCurrency()));
+        CurrencyMaster currency =
+                currencyRepository
+                        .findByCurrencyCodeIgnoreCase(
+                                project.getProjectBudgetCurrency())
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Currency not found: "
+                                                + project.getProjectBudgetCurrency()));
 
         billingConfiguration.setCurrency(currency);
 
         billingConfiguration.setPaymentTerm(paymentTerm);
-
         billingConfiguration.setBillingFrequency(billingFrequency);
-
         billingConfiguration.setTaxRegion(taxRegion);
 
         billingConfiguration.setExpenseBillingEligible(
                 request.getExpenseBillingEligible());
 
-        billingConfiguration.setEffectiveFrom(request.getEffectiveFrom());
-        billingConfiguration.setEffectiveTo(request.getEffectiveTo());
+        billingConfiguration.setEffectiveFrom(
+                request.getEffectiveFrom());
 
-        if (billingType.getBillingTypeName().equalsIgnoreCase("Time & Material")) {
+        billingConfiguration.setEffectiveTo(
+                request.getEffectiveTo());
+
+        // Time & Material validation
+        if (billingType.getBillingTypeName()
+                .equalsIgnoreCase("Time & Material")) {
 
             if (request.getPricingModel() == null) {
                 throw new ValidationException(
@@ -157,7 +181,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             if (request.getPricingModel() == PricingModel.STANDARD) {
 
                 if (request.getHourlyRate() == null
-                        || request.getHourlyRate().compareTo(java.math.BigDecimal.ZERO) <= 0) {
+                        || request.getHourlyRate()
+                        .compareTo(java.math.BigDecimal.ZERO) <= 0) {
 
                     throw new ValidationException(
                             "Hourly Rate is required for Standard Rate pricing.");
@@ -165,64 +190,90 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             }
         }
 
-        billingConfiguration.setPricingModel(request.getPricingModel());
+        billingConfiguration.setPricingModel(
+                request.getPricingModel());
 
         if (request.getPricingModel() == PricingModel.STANDARD) {
-            billingConfiguration.setHourlyRate(request.getHourlyRate());
+            billingConfiguration.setHourlyRate(
+                    request.getHourlyRate());
         } else {
             billingConfiguration.setHourlyRate(null);
         }
 
-        billingConfiguration.setContractValue(request.getContractValue());
+        // IMPORTANT:
+        // contractValue is no longer stored in BillingConfiguration.
+        // It is handled by BillingFixedPriceConfiguration.
 
         billingConfiguration.setInvoiceGenerationType(
-                request.getInvoiceGenerationType()
-        );
+                request.getInvoiceGenerationType());
 
-        billingConfiguration.setStatus(BillingConfigurationStatus.DRAFT);
+        billingConfiguration.setStatus(
+                BillingConfigurationStatus.DRAFT);
+
         billingConfiguration.setIsActive(false);
 
-        billingConfiguration.setCreatedAt(LocalDateTime.now());
-        billingConfiguration.setUpdatedAt(LocalDateTime.now());
+        billingConfiguration.setCreatedAt(
+                LocalDateTime.now());
+
+        billingConfiguration.setUpdatedAt(
+                LocalDateTime.now());
 
         BillingConfiguration saved =
-                billingConfigurationRepository.save(billingConfiguration);
+                billingConfigurationRepository.save(
+                        billingConfiguration);
 
-        // Response
         return mapToResponse(saved);
     }
 
+
+    // =========================================================
+    // GET APPROVED CONFIGURATION
+    // =========================================================
+
     @Override
-    public BillingConfigurationResponseDto getApprovedByProjectId(Long projectId) {
+    public BillingConfigurationResponseDto getApprovedByProjectId(
+            Long projectId) {
+
         BillingConfiguration billingConfiguration =
                 billingConfigurationRepository
                         .findByProject_PmsProjectIdAndStatusAndIsActive(
                                 projectId,
                                 BillingConfigurationStatus.APPROVED,
                                 true)
-                        .orElseThrow(() -> new ResourceNotFoundException(
-                                "No approved billing configuration found for project " + projectId + "."));
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "No approved billing configuration found for project "
+                                                + projectId + "."));
 
         return mapToResponse(billingConfiguration);
     }
 
+
+    // =========================================================
+    // APPROVE
+    // =========================================================
+
     @Override
-    public BillingConfigurationResponseDto approve(UUID billingConfigurationId) {
+    public BillingConfigurationResponseDto approve(
+            UUID billingConfigurationId) {
 
         BillingConfiguration configuration =
-                billingConfigurationRepository.findById(billingConfigurationId)
+                billingConfigurationRepository.findById(
+                                billingConfigurationId)
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
-        BillingTypeMaster billingType = configuration.getBillingType();
+        BillingTypeMaster billingType =
+                configuration.getBillingType();
 
         if (!Boolean.TRUE.equals(billingType.getIsActive())) {
             throw new ValidationException(
                     "Selected Billing Type is inactive and cannot be approved.");
         }
 
-        PaymentTermsMaster paymentTerm = configuration.getPaymentTerm();
+        PaymentTermsMaster paymentTerm =
+                configuration.getPaymentTerm();
 
         if (!Boolean.TRUE.equals(paymentTerm.getIsActive())) {
             throw new ValidationException(
@@ -233,7 +284,6 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 configuration.getBillingFrequency();
 
         if (!Boolean.TRUE.equals(billingFrequency.getIsActive())) {
-
             throw new ValidationException(
                     "Selected Billing Frequency is inactive and cannot be approved.");
         }
@@ -243,20 +293,10 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                     "Invoice Generation Type is required before approval.");
         }
 
-//        TaxRegionMaster taxRegion =
-//                configuration.getTaxRegion();
-//
-//        if (!Boolean.TRUE.equals(taxRegion.getIsActive())) {
-//
-//            throw new ValidationException(
-//                    "Selected Tax Region is inactive and cannot be approved.");
-//        }
-
         ProjectMasterReference project =
                 configuration.getProject();
 
         if (project.getProjectBudget() == null) {
-
             throw new ValidationException(
                     "Project Budget is not available from PMS.");
         }
@@ -276,19 +316,22 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 true);
 
         if (configurationExists) {
-            throw new GlobalExceptionHandler.DuplicateBillingConfigurationException(
+            throw new GlobalExceptionHandler
+                    .DuplicateBillingConfigurationException(
                     "An active billing configuration already exists for this project.");
         }
 
-        if (billingType.getBillingTypeName().equalsIgnoreCase("Time & Material")) {
+        // Time & Material validation
+        if (billingType.getBillingTypeName()
+                .equalsIgnoreCase("Time & Material")) {
 
             if (configuration.getPricingModel() == null) {
                 throw new ValidationException(
                         "Pricing Model is required for Time & Material billing.");
             }
 
-            // Standard Rate
-            if (configuration.getPricingModel() == PricingModel.STANDARD) {
+            if (configuration.getPricingModel()
+                    == PricingModel.STANDARD) {
 
                 if (configuration.getHourlyRate() == null
                         || configuration.getHourlyRate()
@@ -299,11 +342,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 }
             }
 
-            // Role-Based Rates
-            if (configuration.getPricingModel() == PricingModel.ROLE_BASED) {
+            if (configuration.getPricingModel()
+                    == PricingModel.ROLE_BASED) {
 
                 if (!billingTMRateCardRepository
-                        .existsByBillingConfigurationAndIsActiveTrue(configuration)) {
+                        .existsByBillingConfigurationAndIsActiveTrue(
+                                configuration)) {
 
                     throw new ValidationException(
                             "At least one Time & Material Rate Card must be configured before approval.");
@@ -311,38 +355,51 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             }
         }
 
-        if (billingType.getBillingTypeName().equalsIgnoreCase("Fixed Price")) {
+        // Fixed Price validation
+        if (billingType.getBillingTypeName()
+                .equalsIgnoreCase("Fixed Price")) {
 
             if (!billingFixedPriceRepository
-                    .existsByBillingConfigurationAndIsActiveTrue(configuration)) {
+                    .existsByBillingConfigurationAndIsActiveTrue(
+                            configuration)) {
 
                 throw new ValidationException(
                         "Fixed Price configuration must be completed before approval.");
             }
         }
 
+        // Subscription validation
         if (billingType.getBillingTypeName()
                 .equalsIgnoreCase("Subscription")) {
 
             if (!billingSubscriptionConfigurationRepository
-                    .existsByBillingConfigurationAndIsActiveTrue(configuration)) {
+                    .existsByBillingConfigurationAndIsActiveTrue(
+                            configuration)) {
 
                 throw new ValidationException(
                         "Subscription configuration must be completed before approval.");
             }
         }
 
-        configuration.setStatus(BillingConfigurationStatus.APPROVED);
+        configuration.setStatus(
+                BillingConfigurationStatus.APPROVED);
 
         configuration.setIsActive(true);
 
-        configuration.setUpdatedAt(LocalDateTime.now());
+        configuration.setUpdatedAt(
+                LocalDateTime.now());
 
         BillingConfiguration saved =
-                billingConfigurationRepository.save(configuration);
+                billingConfigurationRepository.save(
+                        configuration);
 
         return mapToResponse(saved);
     }
+
+
+    // =========================================================
+    // REJECT
+    // =========================================================
 
     @Override
     public BillingConfigurationResponseDto reject(
@@ -350,260 +407,501 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             BillingConfigurationRejectRequestDto request) {
 
         BillingConfiguration configuration =
-                billingConfigurationRepository.findById(billingConfigurationId)
+                billingConfigurationRepository.findById(
+                                billingConfigurationId)
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
-        if (configuration.getStatus() != BillingConfigurationStatus.DRAFT) {
+        if (configuration.getStatus()
+                != BillingConfigurationStatus.DRAFT) {
+
             throw new ValidationException(
                     "Only Draft Billing Configurations can be rejected.");
         }
 
-        configuration.setStatus(BillingConfigurationStatus.REJECTED);
+        configuration.setStatus(
+                BillingConfigurationStatus.REJECTED);
 
         configuration.setIsActive(false);
 
-        configuration.setRejectionReason(request.getRejectionReason());
+        configuration.setRejectionReason(
+                request.getRejectionReason());
 
-        configuration.setUpdatedAt(LocalDateTime.now());
+        configuration.setUpdatedAt(
+                LocalDateTime.now());
 
         BillingConfiguration saved =
-                billingConfigurationRepository.save(configuration);
+                billingConfigurationRepository.save(
+                        configuration);
 
         return mapToResponse(saved);
     }
 
-    private BillingConfigurationResponseDto mapToResponse(BillingConfiguration configuration) {
 
-        BillingTypeMaster billingType = configuration.getBillingType();
-        PaymentTermsMaster paymentTerm = configuration.getPaymentTerm();
-        BillingFrequencyMaster billingFrequency = configuration.getBillingFrequency();
-        TaxRegionMaster taxRegion = configuration.getTaxRegion();
+    // =========================================================
+    // MAP TO RESPONSE
+    // =========================================================
+
+    private BillingConfigurationResponseDto mapToResponse(
+            BillingConfiguration configuration) {
+
+        BillingTypeMaster billingType =
+                configuration.getBillingType();
+
+        PaymentTermsMaster paymentTerm =
+                configuration.getPaymentTerm();
+
+        BillingFrequencyMaster billingFrequency =
+                configuration.getBillingFrequency();
+
+        TaxRegionMaster taxRegion =
+                configuration.getTaxRegion();
 
         return BillingConfigurationResponseDto.builder()
-                .billingConfigurationId(configuration.getBillingConfigurationId())
 
-                .clientId(configuration.getClient().getClientId())
-                .clientName(configuration.getClient().getClientName())
+                .billingConfigurationId(
+                        configuration.getBillingConfigurationId())
 
-                .projectId(configuration.getProject().getPmsProjectId())
-                .projectName(configuration.getProject().getProjectName())
+                // CLIENT
+                .clientId(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getClientId()
+                                : null)
+
+                .clientName(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getClientName()
+                                : null)
+
+                // PROJECT
+                .projectId(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getPmsProjectId()
+                                : null)
+
+                .projectName(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getProjectName()
+                                : null)
 
                 .projectBudget(
-                        configuration.getProject().getProjectBudget())
+                        configuration.getProject() != null
+                                ? configuration.getProject().getProjectBudget()
+                                : null)
 
                 .projectBudgetCurrency(
-                        configuration.getProject().getProjectBudgetCurrency())
+                        configuration.getProject() != null
+                                ? configuration.getProject().getProjectBudgetCurrency()
+                                : null)
 
-                .billingTypeId(billingType.getBillingTypeId())
-                .billingTypeName(billingType.getBillingTypeName())
+                // BILLING TYPE
+                .billingTypeId(
+                        billingType != null
+                                ? billingType.getBillingTypeId()
+                                : null)
 
-                .currencyId(configuration.getCurrency() != null ? configuration.getCurrency().getCurrencyId() : null)
-                .currencyCode(configuration.getCurrency() != null ? configuration.getCurrency().getCurrencyCode() : null)
-                .currency(configuration.getCurrency() != null ? configuration.getCurrency().getCurrencyCode() : null)
+                .billingTypeName(
+                        billingType != null
+                                ? billingType.getBillingTypeName()
+                                : null)
 
-                .paymentTermId(paymentTerm.getPaymentTermId())
-                .paymentTermCode(paymentTerm.getPaymentTermName())
-                .paymentTermName(paymentTerm.getPaymentTermName())
+                // CURRENCY
+                .currencyId(
+                        configuration.getCurrency() != null
+                                ? configuration.getCurrency().getCurrencyId()
+                                : null)
 
-                .billingFrequencyId(billingFrequency.getBillingFrequencyId())
-                .billingFrequencyName(billingFrequency.getBillingFrequencyName())
+                .currencyCode(
+                        configuration.getCurrency() != null
+                                ? configuration.getCurrency().getCurrencyCode()
+                                : null)
 
-                .taxRegionId(taxRegion.getTaxRegionId())
-                .taxRegionName(taxRegion.getTaxRegionName())
-                .taxRegionCode(taxRegion.getTaxRegionCode())
+                .currency(
+                        configuration.getCurrency() != null
+                                ? configuration.getCurrency().getCurrencyCode()
+                                : null)
 
-                .expenseBillingEligible(configuration.getExpenseBillingEligible())
+                // PAYMENT TERM
+                .paymentTermId(
+                        paymentTerm != null
+                                ? paymentTerm.getPaymentTermId()
+                                : null)
 
-                .status(configuration.getStatus())
-                .effectiveFrom(configuration.getEffectiveFrom())
-                .effectiveTo(configuration.getEffectiveTo())
-                .isActive(configuration.getIsActive())
-                .rejectionReason(configuration.getRejectionReason())
+                .paymentTermCode(
+                        paymentTerm != null
+                                ? paymentTerm.getPaymentTermName()
+                                : null)
 
-                .pricingModel(configuration.getPricingModel())
-                .hourlyRate(configuration.getHourlyRate())
-                .contractValue(configuration.getContractValue())
-                .invoiceGenerationType(configuration.getInvoiceGenerationType())
+                .paymentTermName(
+                        paymentTerm != null
+                                ? paymentTerm.getPaymentTermName()
+                                : null)
 
-                .createdAt(configuration.getCreatedAt())
-                .updatedAt(configuration.getUpdatedAt())
+                // BILLING FREQUENCY
+                .billingFrequencyId(
+                        billingFrequency != null
+                                ? billingFrequency.getBillingFrequencyId()
+                                : null)
+
+                .billingFrequencyName(
+                        billingFrequency != null
+                                ? billingFrequency.getBillingFrequencyName()
+                                : null)
+
+                // TAX REGION
+                .taxRegionId(
+                        taxRegion != null
+                                ? taxRegion.getTaxRegionId()
+                                : null)
+
+                .taxRegionName(
+                        taxRegion != null
+                                ? taxRegion.getTaxRegionName()
+                                : null)
+
+                .taxRegionCode(
+                        taxRegion != null
+                                ? taxRegion.getTaxRegionCode()
+                                : null)
+
+                // OTHER CONFIGURATION DATA
+                .expenseBillingEligible(
+                        configuration.getExpenseBillingEligible())
+
+                .status(
+                        configuration.getStatus())
+
+                .effectiveFrom(
+                        configuration.getEffectiveFrom())
+
+                .effectiveTo(
+                        configuration.getEffectiveTo())
+
+                .isActive(
+                        configuration.getIsActive())
+
+                .rejectionReason(
+                        configuration.getRejectionReason())
+
+                .pricingModel(
+                        configuration.getPricingModel())
+
+                .hourlyRate(
+                        configuration.getHourlyRate())
+
+                .invoiceGenerationType(
+                        configuration.getInvoiceGenerationType())
+
+                .generationMode(
+                        configuration.getGenerationMode())
+
+                .createdAt(
+                        configuration.getCreatedAt())
+
+                .updatedAt(
+                        configuration.getUpdatedAt())
+
                 .build();
     }
+
+
+    // =========================================================
+    // GET CLIENTS
+    // =========================================================
 
     @Override
     public List<ClientResponseDto> getClients() {
 
         return clientRepository
-                .findByStatusOrderByClientNameAsc(RecordStatus.ACTIVE)
+                .findByStatusOrderByClientNameAsc(
+                        RecordStatus.ACTIVE)
                 .stream()
-                .map(client -> ClientResponseDto.builder()
-                        .clientId(client.getClientId())
-                        .clientName(client.getClientName())
-                        .build())
+                .map(client ->
+                        ClientResponseDto.builder()
+                                .clientId(client.getClientId())
+                                .clientName(client.getClientName())
+                                .build())
                 .toList();
     }
 
-    @Override
-    public List<ProjectResponseDto> getProjects(UUID clientId) {
 
-        return projectRepository.findByClientIdOrderByProjectNameAsc(clientId)
+    // =========================================================
+    // GET PROJECTS
+    // =========================================================
+
+    @Override
+    public List<ProjectResponseDto> getProjects(
+            UUID clientId) {
+
+        return projectRepository
+                .findByClientIdOrderByProjectNameAsc(clientId)
                 .stream()
                 .map(project -> {
+
                     String projectDuration =
                             calculateProjectDuration(
                                     project.getStartDate(),
                                     project.getEndDate());
 
                     return ProjectResponseDto.builder()
-                            .projectId(project.getPmsProjectId())
-                            .projectName(project.getProjectName())
-                            .projectCode(String.valueOf(project.getPmsProjectId()))
-                            .projectDuration(projectDuration)
-                            .projectBudget(project.getProjectBudget())
-                            .projectBudgetCurrency(project.getProjectBudgetCurrency())
+                            .projectId(
+                                    project.getPmsProjectId())
+                            .projectName(
+                                    project.getProjectName())
+                            .projectCode(
+                                    String.valueOf(
+                                            project.getPmsProjectId()))
+                            .projectDuration(
+                                    projectDuration)
+                            .projectBudget(
+                                    project.getProjectBudget())
+                            .projectBudgetCurrency(
+                                    project.getProjectBudgetCurrency())
                             .build();
                 })
                 .toList();
     }
 
-    private String calculateProjectDuration(LocalDate startDate, LocalDate endDate) {
+
+    // =========================================================
+    // PROJECT DURATION
+    // =========================================================
+
+    private String calculateProjectDuration(
+            LocalDate startDate,
+            LocalDate endDate) {
+
         if (startDate == null || endDate == null) {
             return null;
         }
 
         DateTimeFormatter formatter =
-                DateTimeFormatter.ofPattern("dd-MMM-yyyy");
+                DateTimeFormatter.ofPattern(
+                        "dd-MMM-yyyy");
 
         return startDate.format(formatter)
                 + " to "
                 + endDate.format(formatter);
     }
 
-    @Override
-    public BillingConfigurationResponseDto getBillingConfiguration(UUID billingConfigurationId) {
 
-        BillingConfiguration billingConfiguration = billingConfigurationRepository.findById(billingConfigurationId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Billing Configuration not found with id: " + billingConfigurationId));
+    // =========================================================
+    // GET BILLING CONFIGURATION
+    // =========================================================
+
+    @Override
+    public BillingConfigurationResponseDto getBillingConfiguration(
+            UUID billingConfigurationId) {
+
+        BillingConfiguration billingConfiguration =
+                billingConfigurationRepository
+                        .findById(billingConfigurationId)
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Billing Configuration not found with id: "
+                                                + billingConfigurationId));
 
         return mapToResponse(billingConfiguration);
     }
 
+
+    // =========================================================
+    // GET ALL BILLING CONFIGURATIONS
+    // =========================================================
+
     @Override
+    @Transactional(readOnly = true)
     public List<BillingConfigurationResponseDto> getAllBillingConfigurations() {
-        return billingConfigurationRepository.findAll()
-                .stream()
+
+        List<BillingConfiguration> configurations =
+                billingConfigurationRepository.findAll();
+
+        return configurations.stream()
                 .map(this::mapToResponse)
                 .toList();
     }
 
+
+    // =========================================================
+    // ACTIVATE
+    // =========================================================
+
     @Override
-    public BillingConfigurationResponseDto activate(UUID billingConfigurationId) {
+    public BillingConfigurationResponseDto activate(
+            UUID billingConfigurationId) {
 
         return approve(billingConfigurationId);
     }
+
+
+    // =========================================================
+    // UPDATE BILLING CONFIGURATION
+    // =========================================================
 
     @Override
     public BillingConfigurationResponseDto updateBillingConfiguration(
             UUID billingConfigurationId,
             BillingConfigurationRequestDto request) {
 
+        // =========================================================
+        // FIND EXISTING BILLING CONFIGURATION
+        // =========================================================
+
         BillingConfiguration configuration =
                 billingConfigurationRepository.findById(billingConfigurationId)
-                        .orElseThrow(() -> new ResourceNotFoundException(
-                                "Billing Configuration not found with id: " + billingConfigurationId));
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Billing Configuration not found with id: "
+                                                + billingConfigurationId));
 
         /*
          * Inactive approved configurations cannot be modified.
          */
         if (!Boolean.TRUE.equals(configuration.getIsActive())
-                && configuration.getStatus() == BillingConfigurationStatus.APPROVED) {
+                && configuration.getStatus()
+                == BillingConfigurationStatus.APPROVED) {
 
             throw new ValidationException(
                     "Inactive Billing Configuration cannot be modified.");
         }
 
-        // Validate Client
-        Client client = clientRepository.findById(request.getClientId())
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Client not found."));
+        // =========================================================
+        // VALIDATE CLIENT
+        // =========================================================
 
-        // Validate Project
+        Client client =
+                clientRepository.findById(request.getClientId())
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Client not found."));
+
+        // =========================================================
+        // VALIDATE PROJECT
+        // =========================================================
+
         ProjectMasterReference project =
                 projectRepository.findById(request.getProjectId())
                         .orElseThrow(() ->
-                                new ResourceNotFoundException("Project not found."));
+                                new ResourceNotFoundException(
+                                        "Project not found."));
 
-        // Validate Billing Type
+        // =========================================================
+        // VALIDATE BILLING TYPE
+        // =========================================================
+
         BillingTypeMaster billingType =
                 billingTypeRepository
-                        .findByBillingTypeIdAndIsActiveTrue(request.getBillingTypeId())
+                        .findByBillingTypeIdAndIsActiveTrue(
+                                request.getBillingTypeId())
                         .orElseThrow(() ->
                                 new ValidationException(
                                         "Selected Billing Type is inactive or does not exist."));
 
-        // Validate Payment Term
-        PaymentTermsMaster paymentTerm =
-                paymentTermsRepository.findById(request.getPaymentTermId())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException("Payment Term not found."));
+        // =========================================================
+        // VALIDATE PAYMENT TERM - OPTIONAL DURING DRAFT
+        // =========================================================
 
-        if (!Boolean.TRUE.equals(paymentTerm.getIsActive())) {
-            throw new ValidationException(
-                    "Selected Payment Term is inactive.");
+        PaymentTermsMaster paymentTerm = null;
+
+        if (request.getPaymentTermId() != null) {
+
+            paymentTerm =
+                    paymentTermsRepository.findById(
+                                    request.getPaymentTermId())
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Payment Term not found."));
+
+            if (!Boolean.TRUE.equals(paymentTerm.getIsActive())) {
+                throw new ValidationException(
+                        "Selected Payment Term is inactive.");
+            }
         }
 
-        // Validate Billing Frequency
-        BillingFrequencyMaster billingFrequency =
-                billingFrequencyRepository.findById(request.getBillingFrequencyId())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException(
-                                        "Billing Frequency not found."));
+        // =========================================================
+        // VALIDATE BILLING FREQUENCY - OPTIONAL DURING DRAFT
+        // =========================================================
 
-        // Validate Tax Region
-        TaxRegionMaster taxRegion =
-                taxRegionRepository.findById(request.getTaxRegionId())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException(
-                                        "Tax Region not found."));
+        BillingFrequencyMaster billingFrequency = null;
 
-        // Validate Project belongs to Client
+        if (request.getBillingFrequencyId() != null) {
+
+            billingFrequency =
+                    billingFrequencyRepository.findById(
+                                    request.getBillingFrequencyId())
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Billing Frequency not found."));
+        }
+
+        // =========================================================
+        // VALIDATE TAX REGION - OPTIONAL DURING DRAFT
+        // =========================================================
+
+        TaxRegionMaster taxRegion = null;
+
+        if (request.getTaxRegionId() != null) {
+
+            taxRegion =
+                    taxRegionRepository.findById(
+                                    request.getTaxRegionId())
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Tax Region not found."));
+        }
+
+        // =========================================================
+        // VALIDATE PROJECT BELONGS TO CLIENT
+        // =========================================================
+
         if (!project.getClientId().equals(client.getClientId())) {
+
             throw new ValidationException(
                     "Selected project does not belong to the selected client.");
         }
 
-        /*
-         * Currency comes from PMS.
-         * Do not use CurrencyMaster or currencyId.
-         */
-        if (project.getProjectBudgetCurrency() == null
-                || project.getProjectBudgetCurrency().isBlank()) {
+        // =========================================================
+        // CHECK COMMERCIAL CHANGES
+        // =========================================================
 
-            throw new ValidationException(
-                    "Project Currency is not available from PMS.");
-        }
+        boolean billingTypeChanged =
+                configuration.getBillingType() == null
+                        || !configuration.getBillingType()
+                        .getBillingTypeId()
+                        .equals(request.getBillingTypeId());
 
-        /*
-         * Check whether commercial configuration has changed.
-         */
+        boolean paymentTermChanged =
+                !Objects.equals(
+                        configuration.getPaymentTerm() != null
+                                ? configuration.getPaymentTerm().getPaymentTermId()
+                                : null,
+                        request.getPaymentTermId());
+
+        boolean billingFrequencyChanged =
+                !Objects.equals(
+                        configuration.getBillingFrequency() != null
+                                ? configuration.getBillingFrequency()
+                                .getBillingFrequencyId()
+                                : null,
+                        request.getBillingFrequencyId());
+
+        boolean taxRegionChanged =
+                !Objects.equals(
+                        configuration.getTaxRegion() != null
+                                ? configuration.getTaxRegion().getTaxRegionId()
+                                : null,
+                        request.getTaxRegionId());
+
         boolean commercialChange =
-                !configuration.getBillingType().getBillingTypeId()
-                        .equals(request.getBillingTypeId())
+                billingTypeChanged
+                        || paymentTermChanged
+                        || billingFrequencyChanged
+                        || taxRegionChanged
 
-                        || !configuration.getPaymentTerm().getPaymentTermId()
-                        .equals(request.getPaymentTermId())
-
-                        || !configuration.getBillingFrequency().getBillingFrequencyId()
-                        .equals(request.getBillingFrequencyId())
-
-                        || !configuration.getTaxRegion().getTaxRegionId()
-                        .equals(request.getTaxRegionId())
-
-                        || !configuration.getExpenseBillingEligible()
-                        .equals(request.getExpenseBillingEligible())
+                        || !Objects.equals(
+                        configuration.getExpenseBillingEligible(),
+                        request.getExpenseBillingEligible())
 
                         || !Objects.equals(
                         configuration.getEffectiveFrom(),
@@ -622,33 +920,66 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         request.getHourlyRate())
 
                         || !Objects.equals(
-                        configuration.getContractValue(),
-                        request.getContractValue())
-
-                        || !Objects.equals(
                         configuration.getInvoiceGenerationType(),
                         request.getInvoiceGenerationType());
 
-        /*
-         * Update Billing Configuration.
-         */
+        // =========================================================
+        // UPDATE CLIENT / PROJECT / BILLING TYPE
+        // =========================================================
+
         configuration.setClient(client);
         configuration.setProject(project);
         configuration.setBillingType(billingType);
 
-        // Currency is taken from PMS project and resolved to CurrencyMaster
-        CurrencyMaster currency = currencyRepository
-                .findByCurrencyCodeIgnoreCase(project.getProjectBudgetCurrency())
-                .orElseThrow(() ->
-                        new ResourceNotFoundException(
-                                "Currency not found: "
-                                        + project.getProjectBudgetCurrency()));
+        // =========================================================
+        // CURRENCY COMES FROM PMS PROJECT
+        // =========================================================
+
+        if (project.getProjectBudgetCurrency() == null
+                || project.getProjectBudgetCurrency().isBlank()) {
+
+            throw new ValidationException(
+                    "Project Currency is not available from PMS.");
+        }
+
+        CurrencyMaster currency =
+                currencyRepository
+                        .findByCurrencyCodeIgnoreCase(
+                                project.getProjectBudgetCurrency())
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException(
+                                        "Currency not found: "
+                                                + project.getProjectBudgetCurrency()));
 
         configuration.setCurrency(currency);
 
-        configuration.setPaymentTerm(paymentTerm);
-        configuration.setBillingFrequency(billingFrequency);
-        configuration.setTaxRegion(taxRegion);
+        // =========================================================
+        // UPDATE OPTIONAL COMMERCIAL FIELDS
+        // =========================================================
+
+        /*
+         * Only replace these relationships when the request actually
+         * contains them.
+         *
+         * This is important because the initial draft is created
+         * before Payment Term / Billing Frequency / Tax Region are selected.
+         */
+
+        if (paymentTerm != null) {
+            configuration.setPaymentTerm(paymentTerm);
+        }
+
+        if (billingFrequency != null) {
+            configuration.setBillingFrequency(billingFrequency);
+        }
+
+        if (taxRegion != null) {
+            configuration.setTaxRegion(taxRegion);
+        }
+
+        // =========================================================
+        // UPDATE COMMON FIELDS
+        // =========================================================
 
         configuration.setExpenseBillingEligible(
                 request.getExpenseBillingEligible());
@@ -662,54 +993,174 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setPricingModel(
                 request.getPricingModel());
 
-        /*
-         * Update hourly rate only for Standard pricing.
-         */
-        if (request.getPricingModel() == PricingModel.STANDARD) {
-            configuration.setHourlyRate(request.getHourlyRate());
+        // =========================================================
+        // TIME & MATERIAL
+        // =========================================================
+
+        if (billingType.getBillingTypeName()
+                .equalsIgnoreCase("Time & Material")) {
+
+            if (request.getPricingModel() == null) {
+
+                throw new ValidationException(
+                        "Pricing Model is required for Time & Material billing.");
+            }
+
+            if (request.getPricingModel() == PricingModel.STANDARD) {
+
+                if (request.getHourlyRate() == null
+                        || request.getHourlyRate()
+                        .compareTo(java.math.BigDecimal.ZERO) <= 0) {
+
+                    throw new ValidationException(
+                            "Hourly Rate is required for Standard Rate pricing.");
+                }
+
+                configuration.setHourlyRate(
+                        request.getHourlyRate());
+
+            } else {
+
+                configuration.setHourlyRate(null);
+            }
+
         } else {
+
             configuration.setHourlyRate(null);
         }
 
-        configuration.setContractValue(
-                request.getContractValue());
+        // =========================================================
+        // INVOICE GENERATION TYPE
+        // =========================================================
 
-        configuration.setInvoiceGenerationType(
-                request.getInvoiceGenerationType());
+        if (request.getInvoiceGenerationType() != null) {
 
-        configuration.setUpdatedAt(LocalDateTime.now());
+            configuration.setInvoiceGenerationType(
+                    request.getInvoiceGenerationType());
+        }
+
+        // =========================================================
+        // STATUS HANDLING
+        // =========================================================
 
         /*
-         * If an approved/rejected configuration is commercially modified,
-         * send it back through the approval workflow.
+         * If an approved/rejected configuration is commercially
+         * modified, send it back to Draft.
          */
-        if ((configuration.getStatus() == BillingConfigurationStatus.APPROVED
-                || configuration.getStatus() == BillingConfigurationStatus.REJECTED)
+        if ((configuration.getStatus()
+                == BillingConfigurationStatus.APPROVED
+                || configuration.getStatus()
+                == BillingConfigurationStatus.REJECTED)
                 && commercialChange) {
 
             configuration.setStatus(
-                    BillingConfigurationStatus.DRAFT);
+                    BillingConfigurationStatus.ACTIVE);
 
             configuration.setIsActive(false);
 
-            // Clear previous rejection reason
             configuration.setRejectionReason(null);
         }
 
-        configuration.setUpdatedAt(LocalDateTime.now());
+        // =========================================================
+        // FINALIZATION - FINAL "CREATE BILLING SETUP"
+        // =========================================================
+
+        /*
+         * When finalize=true, this is the final "Create Billing Setup" operation.
+         * The configuration becomes APPROVED with isActive=true.
+         * When finalize=false or null, this is a normal save/update and remains DRAFT.
+         */
+        if (Boolean.TRUE.equals(request.getFinalize())) {
+
+            // Validate that all required fields are present before finalizing
+            if (paymentTerm == null) {
+                throw new ValidationException(
+                        "Payment Term is required before finalizing the billing configuration.");
+            }
+
+            if (billingFrequency == null) {
+                throw new ValidationException(
+                        "Billing Frequency is required before finalizing the billing configuration.");
+            }
+
+            if (taxRegion == null) {
+                throw new ValidationException(
+                        "Tax Region is required before finalizing the billing configuration.");
+            }
+
+            if (request.getInvoiceGenerationType() == null) {
+                throw new ValidationException(
+                        "Invoice Generation Type is required before finalizing the billing configuration.");
+            }
+
+            // Time & Material specific validation
+            if (billingType.getBillingTypeName()
+                    .equalsIgnoreCase("Time & Material")) {
+
+                if (request.getPricingModel() == null) {
+                    throw new ValidationException(
+                            "Pricing Model is required for Time & Material billing before finalization.");
+                }
+
+                if (request.getPricingModel() == PricingModel.STANDARD) {
+                    if (request.getHourlyRate() == null
+                            || request.getHourlyRate()
+                            .compareTo(java.math.BigDecimal.ZERO) <= 0) {
+                        throw new ValidationException(
+                                "Hourly Rate is required for Standard Rate pricing before finalization.");
+                    }
+                }
+            }
+
+            // Set final status
+            configuration.setStatus(BillingConfigurationStatus.APPROVED);
+            configuration.setIsActive(true);
+            configuration.setRejectionReason(null);
+
+        } else {
+            // Normal save/update - ensure DRAFT status
+            if (configuration.getStatus() != BillingConfigurationStatus.APPROVED
+                    && configuration.getStatus() != BillingConfigurationStatus.REJECTED
+                    && configuration.getStatus() != BillingConfigurationStatus.ARCHIVED) {
+                configuration.setStatus(BillingConfigurationStatus.DRAFT);
+                configuration.setIsActive(false);
+            }
+        }
+
+        // =========================================================
+        // UPDATE TIMESTAMP
+        // =========================================================
+
+        configuration.setUpdatedAt(
+                LocalDateTime.now());
+
+        // =========================================================
+        // SAVE
+        // =========================================================
 
         BillingConfiguration saved =
-                billingConfigurationRepository.save(configuration);
+                billingConfigurationRepository.save(
+                        configuration);
+
+        // =========================================================
+        // RETURN RESPONSE
+        // =========================================================
 
         return mapToResponse(saved);
     }
+
+
+    // =========================================================
+    // DEACTIVATE
+    // =========================================================
 
     @Override
     public void deactivateBillingConfiguration(
             UUID billingConfigurationId) {
 
         BillingConfiguration configuration =
-                billingConfigurationRepository.findById(billingConfigurationId)
+                billingConfigurationRepository
+                        .findById(billingConfigurationId)
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
@@ -717,7 +1168,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         /*
          * Already inactive
          */
-        if (!Boolean.TRUE.equals(configuration.getIsActive())) {
+        if (!Boolean.TRUE.equals(
+                configuration.getIsActive())) {
 
             throw new ValidationException(
                     "Billing Configuration is already inactive.");
@@ -726,12 +1178,103 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         /*
          * Soft deactivate
          */
-//        configuration.setStatus(BillingConfigurationStatus.INACTIVE);
-
         configuration.setIsActive(false);
 
+        configuration.setUpdatedAt(
+                LocalDateTime.now());
+
+        billingConfigurationRepository.save(
+                configuration);
+    }
+
+    @Override
+    @Transactional
+    public void deleteBillingConfiguration(
+            UUID billingConfigurationId) {
+
+        BillingConfiguration configuration =
+                billingConfigurationRepository.findById(
+                                billingConfigurationId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "Billing Configuration not found."
+                                ));
+
+        // Only Draft configurations can be deleted
+        if (configuration.getStatus()
+                != BillingConfigurationStatus.DRAFT) {
+
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Only Draft Billing Configurations can be deleted."
+            );
+        }
+
+        // Soft delete parent configuration
+        configuration.setIsActive(false);
+        configuration.setStatus(
+                BillingConfigurationStatus.ARCHIVED
+        );
         configuration.setUpdatedAt(LocalDateTime.now());
 
         billingConfigurationRepository.save(configuration);
+
+        // Deactivate Fixed Price configuration if present
+        billingFixedPriceRepository
+                .findByBillingConfigurationAndIsActiveTrue(configuration)
+                .ifPresent(fixedPrice -> {
+
+                    fixedPrice.setIsActive(false);
+                    fixedPrice.setUpdatedAt(LocalDateTime.now());
+
+                    billingFixedPriceRepository.save(fixedPrice);
+                });
     }
+
+    @Override
+    @Transactional
+    public BillingConfigurationDraftResponseDto createDraft(
+            BillingConfigurationDraftRequestDto request) {
+
+        Client client = clientRepository.findById(request.getClientId())
+                .orElseThrow(() ->
+                        new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Client not found."));
+
+        ProjectMasterReference project =
+                projectMasterReferenceRepository.findById(request.getProjectId())
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "Project not found."));
+
+        BillingTypeMaster billingType =
+                billingTypeMasterRepository.findById(request.getBillingTypeId())
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "Billing Type not found."));
+
+        BillingConfiguration draft =
+                BillingConfiguration.builder()
+                        .client(client)
+                        .project(project)
+                        .billingType(billingType)
+                        .status(BillingConfigurationStatus.DRAFT)
+                        .isActive(false)
+                        .expenseBillingEligible(false)
+                        .createdAt(LocalDateTime.now())
+                        .updatedAt(LocalDateTime.now())
+                        .build();
+
+        BillingConfiguration saved =
+                billingConfigurationRepository.save(draft);
+
+        return BillingConfigurationDraftResponseDto.builder()
+                .billingConfigurationId(saved.getBillingConfigurationId())
+                .clientId(saved.getClient().getClientId())
+                .projectId(saved.getProject().getPmsProjectId())
+                .billingTypeId(saved.getBillingType().getBillingTypeId())
+                .status(saved.getStatus())
+                .isActive(saved.getIsActive())
+                .build();
+    }
+
 }

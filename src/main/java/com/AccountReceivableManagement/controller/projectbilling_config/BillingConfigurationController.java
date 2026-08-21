@@ -156,6 +156,39 @@ public class BillingConfigurationController {
                         .build());
     }
 
+    @DeleteMapping("/{billingConfigurationId}")
+    public ResponseEntity<ApiResponse<Void>> deleteBillingConfiguration(
+            @PathVariable UUID billingConfigurationId) {
+
+        billingConfigurationService.deleteBillingConfiguration(
+                billingConfigurationId);
+
+        return ResponseEntity.ok(
+                ApiResponse.<Void>builder()
+                        .success(true)
+                        .message("Billing Configuration deleted successfully.")
+                        .build()
+        );
+    }
+    
+    @PostMapping("/draft")
+    public ResponseEntity<ApiResponse<BillingConfigurationDraftResponseDto>> createDraft(
+            @Valid @RequestBody BillingConfigurationDraftRequestDto request) {
+
+        BillingConfigurationDraftResponseDto response =
+                billingConfigurationService.createDraft(request);
+
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(
+                        ApiResponse.<BillingConfigurationDraftResponseDto>builder()
+                                .success(true)
+                                .message(
+                                        "Billing configuration draft initialized successfully.")
+                                .data(response)
+                                .build()
+                );
+    }
+
 
 
 }

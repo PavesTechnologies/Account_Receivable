@@ -98,4 +98,22 @@ public class BillingTMRateCardController {
                         .message("Time & Material Rate Card deleted successfully.")
                         .build());
     }
+
+    @PostMapping("/{billingConfigurationId}/tm-rate-cards/save")
+    public ResponseEntity<ApiResponse<BillingTMRateCardResponseDto>> saveRateCard(
+            @PathVariable UUID billingConfigurationId,
+            @Valid @RequestBody BillingTMRateCardRequestDto request) {
+
+        BillingTMRateCardResponseDto response =
+                billingTMRateCardService.saveRateCard(
+                        billingConfigurationId,
+                        request);
+
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.<BillingTMRateCardResponseDto>builder()
+                        .success(true)
+                        .message("Rate Card saved successfully.")
+                        .data(response)
+                        .build());
+    }
 }

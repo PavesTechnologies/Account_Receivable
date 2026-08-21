@@ -28,14 +28,20 @@ public class BillingFixedPriceController {
         BillingFixedPriceResponseDto response =
                 billingFixedPriceService.create(
                         billingConfigurationId,
-                        request);
+                        request
+                );
 
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.<BillingFixedPriceResponseDto>builder()
-                        .success(true)
-                        .message("Fixed Price configuration created successfully.")
-                        .data(response)
-                        .build());
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(
+                        ApiResponse.<BillingFixedPriceResponseDto>builder()
+                                .success(true)
+                                .message(
+                                        "Fixed Price configuration created successfully."
+                                )
+                                .data(response)
+                                .build()
+                );
     }
 
     @PutMapping("/fixed-price/{fixedPriceConfigurationId}")
@@ -46,14 +52,18 @@ public class BillingFixedPriceController {
         BillingFixedPriceResponseDto response =
                 billingFixedPriceService.update(
                         fixedPriceConfigurationId,
-                        request);
+                        request
+                );
 
         return ResponseEntity.ok(
                 ApiResponse.<BillingFixedPriceResponseDto>builder()
                         .success(true)
-                        .message("Fixed Price configuration updated successfully.")
+                        .message(
+                                "Fixed Price configuration updated successfully."
+                        )
                         .data(response)
-                        .build());
+                        .build()
+        );
     }
 
     @GetMapping("/fixed-price/{fixedPriceConfigurationId}")
@@ -61,14 +71,19 @@ public class BillingFixedPriceController {
             @PathVariable UUID fixedPriceConfigurationId) {
 
         BillingFixedPriceResponseDto response =
-                billingFixedPriceService.get(fixedPriceConfigurationId);
+                billingFixedPriceService.get(
+                        fixedPriceConfigurationId
+                );
 
         return ResponseEntity.ok(
                 ApiResponse.<BillingFixedPriceResponseDto>builder()
                         .success(true)
-                        .message("Fixed Price configuration fetched successfully.")
+                        .message(
+                                "Fixed Price configuration fetched successfully."
+                        )
                         .data(response)
-                        .build());
+                        .build()
+        );
     }
 
     @GetMapping("/{billingConfigurationId}/fixed-price")
@@ -76,26 +91,37 @@ public class BillingFixedPriceController {
             @PathVariable UUID billingConfigurationId) {
 
         List<BillingFixedPriceResponseDto> response =
-                billingFixedPriceService.getAll(billingConfigurationId);
+                billingFixedPriceService.getAll(
+                        billingConfigurationId
+                );
 
         return ResponseEntity.ok(
                 ApiResponse.<List<BillingFixedPriceResponseDto>>builder()
                         .success(true)
-                        .message("Fixed Price configurations fetched successfully.")
+                        .message(
+                                "Fixed Price configurations fetched successfully."
+                        )
                         .data(response)
-                        .build());
+                        .build()
+        );
     }
 
     @DeleteMapping("/fixed-price/{fixedPriceConfigurationId}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable UUID fixedPriceConfigurationId) {
 
-        billingFixedPriceService.delete(fixedPriceConfigurationId);
+        billingFixedPriceService.delete(
+                fixedPriceConfigurationId
+        );
 
         return ResponseEntity.ok(
                 ApiResponse.<Void>builder()
                         .success(true)
-                        .message("Fixed Price configuration deleted successfully.")
-                        .build());
+                        .message(
+                                "Fixed Price configuration deleted successfully."
+                        )
+                        .build()
+        );
     }
+
 }

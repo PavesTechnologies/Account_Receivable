@@ -30,4 +30,9 @@ public interface BillingConfigurationService {
     BillingConfigurationResponseDto reject(UUID billingConfigurationId, BillingConfigurationRejectRequestDto request);
 
     BillingConfigurationResponseDto activate(UUID billingConfigurationId);
+
+    void deleteBillingConfiguration(UUID billingConfigurationId);
+
+    BillingConfigurationDraftResponseDto createDraft(
+            BillingConfigurationDraftRequestDto request);
 }
