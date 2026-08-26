@@ -189,6 +189,25 @@ public class BillingConfigurationController {
                 );
     }
 
+    @PutMapping("/{billingConfigurationId}/draft")
+    public ResponseEntity<ApiResponse<BillingConfigurationDraftResponseDto>> saveDraft(
+            @PathVariable UUID billingConfigurationId,
+            @Valid @RequestBody BillingConfigurationDraftRequestDto request) {
+
+        BillingConfigurationDraftResponseDto response =
+                billingConfigurationService.saveDraft(
+                        billingConfigurationId,
+                        request);
+
+        return ResponseEntity.ok(
+                ApiResponse.<BillingConfigurationDraftResponseDto>builder()
+                        .success(true)
+                        .message("Billing configuration draft saved successfully.")
+                        .data(response)
+                        .build()
+        );
+    }
+
 
 
 }

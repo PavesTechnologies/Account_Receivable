@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -52,6 +53,23 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
         }
 
         validateRequest(request);
+
+        // Validate effective dates against project duration
+        validateEffectiveDatesAgainstProjectDuration(
+                configuration,
+                request.getEffectiveFrom(),
+                request.getEffectiveTo());
+
+        // If contract value source is PMS_BUDGET, sync from current project budget
+        if (request.getContractValueSource() == ContractValueSource.PMS_BUDGET) {
+            var project = configuration.getProject();
+            if (project.getProjectBudget() == null) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Project Budget is not available from PMS for PMS_BUDGET source.");
+            }
+            // Override pmsProjectBudget with current project budget
+            request.setPmsProjectBudget(project.getProjectBudget());
+        }
 
         BillingFixedPriceConfiguration fixedPrice =
                 BillingFixedPriceConfiguration.builder()
@@ -98,6 +116,23 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
         validateBillingConfiguration(configuration);
 
         validateRequest(request);
+
+        // Validate effective dates against project duration
+        validateEffectiveDatesAgainstProjectDuration(
+                configuration,
+                request.getEffectiveFrom(),
+                request.getEffectiveTo());
+
+        // If contract value source is PMS_BUDGET, sync from current project budget
+        if (request.getContractValueSource() == ContractValueSource.PMS_BUDGET) {
+            var project = configuration.getProject();
+            if (project.getProjectBudget() == null) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Project Budget is not available from PMS for PMS_BUDGET source.");
+            }
+            // Override pmsProjectBudget with current project budget
+            request.setPmsProjectBudget(project.getProjectBudget());
+        }
 
         fixedPrice.setContractValue(request.getContractValue());
         fixedPrice.setPmsProjectBudget(request.getPmsProjectBudget());
@@ -223,6 +258,35 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                         "PMS Project Budget is required when Contract Value Source is PMS Budget."
                 );
             }
+        }
+    }
+
+    private void validateEffectiveDatesAgainstProjectDuration(
+            BillingConfiguration configuration,
+            LocalDate effectiveFrom,
+            LocalDate effectiveTo) {
+
+        var project = configuration.getProject();
+        LocalDate projectStart = project.getStartDate();
+        LocalDate projectEnd = project.getEndDate();
+
+        // If project dates are not available, skip validation
+        if (projectStart == null || projectEnd == null) {
+            return;
+        }
+
+        // Validate effectiveFrom is not before project start
+        if (effectiveFrom != null && effectiveFrom.isBefore(projectStart)) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Effective From date cannot be before Project Start Date (" 
+                    + projectStart + ").");
+        }
+
+        // Validate effectiveTo is not after project end
+        if (effectiveTo != null && effectiveTo.isAfter(projectEnd)) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Effective To date cannot be after Project End Date (" 
+                    + projectEnd + ").");
         }
     }
 

@@ -1,11 +1,11 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ContractValueSource;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalPricingType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalType;
 import jakarta.validation.constraints.DecimalMin;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 
@@ -18,22 +18,24 @@ import java.util.UUID;
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
-public class BillingSubscriptionRequestDto {
+public class RecurringBillingRequestDto {
 
-    @NotBlank(message = "Subscription Name is required.")
-    private String subscriptionName;
+    private String recurringName;
 
-    @NotNull(message = "Contract Value is required.")
-    @DecimalMin(value = "0.01")
     private BigDecimal contractValue;
 
-    @NotNull(message = "Subscription Start Date is required.")
-    private LocalDate subscriptionStartDate;
+    @NotNull(message = "Contract Value Source is required.")
+    private ContractValueSource contractValueSource;
 
-    @NotNull(message = "Subscription End Date is required.")
-    private LocalDate subscriptionEndDate;
+    @NotNull(message = "Recurring Start Date is required.")
+    private LocalDate recurringStartDate;
 
-    @NotNull(message = "Renewal Type is required.")
+    @NotNull(message = "Recurring End Date is required.")
+    private LocalDate recurringEndDate;
+
+    @NotNull(message = "Billing Frequency is required for recurring billing.")
+    private UUID billingFrequencyId;
+
     private RenewalType renewalType;
 
     // Required only when RenewalType = AUTO

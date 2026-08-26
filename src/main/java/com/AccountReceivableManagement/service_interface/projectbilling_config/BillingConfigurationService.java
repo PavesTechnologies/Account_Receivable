@@ -35,4 +35,8 @@ public interface BillingConfigurationService {
 
     BillingConfigurationDraftResponseDto createDraft(
             BillingConfigurationDraftRequestDto request);
+
+    BillingConfigurationDraftResponseDto saveDraft(
+            UUID billingConfigurationId,
+            BillingConfigurationDraftRequestDto request);
 }
