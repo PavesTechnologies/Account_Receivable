@@ -29,6 +29,8 @@ public class BillingFrequencyMasterServiceImpl implements BillingFrequencyMaster
         BillingFrequencyMaster billingFrequency = BillingFrequencyMaster.builder()
                 .billingFrequencyName(request.getBillingFrequencyName().trim())
                 .description(request.getDescription())
+                .durationValue(request.getDurationValue())
+                .durationUnit(request.getDurationUnit())
                 .isActive(true)
                 .build();
 
@@ -53,6 +55,8 @@ public class BillingFrequencyMasterServiceImpl implements BillingFrequencyMaster
 
         billingFrequency.setBillingFrequencyName(request.getBillingFrequencyName().trim());
         billingFrequency.setDescription(request.getDescription());
+        billingFrequency.setDurationValue(request.getDurationValue());
+        billingFrequency.setDurationUnit(request.getDurationUnit());
 
         BillingFrequencyMaster updated = billingFrequencyMasterRepository.save(billingFrequency);
 
@@ -123,6 +127,8 @@ public class BillingFrequencyMasterServiceImpl implements BillingFrequencyMaster
                 .billingFrequencyId(billingFrequency.getBillingFrequencyId())
                 .billingFrequencyName(billingFrequency.getBillingFrequencyName())
                 .description(billingFrequency.getDescription())
+                .durationValue(billingFrequency.getDurationValue())
+                .durationUnit(billingFrequency.getDurationUnit())
                 .isActive(billingFrequency.getIsActive())
                 .createdAt(billingFrequency.getCreatedAt())
                 .updatedAt(billingFrequency.getUpdatedAt())

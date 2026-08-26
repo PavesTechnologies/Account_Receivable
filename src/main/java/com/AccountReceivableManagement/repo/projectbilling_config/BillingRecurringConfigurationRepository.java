@@ -1,7 +1,7 @@
 package com.AccountReceivableManagement.repo.projectbilling_config;
 
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
-import com.AccountReceivableManagement.entity.projectbilling_config.BillingSubscriptionConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -10,10 +10,14 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface BillingSubscriptionConfigurationRepository extends JpaRepository<BillingSubscriptionConfiguration, UUID> {
+public interface BillingRecurringConfigurationRepository extends JpaRepository<BillingRecurringConfiguration, UUID> {
 
-    Optional<BillingSubscriptionConfiguration>
+    Optional<BillingRecurringConfiguration>
     findByBillingConfigurationAndIsActiveTrue(
+            BillingConfiguration billingConfiguration);
+
+    List<BillingRecurringConfiguration>
+    findAllByBillingConfigurationAndIsActiveTrue(
             BillingConfiguration billingConfiguration);
 
     boolean existsByBillingConfigurationAndIsActiveTrue(

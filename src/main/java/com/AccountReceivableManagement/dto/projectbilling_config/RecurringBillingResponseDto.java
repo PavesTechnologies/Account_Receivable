@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ContractValueSource;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalPricingType;
@@ -16,17 +17,23 @@ import java.util.UUID;
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
-public class BillingSubscriptionResponseDto {
+public class RecurringBillingResponseDto {
 
-    private UUID subscriptionConfigurationId;
+    private UUID recurringConfigurationId;
 
-    private String subscriptionName;
+    private String recurringName;
 
     private BigDecimal contractValue;
 
-    private LocalDate subscriptionStartDate;
+    private ContractValueSource contractValueSource;
 
-    private LocalDate subscriptionEndDate;
+    private UUID billingFrequencyId;
+
+    private String billingFrequencyName;
+
+    private LocalDate recurringStartDate;
+
+    private LocalDate recurringEndDate;
 
     private RenewalType renewalType;
 

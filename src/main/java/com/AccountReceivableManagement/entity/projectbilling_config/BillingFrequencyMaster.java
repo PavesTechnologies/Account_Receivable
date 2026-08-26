@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.entity.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -26,6 +27,14 @@ public class BillingFrequencyMaster {
     @Column(name = "description", length = 500)
     private String description;
 
+    @Column(name = "duration_value", nullable = false)
+    @Builder.Default
+    private Integer durationValue = 1;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "duration_unit", nullable = false)
+    private RenewalDurationUnit durationUnit;
+
     @Column(name = "is_active", nullable = false)
     @Builder.Default
     private Boolean isActive = true;
@@ -43,6 +52,10 @@ public class BillingFrequencyMaster {
 
         if (isActive == null) {
             isActive = true;
+        }
+
+        if (durationValue == null) {
+            durationValue = 1;
         }
     }
 

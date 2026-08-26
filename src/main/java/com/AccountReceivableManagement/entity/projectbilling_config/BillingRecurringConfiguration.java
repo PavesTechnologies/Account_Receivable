@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.entity.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ContractValueSource;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalPricingType;
@@ -19,12 +20,12 @@ import java.util.UUID;
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
-public class BillingSubscriptionConfiguration {
+public class BillingRecurringConfiguration {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "subscription_configuration_id")
-    private UUID subscriptionConfigurationId;
+    private UUID recurringConfigurationId;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(
@@ -34,8 +35,8 @@ public class BillingSubscriptionConfiguration {
     )
     private BillingConfiguration billingConfiguration;
 
-    @Column(name = "subscription_name", nullable = false, length = 200)
-    private String subscriptionName;
+    @Column(name = "subscription_name", length = 200)
+    private String recurringName;
 
     @Column(
             name = "contract_value",
@@ -45,11 +46,26 @@ public class BillingSubscriptionConfiguration {
     )
     private BigDecimal contractValue;
 
+    @Enumerated(EnumType.STRING)
+    @Column(
+            name = "contract_value_source",
+            nullable = false,
+            length = 30
+    )
+    private ContractValueSource contractValueSource;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "billing_frequency_id",
+            referencedColumnName = "billing_frequency_id"
+    )
+    private BillingFrequencyMaster billingFrequency;
+
     @Column(name = "subscription_start_date")
-    private LocalDate subscriptionStartDate;
+    private LocalDate recurringStartDate;
 
     @Column(name = "subscription_end_date")
-    private LocalDate subscriptionEndDate;
+    private LocalDate recurringEndDate;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "renewal_type")
