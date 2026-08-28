@@ -2,6 +2,7 @@ package com.AccountReceivableManagement.integration.billing_data_acquisition;
 
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import lombok.RequiredArgsConstructor;
@@ -29,29 +30,73 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
         return mapToDto(epic1Configuration);
     }
 
-    private BillingConfigurationResponseDto mapToDto(com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto epic1Configuration) {
+    private BillingConfigurationResponseDto mapToDto(
+            com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto epic1Configuration) {
+
         if (epic1Configuration == null) {
             return null;
         }
 
         return BillingConfigurationResponseDto.builder()
-                .billingConfigurationId(epic1Configuration.getBillingConfigurationId())
-                .projectId(epic1Configuration.getProjectId())
-                .billingType(toBillingTypeEnum(epic1Configuration.getBillingTypeName()))
-                .billingTypeId(epic1Configuration.getBillingTypeId())
-                .billingTypeName(epic1Configuration.getBillingTypeName())
-                .currencyId(epic1Configuration.getCurrencyId())
-                .currencyCode(epic1Configuration.getCurrency() != null ? epic1Configuration.getCurrency() : epic1Configuration.getCurrencyCode())
-                .paymentTermId(epic1Configuration.getPaymentTermId())
-                .paymentTermCode(epic1Configuration.getPaymentTermCode() != null ? epic1Configuration.getPaymentTermCode() : epic1Configuration.getPaymentTermName())
-                .paymentTermName(epic1Configuration.getPaymentTermName())
-                .billingFrequencyId(epic1Configuration.getBillingFrequencyId())
-                .billingFrequencyName(epic1Configuration.getBillingFrequencyName())
-                .taxRegionId(epic1Configuration.getTaxRegionId())
-                .taxRegionCode(epic1Configuration.getTaxRegionCode())
-                .hourlyRate(epic1Configuration.getHourlyRate())
-                .expenseEligible(Boolean.TRUE.equals(epic1Configuration.getExpenseBillingEligible()))
-                .approved(epic1Configuration.getStatus() == BillingConfigurationStatus.APPROVED)
+                .billingConfigurationId(
+                        epic1Configuration.getBillingConfigurationId())
+
+                .projectId(
+                        epic1Configuration.getProjectId())
+
+                .billingType(
+                        toBillingTypeEnum(
+                                epic1Configuration.getBillingTypeName()))
+
+                .billingTypeId(
+                        epic1Configuration.getBillingTypeId())
+
+                .billingTypeName(
+                        epic1Configuration.getBillingTypeName())
+
+                .currencyId(
+                        epic1Configuration.getCurrencyId())
+
+                .currencyCode(
+                        epic1Configuration.getCurrency() != null
+                                ? epic1Configuration.getCurrency()
+                                : epic1Configuration.getCurrencyCode())
+
+                .paymentTermId(
+                        epic1Configuration.getPaymentTermId())
+
+                .paymentTermCode(
+                        epic1Configuration.getPaymentTermCode() != null
+                                ? epic1Configuration.getPaymentTermCode()
+                                : epic1Configuration.getPaymentTermName())
+
+                .paymentTermName(
+                        epic1Configuration.getPaymentTermName())
+
+                .billingFrequencyId(
+                        epic1Configuration.getBillingFrequencyId())
+
+                .billingFrequencyName(
+                        epic1Configuration.getBillingFrequencyName())
+
+                .taxRegionId(
+                        epic1Configuration.getTaxRegionId())
+
+                .taxRegionCode(
+                        epic1Configuration.getTaxRegionCode())
+
+                .hourlyRate(
+                        epic1Configuration.getHourlyRate())
+
+                .expenseEligible(
+                        Boolean.TRUE.equals(
+                                epic1Configuration.getExpenseBillingEligible()))
+
+                // New two-status model
+                .approved(
+                        epic1Configuration.getApprovalStatus()
+                                == ApprovalStatus.APPROVED)
+
                 .build();
     }
 

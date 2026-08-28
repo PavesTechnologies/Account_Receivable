@@ -1,9 +1,6 @@
     package com.AccountReceivableManagement.dto.projectbilling_config;
 
-    import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
-    import com.AccountReceivableManagement.entity_enums.projectbilling_config.GenerationMode;
-    import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
-    import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
+    import com.AccountReceivableManagement.entity_enums.projectbilling_config.*;
     import lombok.*;
 
     import java.math.BigDecimal;
@@ -28,7 +25,7 @@
 
         private String projectName;
 
-        private BillingConfigurationStatus status;
+
 
         private UUID billingTypeId;
 
@@ -43,6 +40,8 @@
         private String currency;
 
         private BigDecimal projectBudget;
+
+        private BigDecimal contractValue;
 
         private String projectBudgetCurrency;
 
@@ -60,9 +59,13 @@
 
         private PricingModel pricingModel;
 
+        private ApprovalStatus approvalStatus;
+
+        private BillingConfigurationStatus billingStatus;
+
         private InvoiceGenerationType invoiceGenerationType;
 
-        private GenerationMode generationMode;
+//        private GenerationMode generationMode;
 
         private String taxRegionName;
 
@@ -71,8 +74,6 @@
         private Boolean expenseBillingEligible;
 
         private String rejectionReason;
-
-        private Boolean isActive;
 
         private LocalDate effectiveFrom;
 
@@ -87,8 +88,6 @@
         private String createdBy;
 
         private LocalDateTime createdDate;
-
-        private Boolean active;
 
         private BigDecimal hourlyRate;
 

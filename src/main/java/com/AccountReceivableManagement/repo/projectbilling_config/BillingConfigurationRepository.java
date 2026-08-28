@@ -3,6 +3,7 @@ package com.AccountReceivableManagement.repo.projectbilling_config;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.CurrencyMaster;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -15,36 +16,37 @@ import java.util.UUID;
 @Repository
 public interface BillingConfigurationRepository extends JpaRepository<BillingConfiguration, UUID> {
 
-    boolean existsByProject_PmsProjectIdAndStatusAndIsActive(
+    Optional<BillingConfiguration>
+    findByProject_PmsProjectIdAndApprovalStatusAndBillingStatus(
             Long projectId,
-            BillingConfigurationStatus status,
-            Boolean isActive);
+            ApprovalStatus approvalStatus,
+            BillingConfigurationStatus billingStatus
+    );
 
-    Optional<BillingConfiguration> findByProject_PmsProjectIdAndStatusAndIsActive(
+    boolean existsByProject_PmsProjectIdAndApprovalStatusAndBillingStatus(
             Long projectId,
-            BillingConfigurationStatus status,
-            Boolean isActive);
+            ApprovalStatus approvalStatus,
+            BillingConfigurationStatus billingStatus
+    );
 
-    boolean existsByProjectAndStatusAndIsActiveTrue(
-            ProjectMasterReference project,
-            BillingConfigurationStatus status);
+    List<BillingConfiguration>
+    findByApprovalStatus(ApprovalStatus approvalStatus);
 
-    List<BillingConfiguration> findByStatus(BillingConfigurationStatus status);
+    List<BillingConfiguration>
+    findByBillingStatus(BillingConfigurationStatus billingStatus);
 
-    /**
-     * Returns all billing configurations where is_active = true (1).
-     *
-     * An explicit JPQL query is used instead of the derived name
-     * findByIsActiveTrue() because Spring Data's parser can misread
-     * the leading 'is' in the field name isActive, causing it to
-     * match rows it should not (as seen: is_active=0 rows appeared).
-     */
-    @Query("SELECT bc FROM BillingConfiguration bc WHERE bc.isActive = true")
-    List<BillingConfiguration> findAllActive();
+    List<BillingConfiguration>
+    findByApprovalStatusAndBillingStatus(
+            ApprovalStatus approvalStatus,
+            BillingConfigurationStatus billingStatus
+    );
 
-    List<BillingConfiguration> findByClientClientId(UUID clientId);
+    List<BillingConfiguration>
+    findByClientClientId(UUID clientId);
 
-    List<BillingConfiguration> findByProjectPmsProjectId(Long projectId);
 
-//    Optional<CurrencyMaster> findByCurrencyCodeIgnoreCase(String currencyCode);
+    List<BillingConfiguration>
+    findByProjectPmsProjectId(Long projectId);
+
+
 }

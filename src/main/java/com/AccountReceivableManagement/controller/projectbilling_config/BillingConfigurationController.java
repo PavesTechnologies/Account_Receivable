@@ -144,17 +144,6 @@ public class BillingConfigurationController {
                         .build());
     }
 
-    @PutMapping("/{billingConfigurationId}/activate")
-    public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> activate(
-            @PathVariable UUID billingConfigurationId) {
-
-        return ResponseEntity.ok(
-                ApiResponse.<BillingConfigurationResponseDto>builder()
-                        .success(true)
-                        .message("Billing Configuration activated successfully.")
-                        .data(billingConfigurationService.activate(billingConfigurationId))
-                        .build());
-    }
 
     @DeleteMapping("/{billingConfigurationId}")
     public ResponseEntity<ApiResponse<Void>> deleteBillingConfiguration(
@@ -208,6 +197,35 @@ public class BillingConfigurationController {
         );
     }
 
+    @PutMapping("/{billingConfigurationId}/submit")
+    public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>>
+    submitForApproval(
+            @PathVariable UUID billingConfigurationId) {
 
+        return ResponseEntity.ok(
+                ApiResponse.<BillingConfigurationResponseDto>builder()
+                        .success(true)
+                        .message(
+                                "Billing Configuration submitted for approval successfully.")
+                        .data(
+                                billingConfigurationService
+                                        .submitForApproval(
+                                                billingConfigurationId))
+                        .build()
+        );
+    }
+
+    @GetMapping("/pending-approvals")
+    public ResponseEntity<ApiResponse<List<BillingConfigurationResponseDto>>>
+    getPendingApprovals() {
+
+        return ResponseEntity.ok(
+                ApiResponse.<List<BillingConfigurationResponseDto>>builder()
+                        .success(true)
+                        .message("Pending billing configuration approvals fetched successfully.")
+                        .data(billingConfigurationService.getPendingApprovals())
+                        .build()
+        );
+    }
 
 }

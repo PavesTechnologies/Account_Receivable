@@ -2,11 +2,8 @@ package com.AccountReceivableManagement.entity.projectbilling_config;
 
 import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.GenerationMode;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.*;
 
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -46,8 +43,15 @@ public class BillingConfiguration {
     private ProjectMasterReference project;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status")
-    private BillingConfigurationStatus status;
+    @Column(name = "approval_status", nullable = false)
+    @Builder.Default
+    private ApprovalStatus approvalStatus = ApprovalStatus.DRAFT;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "billing_status", nullable = false)
+    @Builder.Default
+    private BillingConfigurationStatus billingStatus =
+            BillingConfigurationStatus.INACTIVE;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(
@@ -91,12 +95,13 @@ public class BillingConfiguration {
     )
     private TaxRegionMaster taxRegion;
 
+    @Column(name = "contract_value", precision = 19, scale = 2)
+    private BigDecimal contractValue;
+
     @Column(name = "expense_billing_eligible", nullable = false)
     @Builder.Default
     private Boolean expenseBillingEligible = false;
 
-    @Column(name = "is_active")
-    private Boolean isActive;
 
     private LocalDate effectiveFrom;
 
@@ -109,12 +114,6 @@ public class BillingConfiguration {
     @Column(name = "invoice_generation_type", nullable = true)
     private InvoiceGenerationType invoiceGenerationType;
 
-//    @Column(name = "contract_value")
-//    private BigDecimal contractValue;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "generation_mode")
-    private GenerationMode generationMode;
 
     @Column(name = "rejection_reason", length = 500)
     private String rejectionReason;
@@ -128,4 +127,8 @@ public class BillingConfiguration {
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @Column(name = "manually_deactivated", nullable = false)
+    @Builder.Default
+    private Boolean manuallyDeactivated = false;
 }
