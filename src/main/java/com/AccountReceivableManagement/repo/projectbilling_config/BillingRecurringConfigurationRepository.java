@@ -22,4 +22,7 @@ public interface BillingRecurringConfigurationRepository extends JpaRepository<B
 
     boolean existsByBillingConfigurationAndIsActiveTrue(
             BillingConfiguration billingConfiguration);
+
+    void deleteByBillingConfiguration(
+            BillingConfiguration billingConfiguration);
 }

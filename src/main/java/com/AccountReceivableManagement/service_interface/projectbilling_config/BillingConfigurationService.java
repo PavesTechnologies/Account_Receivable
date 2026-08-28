@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.UUID;
 
 public interface BillingConfigurationService {
+
+
     BillingConfigurationResponseDto create(BillingConfigurationRequestDto requestDto);
 
     BillingConfigurationResponseDto getApprovedByProjectId(Long projectId);
@@ -29,7 +31,6 @@ public interface BillingConfigurationService {
 
     BillingConfigurationResponseDto reject(UUID billingConfigurationId, BillingConfigurationRejectRequestDto request);
 
-    BillingConfigurationResponseDto activate(UUID billingConfigurationId);
 
     void deleteBillingConfiguration(UUID billingConfigurationId);
 
@@ -39,4 +40,9 @@ public interface BillingConfigurationService {
     BillingConfigurationDraftResponseDto saveDraft(
             UUID billingConfigurationId,
             BillingConfigurationDraftRequestDto request);
+
+    BillingConfigurationResponseDto submitForApproval(UUID id);
+
+    List<BillingConfigurationResponseDto> getPendingApprovals();
+
 }

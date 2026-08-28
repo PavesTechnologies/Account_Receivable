@@ -5,6 +5,7 @@ import com.AccountReceivableManagement.dto.projectbilling_config.BillingFixedPri
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingFixedPriceConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ContractValueSource;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
@@ -218,6 +219,7 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
             BillingConfiguration configuration) {
 
         if (configuration.getBillingType() == null ||
+                configuration.getBillingType().getBillingTypeName() == null ||
                 !configuration.getBillingType()
                         .getBillingTypeName()
                         .equalsIgnoreCase("Fixed Price")) {
@@ -227,8 +229,9 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
             );
         }
 
-        if (configuration.getStatus() ==
-                BillingConfigurationStatus.APPROVED) {
+        // Only an approved configuration cannot be modified.
+        if (configuration.getApprovalStatus() ==
+                ApprovalStatus.APPROVED) {
 
             throw new GlobalExceptionHandler.ValidationException(
                     "Approved Billing Configuration cannot be modified."

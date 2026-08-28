@@ -7,13 +7,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfi
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingFrequencyMaster;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingScheduleType;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.ContractValueSource;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationType;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalPricingType;
-import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.*;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingFrequencyMasterRepository;
@@ -56,31 +50,58 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
 
 
     @Override
+    @Transactional
     public RecurringBillingResponseDto create(
             UUID billingConfigurationId,
             RecurringBillingRequestDto request) {
 
+        /*
+         * 1. Get Billing Configuration
+         */
         BillingConfiguration configuration =
                 billingConfigurationRepository.findById(billingConfigurationId)
                         .orElseThrow(() ->
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
-        // Validate that billing type is either Subscription or supports recurring billing
-        String billingTypeName = configuration.getBillingType().getBillingTypeName();
-        if (!billingTypeName.equalsIgnoreCase("Subscription") && 
-            !billingTypeName.equalsIgnoreCase("Recurring")) {
+        /*
+         * 2. Billing Configuration must be in DRAFT
+         *
+         * Recurring configuration is created while
+         * the parent Billing Configuration is being configured.
+         */
+        if (configuration.getApprovalStatus() != ApprovalStatus.DRAFT) {
+
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Recurring billing configuration can only be created while the billing configuration is in Draft.");
+        }
+
+        /*
+         * 3. Validate Billing Type
+         */
+        if (configuration.getBillingType() == null ||
+                configuration.getBillingType().getBillingTypeName() == null ||
+                configuration.getBillingType().getBillingTypeName().isBlank()) {
+
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Type is required for recurring billing.");
+        }
+
+        String billingTypeName =
+                configuration.getBillingType()
+                        .getBillingTypeName()
+                        .trim();
+
+        if (!billingTypeName.equalsIgnoreCase("Subscription") &&
+                !billingTypeName.equalsIgnoreCase("Recurring")) {
 
             throw new GlobalExceptionHandler.ValidationException(
                     "Selected Billing Configuration does not support recurring billing.");
         }
 
-        if (configuration.getStatus() == BillingConfigurationStatus.APPROVED) {
-
-            throw new GlobalExceptionHandler.ValidationException(
-                    "Approved Billing Configuration cannot be modified.");
-        }
-
+        /*
+         * 4. Prevent duplicate active recurring configuration
+         */
         if (billingRecurringRepository
                 .existsByBillingConfigurationAndIsActiveTrue(configuration)) {
 
@@ -88,74 +109,198 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                     "Recurring configuration already exists.");
         }
 
+        /*
+         * 5. Validate recurring request
+         */
         validateRecurringBillingRequest(request);
 
-        // Validate and get the billing frequency from the request
-        BillingFrequencyMaster billingFrequency = getBillingFrequency(request.getBillingFrequencyId());
+        /*
+         * 6. Get Billing Frequency
+         */
+        BillingFrequencyMaster billingFrequency =
+                getBillingFrequency(
+                        request.getBillingFrequencyId());
 
-        // Validate effective dates against project duration
+        /*
+         * 7. Validate recurring dates against project duration
+         */
         validateEffectiveDatesAgainstProjectDuration(
                 configuration,
                 request.getRecurringStartDate(),
                 request.getRecurringEndDate());
 
-        // Determine contract value based on source
-        BigDecimal contractValue = request.getContractValue();
-        ContractValueSource contractValueSource = request.getContractValueSource();
+        /*
+         * 8. Determine Contract Value
+         *
+         * PMS_BUDGET:
+         *     Contract value comes from Project Budget.
+         *
+         * MANUAL:
+         *     Contract value comes from user input.
+         */
+        BigDecimal contractValue =
+                request.getContractValue();
 
-        if (contractValueSource == ContractValueSource.PMS_BUDGET) {
-            BigDecimal projectBudget = configuration.getProject().getProjectBudget();
-            if (projectBudget == null || projectBudget.compareTo(BigDecimal.ZERO) <= 0) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Project budget must be available when using PMS_BUDGET as contract value source.");
-            }
-            contractValue = projectBudget;
-        } else if (contractValueSource == ContractValueSource.MANUAL) {
-            if (contractValue == null || contractValue.compareTo(BigDecimal.ZERO) <= 0) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Contract value must be provided when using MANUAL as contract value source.");
-            }
-        } else {
+        ContractValueSource contractValueSource =
+                request.getContractValueSource();
+
+        if (contractValueSource == null) {
+
             throw new GlobalExceptionHandler.ValidationException(
                     "Contract value source is required.");
         }
 
+        if (contractValueSource == ContractValueSource.PMS_BUDGET) {
+
+            /*
+             * Project must exist.
+             */
+            if (configuration.getProject() == null) {
+
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Project is required when using PMS_BUDGET as contract value source.");
+            }
+
+            BigDecimal projectBudget =
+                    configuration.getProject()
+                            .getProjectBudget();
+
+            /*
+             * Project budget must be valid.
+             */
+            if (projectBudget == null ||
+                    projectBudget.compareTo(BigDecimal.ZERO) <= 0) {
+
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Project budget must be available when using PMS_BUDGET as contract value source.");
+            }
+
+            /*
+             * Actual contract value becomes the project budget.
+             */
+            contractValue = projectBudget;
+
+        } else if (contractValueSource == ContractValueSource.MANUAL) {
+
+            /*
+             * Manual contract value must be supplied.
+             */
+            if (contractValue == null ||
+                    contractValue.compareTo(BigDecimal.ZERO) <= 0) {
+
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Contract value must be provided when using MANUAL as contract value source.");
+            }
+
+        } else {
+
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Unsupported contract value source.");
+        }
+
+        /*
+         * 9. Store the ACTUAL contract value in Billing Configuration.
+         *
+         * IMPORTANT:
+         *
+         * Project Budget is stored in:
+         *     project_master_reference.project_budget
+         *
+         * Actual Billing Contract Value is stored in:
+         *     billing_configuration.contract_value
+         *
+         * This allows the approval/review screen to display
+         * the actual contracted amount rather than the project budget.
+         */
+        configuration.setContractValue(contractValue);
+        configuration.setUpdatedAt(LocalDateTime.now());
+
+        billingConfigurationRepository.save(configuration);
+
+        /*
+         * 10. Create Recurring Configuration
+         */
         BillingRecurringConfiguration recurring =
                 BillingRecurringConfiguration.builder()
                         .billingConfiguration(configuration)
-                        .recurringName(request.getRecurringName())
-                        .contractValue(contractValue)
-                        .contractValueSource(contractValueSource)
-                        .billingFrequency(billingFrequency)
-                        .recurringStartDate(request.getRecurringStartDate())
-                        .recurringEndDate(request.getRecurringEndDate())
-                        .renewalType(request.getRenewalType())
-                        .renewalDurationType(request.getRenewalDurationType())
-                        .renewalDurationValue(request.getRenewalDurationValue())
-                        .renewalDurationUnit(request.getRenewalDurationUnit())
-                        .renewalPricingType(request.getRenewalPricingType())
-                        .renewalContractValue(request.getRenewalContractValue())
+
+                        .recurringName(
+                                request.getRecurringName())
+
+                        .contractValue(
+                                contractValue)
+
+                        .contractValueSource(
+                                contractValueSource)
+
+                        .billingFrequency(
+                                billingFrequency)
+
+                        .recurringStartDate(
+                                request.getRecurringStartDate())
+
+                        .recurringEndDate(
+                                request.getRecurringEndDate())
+
+                        .renewalType(
+                                request.getRenewalType())
+
+                        .renewalDurationType(
+                                request.getRenewalDurationType())
+
+                        .renewalDurationValue(
+                                request.getRenewalDurationValue())
+
+                        .renewalDurationUnit(
+                                request.getRenewalDurationUnit())
+
+                        .renewalPricingType(
+                                request.getRenewalPricingType())
+
+                        .renewalContractValue(
+                                request.getRenewalContractValue())
+
                         .renewalBillingFrequency(
                                 getRenewalFrequency(
                                         request.getRenewalBillingFrequencyId()))
+
                         .renewalEffectiveFrom(
                                 request.getRenewalEffectiveFrom())
-                        .remarks(request.getRemarks())
+
+                        .remarks(
+                                request.getRemarks())
+
                         .isActive(true)
-                        .createdAt(LocalDateTime.now())
-                        .updatedAt(LocalDateTime.now())
+
+                        .createdAt(
+                                LocalDateTime.now())
+
+                        .updatedAt(
+                                LocalDateTime.now())
+
                         .build();
 
+        /*
+         * 11. Save Recurring Configuration
+         */
         BillingRecurringConfiguration saved =
                 billingRecurringRepository.save(recurring);
 
-        // Generate billing schedule
-        generateBillingSchedule(configuration, saved);
+        /*
+         * 12. Generate Billing Schedule
+         */
+        generateBillingSchedule(
+                configuration,
+                saved);
 
+        /*
+         * 13. Return response
+         */
         return mapToResponse(saved);
     }
 
     @Override
+    @Transactional
     public RecurringBillingResponseDto update(
             UUID recurringConfigurationId,
             RecurringBillingRequestDto request) {
@@ -166,53 +311,105 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Recurring configuration not found."));
 
-        if (recurring.getBillingConfiguration().getStatus()
-                == BillingConfigurationStatus.APPROVED) {
+        BillingConfiguration configuration =
+                recurring.getBillingConfiguration();
 
+        if (configuration == null) {
             throw new GlobalExceptionHandler.ValidationException(
-                    "Approved Billing Configuration cannot be modified.");
+                    "Billing Configuration is not associated with this recurring configuration.");
         }
 
+        /*
+         * Do NOT require the Billing Configuration to be APPROVED/ACTIVE here.
+         *
+         * Recurring configuration can be edited while the overall
+         * Billing Configuration is still in DRAFT/PENDING_APPROVAL.
+         *
+         * Approval/activation should be validated when the billing
+         * configuration is submitted/approved/activated.
+         */
+
+        // Validate recurring request
         validateRecurringBillingRequest(request);
 
-        // Validate and get the billing frequency from the request
-        BillingFrequencyMaster billingFrequency = getBillingFrequency(request.getBillingFrequencyId());
+        BillingFrequencyMaster billingFrequency =
+                getBillingFrequency(request.getBillingFrequencyId());
 
-        // Validate effective dates against project duration
+        if (billingFrequency == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Frequency is required.");
+        }
+
+        // Validate effective dates
         validateEffectiveDatesAgainstProjectDuration(
-                recurring.getBillingConfiguration(),
+                configuration,
                 request.getRecurringStartDate(),
                 request.getRecurringEndDate());
 
-        // Determine contract value based on source
-        BigDecimal contractValue = request.getContractValue();
-        ContractValueSource contractValueSource = request.getContractValueSource();
+        // ---------------------------------------------------------
+        // CONTRACT VALUE
+        // ---------------------------------------------------------
 
-        if (contractValueSource == ContractValueSource.PMS_BUDGET) {
-            BigDecimal projectBudget = recurring.getBillingConfiguration().getProject().getProjectBudget();
-            if (projectBudget == null || projectBudget.compareTo(BigDecimal.ZERO) <= 0) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Project budget must be available when using PMS_BUDGET as contract value source.");
-            }
-            contractValue = projectBudget;
-        } else if (contractValueSource == ContractValueSource.MANUAL) {
-            if (contractValue == null || contractValue.compareTo(BigDecimal.ZERO) <= 0) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Contract value must be provided when using MANUAL as contract value source.");
-            }
-        } else {
+        BigDecimal contractValue = request.getContractValue();
+
+        ContractValueSource contractValueSource =
+                request.getContractValueSource();
+
+        if (contractValueSource == null) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Contract value source is required.");
         }
 
-        recurring.setRecurringName(
-                request.getRecurringName());
+        if (contractValueSource == ContractValueSource.PMS_BUDGET) {
 
-        recurring.setContractValue(
-                contractValue);
+            if (configuration.getProject() == null) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Project is not associated with the Billing Configuration.");
+            }
 
-        recurring.setContractValueSource(
-                contractValueSource);
+            BigDecimal projectBudget =
+                    configuration.getProject().getProjectBudget();
+
+            if (projectBudget == null ||
+                    projectBudget.compareTo(BigDecimal.ZERO) <= 0) {
+
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Project budget must be available when using PMS_BUDGET as contract value source.");
+            }
+
+            contractValue = projectBudget;
+
+        } else if (contractValueSource == ContractValueSource.MANUAL) {
+
+            if (contractValue == null ||
+                    contractValue.compareTo(BigDecimal.ZERO) <= 0) {
+
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Contract value must be provided when using MANUAL as contract value source.");
+            }
+
+        } else {
+
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Unsupported contract value source.");
+        }
+
+        // Store the actual recurring contract value in the parent billing configuration.
+        configuration.setContractValue(contractValue);
+
+        configuration.setUpdatedAt(LocalDateTime.now());
+
+        billingConfigurationRepository.save(configuration);
+
+        // ---------------------------------------------------------
+        // UPDATE RECURRING CONFIGURATION
+        // ---------------------------------------------------------
+
+        recurring.setRecurringName(request.getRecurringName());
+
+        recurring.setContractValue(contractValue);
+
+        recurring.setContractValueSource(contractValueSource);
 
         recurring.setBillingFrequency(billingFrequency);
 
@@ -252,13 +449,48 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
 
         recurring.setUpdatedAt(LocalDateTime.now());
 
-        BillingRecurringConfiguration updated =
+        BillingRecurringConfiguration saved =
                 billingRecurringRepository.save(recurring);
 
-        // Regenerate billing schedule
-        regenerateBillingSchedule(recurring.getBillingConfiguration(), updated);
+        // ---------------------------------------------------------
+        // INVALIDATE OLD SCHEDULES
+        // ---------------------------------------------------------
 
-        return mapToResponse(updated);
+        List<BillingSchedule> existingSchedules =
+                billingScheduleRepository
+                        .findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
+                                saved);
+
+        if (existingSchedules != null && !existingSchedules.isEmpty()) {
+
+            LocalDateTime now = LocalDateTime.now();
+
+            for (BillingSchedule schedule : existingSchedules) {
+
+                /*
+                 * Don't modify an already invoiced schedule.
+                 * It represents historical billing data.
+                 */
+                if (Boolean.TRUE.equals(schedule.getIsInvoiced())) {
+                    continue;
+                }
+
+                schedule.setIsActive(false);
+                schedule.setUpdatedAt(now);
+            }
+
+            billingScheduleRepository.saveAll(existingSchedules);
+        }
+
+        // ---------------------------------------------------------
+        // GENERATE NEW SCHEDULE
+        // ---------------------------------------------------------
+
+        generateBillingSchedule(
+                configuration,
+                saved);
+
+        return mapToResponse(saved);
     }
 
     private void validateRecurringBillingRequest(
@@ -372,26 +604,36 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             LocalDate effectiveTo) {
 
         var project = configuration.getProject();
+
         LocalDate projectStart = project.getStartDate();
         LocalDate projectEnd = project.getEndDate();
 
-        // If project dates are not available, skip validation
+        if (effectiveFrom != null &&
+                effectiveTo != null &&
+                effectiveFrom.isAfter(effectiveTo)) {
+
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Effective From date cannot be after Effective To date.");
+        }
+
         if (projectStart == null || projectEnd == null) {
             return;
         }
 
-        // Validate effectiveFrom is not before project start
-        if (effectiveFrom != null && effectiveFrom.isBefore(projectStart)) {
+        if (effectiveFrom != null &&
+                effectiveFrom.isBefore(projectStart)) {
+
             throw new GlobalExceptionHandler.ValidationException(
-                    "Effective From date cannot be before Project Start Date (" 
-                    + projectStart + ").");
+                    "Effective From date cannot be before Project Start Date ("
+                            + projectStart + ").");
         }
 
-        // Validate effectiveTo is not after project end
-        if (effectiveTo != null && effectiveTo.isAfter(projectEnd)) {
+        if (effectiveTo != null &&
+                effectiveTo.isAfter(projectEnd)) {
+
             throw new GlobalExceptionHandler.ValidationException(
-                    "Effective To date cannot be after Project End Date (" 
-                    + projectEnd + ").");
+                    "Effective To date cannot be after Project End Date ("
+                            + projectEnd + ").");
         }
     }
 
@@ -477,8 +719,7 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
     }
 
     @Override
-    public void delete(
-            UUID recurringConfigurationId) {
+    public void delete(UUID recurringConfigurationId) {
 
         BillingRecurringConfiguration recurring =
                 billingRecurringRepository.findById(recurringConfigurationId)
@@ -486,8 +727,11 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Recurring configuration not found."));
 
-        if (recurring.getBillingConfiguration().getStatus()
-                == BillingConfigurationStatus.APPROVED) {
+        BillingConfiguration configuration =
+                recurring.getBillingConfiguration();
+
+        if (configuration != null &&
+                configuration.getApprovalStatus() == ApprovalStatus.APPROVED) {
 
             throw new GlobalExceptionHandler.ValidationException(
                     "Approved Billing Configuration cannot be modified.");
@@ -551,47 +795,79 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             BillingRecurringConfiguration recurring) {
 
         LocalDate startDate = recurring.getRecurringStartDate();
+
+        if (startDate == null) {
+            startDate = configuration.getEffectiveFrom();
+        }
+
         if (startDate == null) {
             startDate = configuration.getProject().getStartDate();
         }
 
         LocalDate endDate = recurring.getRecurringEndDate();
+
+        if (endDate == null) {
+            endDate = configuration.getEffectiveTo();
+        }
+
         if (endDate == null) {
             endDate = configuration.getProject().getEndDate();
         }
 
-        BillingFrequencyMaster frequency = recurring.getBillingFrequency();
+        if (startDate == null || endDate == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing schedule cannot be generated because billing start or end date is missing.");
+        }
 
-        List<BillingPeriodDto> periods = billingPeriodCalculatorService.calculatePeriodsWithAmount(
-                startDate,
-                endDate,
-                frequency.getDurationValue(),
-                frequency.getDurationUnit().toString(),
-                recurring.getContractValue()
-        );
+        if (startDate.isAfter(endDate)) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Recurring billing start date cannot be after the end date.");
+        }
+
+        BillingFrequencyMaster frequency =
+                recurring.getBillingFrequency();
+
+        if (frequency == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Frequency is required for recurring billing.");
+        }
+
+        List<BillingPeriodDto> periods =
+                billingPeriodCalculatorService.calculatePeriodsWithAmount(
+                        startDate,
+                        endDate,
+                        frequency.getDurationValue(),
+                        frequency.getDurationUnit().toString(),
+                        recurring.getContractValue()
+                );
 
         for (BillingPeriodDto periodDto : periods) {
-            BillingSchedule schedule = BillingSchedule.builder()
-                    .billingConfiguration(configuration)
-                    .recurringConfiguration(recurring)
-                    .periodNumber(periodDto.getPeriodNumber())
-                    .periodStartDate(periodDto.getPeriodStartDate())
-                    .periodEndDate(periodDto.getPeriodEndDate())
-                    .billingAmount(periodDto.getBillingAmount())
-                    .scheduleType(BillingScheduleType.PRIMARY)
-                    .isPartialPeriod(periodDto.getIsPartialPeriod())
-                    .periodStatus(BillingPeriodStatus.PENDING)
-                    .isInvoiced(false)
-                    .isActive(true)
-                    .createdAt(LocalDateTime.now())
-                    .updatedAt(LocalDateTime.now())
-                    .build();
+
+            BillingSchedule schedule =
+                    BillingSchedule.builder()
+                            .billingConfiguration(configuration)
+                            .recurringConfiguration(recurring)
+                            .periodNumber(periodDto.getPeriodNumber())
+                            .periodStartDate(periodDto.getPeriodStartDate())
+                            .periodEndDate(periodDto.getPeriodEndDate())
+                            .billingAmount(periodDto.getBillingAmount())
+                            .scheduleType(BillingScheduleType.PRIMARY)
+                            .isPartialPeriod(periodDto.getIsPartialPeriod())
+                            .periodStatus(BillingPeriodStatus.PENDING)
+                            .isInvoiced(false)
+                            .isActive(true)
+                            .createdAt(LocalDateTime.now())
+                            .updatedAt(LocalDateTime.now())
+                            .build();
 
             billingScheduleRepository.save(schedule);
         }
 
-        log.info("Generated {} billing periods for recurring configuration {}",
-                periods.size(), recurring.getRecurringConfigurationId());
+        log.info(
+                "Generated {} billing periods for recurring configuration {}",
+                periods.size(),
+                recurring.getRecurringConfigurationId()
+        );
     }
 
     private void regenerateBillingSchedule(

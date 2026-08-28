@@ -25,4 +25,6 @@ public interface BillingFixedPriceRepository extends JpaRepository<BillingFixedP
     findAllByBillingConfigurationAndIsActiveTrue(
             BillingConfiguration billingConfiguration
     );
+
+    void deleteByBillingConfiguration(BillingConfiguration billingConfiguration);
 }

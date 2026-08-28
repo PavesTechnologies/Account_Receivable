@@ -4,6 +4,7 @@ import com.AccountReceivableManagement.dto.projectbilling_config.BillingTMRateCa
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingTMRateCardResponseDto;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingTMRateCard;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
@@ -221,14 +222,13 @@ public class BillingTMRateCardServiceImpl implements BillingTMRateCardService {
         if (configuration.getBillingType() == null ||
                 !configuration.getBillingType()
                         .getBillingTypeName()
-                        .equalsIgnoreCase("Time & Material")) {
+                        .equalsIgnoreCase("Timesheet Based")) {
 
             throw new GlobalExceptionHandler.ValidationException(
                     "Time & Material Rate Cards can only be created for Time & Material billing.");
         }
 
-        if (configuration.getStatus() == BillingConfigurationStatus.APPROVED) {
-
+        if (configuration.getApprovalStatus() == ApprovalStatus.APPROVED) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Approved Billing Configuration cannot be modified.");
         }

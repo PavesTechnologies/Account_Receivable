@@ -4,6 +4,8 @@ import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingDataA
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingAcquisition;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingAcquisitionStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingAcquisitionRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
 import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingDataAcquisitionService;
@@ -34,9 +36,14 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
     private final BillingAcquisitionRepository billingAcquisitionRepository;
 
     @Override
+    @Transactional(readOnly = true)
     public List<BillingDataAcquisitionResponseDto> getActiveConfigurations() {
-        // Filter: is_active = 1 (true) — set by the approve() workflow.
-        return billingConfigurationRepository.findAllActive()
+
+        return billingConfigurationRepository
+                .findByApprovalStatusAndBillingStatus(
+                        ApprovalStatus.APPROVED,
+                        BillingConfigurationStatus.ACTIVE
+                )
                 .stream()
                 .sorted(Comparator.comparing(
                         bc -> bc.getProject().getProjectName(),

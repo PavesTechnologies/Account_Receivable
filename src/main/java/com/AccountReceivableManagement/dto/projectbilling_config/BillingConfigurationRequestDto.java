@@ -44,6 +44,8 @@ public class BillingConfigurationRequestDto {
     @NotNull(message = "Invoice Generation Type is required.")
     private InvoiceGenerationType invoiceGenerationType;
 
+    private BigDecimal contractValue;
+
     @NotNull(message = "Expense Billing Eligibility is required.")
     private Boolean expenseBillingEligible;
 
@@ -55,9 +57,10 @@ public class BillingConfigurationRequestDto {
     private BigDecimal hourlyRate;
 
     /**
-     * When true, this is the final "Create Billing Setup" operation.
-     * The configuration will be activated with status=ACTIVE and isActive=true.
-     * When false or null, this is a normal save/update and remains DRAFT.
+     * When true, this represents the final save operation from the UI.
+     * It does not activate the billing configuration.
+     * Activation is determined only after approval and based on
+     * effectiveFrom/effectiveTo.
      */
     private Boolean finalize;
 
