@@ -1,6 +1,8 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ContractValueSource;
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.*;
 
 import java.math.BigDecimal;
@@ -25,6 +27,8 @@ public class BillingFixedPriceResponseDto {
 
     private ContractValueSource contractValueSource;
 
+    @JsonProperty("retentionPercentage")
+    @JsonAlias({"retentionPercent"})
     private BigDecimal retentionPercentage;
 
     private BigDecimal retentionAmount;

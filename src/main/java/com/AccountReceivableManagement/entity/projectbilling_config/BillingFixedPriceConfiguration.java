@@ -101,13 +101,8 @@ public class BillingFixedPriceConfiguration {
             isActive = true;
         }
 
-        if (retentionPercentage == null) {
-            retentionPercentage = BigDecimal.ZERO;
-        }
-
-        if (advanceReceived == null) {
-            advanceReceived = BigDecimal.ZERO;
-        }
+        // Do NOT default retentionPercentage or advanceReceived to zero.
+        // These are required fields and must be validated at the DTO level.
     }
 
     @PreUpdate

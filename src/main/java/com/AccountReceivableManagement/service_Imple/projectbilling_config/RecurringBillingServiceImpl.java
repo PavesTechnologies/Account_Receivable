@@ -397,6 +397,9 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         // Store the actual recurring contract value in the parent billing configuration.
         configuration.setContractValue(contractValue);
 
+        // Handle approval state transition for the parent configuration
+        handleApprovalStateTransition(configuration);
+        
         configuration.setUpdatedAt(LocalDateTime.now());
 
         billingConfigurationRepository.save(configuration);
@@ -905,5 +908,46 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                         .isPartialPeriod(schedule.getIsPartialPeriod())
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Handles approval state transitions when a billing configuration is edited.
+     * 
+     * Workflow:
+     * - DRAFT → Edit → DRAFT (stay in draft)
+     * - PENDING_APPROVAL → Edit → PENDING_APPROVAL (stay pending)
+     * - APPROVED + ACTIVE → Edit → PENDING_APPROVAL + INACTIVE (require re-approval)
+     * - REJECTED → Edit → DRAFT (allow correction)
+     * 
+     * @param configuration The billing configuration being edited
+     */
+    private void handleApprovalStateTransition(BillingConfiguration configuration) {
+        ApprovalStatus currentStatus = configuration.getApprovalStatus();
+        
+        switch (currentStatus) {
+            case DRAFT:
+                // Stay in DRAFT - no change needed
+                break;
+                
+            case PENDING_APPROVAL:
+                // Stay in PENDING_APPROVAL - already waiting for approval
+                break;
+                
+            case APPROVED:
+                // APPROVED + ACTIVE → PENDING_APPROVAL + INACTIVE
+                // This requires re-approval after editing
+                configuration.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+                configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+                configuration.setManuallyDeactivated(false);
+                configuration.setRejectionReason(null);
+                break;
+                
+            case REJECTED:
+                // REJECTED → DRAFT (allow correction and resubmission)
+                configuration.setApprovalStatus(ApprovalStatus.DRAFT);
+                configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+                configuration.setRejectionReason(null);
+                break;
+        }
     }
 }
