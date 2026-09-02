@@ -18,29 +18,52 @@ public class TaxCalculationController {
     private final TaxCalculationService taxCalculationService;
 
     @PostMapping
-    public ResponseEntity<ApiResponse<TaxCalculationResponseDto>> calculateTax(
-            @PathVariable UUID snapshotId) {
+    public ResponseEntity<
+            ApiResponse<TaxCalculationResponseDto>
+            > calculateTax(
+            @PathVariable UUID snapshotId
+    ) {
 
-        TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
+        TaxCalculationResponseDto response =
+                taxCalculationService.calculateTax(
+                        snapshotId
+                );
 
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.<TaxCalculationResponseDto>builder()
-                        .success(true)
-                        .message("Tax calculation completed successfully.")
-                        .data(response)
-                        .build());
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(
+                        ApiResponse
+                                .<TaxCalculationResponseDto>builder()
+                                .success(true)
+                                .message(
+                                        "Tax calculation completed successfully."
+                                )
+                                .data(response)
+                                .build()
+                );
     }
 
     @GetMapping
-    public ResponseEntity<ApiResponse<TaxCalculationResponseDto>> getTaxCalculation(
-            @PathVariable UUID snapshotId) {
+    public ResponseEntity<
+            ApiResponse<TaxCalculationResponseDto>
+            > getTaxCalculation(
+            @PathVariable UUID snapshotId
+    ) {
 
-        TaxCalculationResponseDto response = taxCalculationService.getTaxCalculationBySnapshotId(snapshotId);
-
-        return ResponseEntity.ok(ApiResponse.<TaxCalculationResponseDto>builder()
-                .success(true)
-                .message("Tax calculation retrieved successfully.")
-                .data(response)
-                .build());
+        return ResponseEntity.ok(
+                ApiResponse
+                        .<TaxCalculationResponseDto>builder()
+                        .success(true)
+                        .message(
+                                "Tax calculation retrieved successfully."
+                        )
+                        .data(
+                                taxCalculationService
+                                        .getTaxCalculationBySnapshotId(
+                                                snapshotId
+                                        )
+                        )
+                        .build()
+        );
     }
 }

@@ -91,6 +91,15 @@
 
         private BigDecimal hourlyRate;
 
+    // Billing-specific details
+    private BillingFixedPriceResponseDto fixedPriceDetails;
+    private RecurringBillingResponseDto recurringDetails;
+    private java.util.List<BillingTMRateCardResponseDto> tmRateCards;
+    private java.util.List<BillingScheduleResponseDto> milestoneSchedules;
 
+//    // Change tracking for pending approval
+//    private java.util.List<BillingConfigurationChangeDto> changes;
+//    private String previousApprovalStatus;
+//    private String previousBillingStatus;
 
     }

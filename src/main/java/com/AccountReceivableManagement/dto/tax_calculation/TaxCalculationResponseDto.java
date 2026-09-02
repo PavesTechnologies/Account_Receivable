@@ -7,6 +7,7 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Getter
@@ -34,31 +35,17 @@ public class TaxCalculationResponseDto {
 
     private BillingSnapshotStatus snapshotStatus;
 
-    /**
-     * Human-readable tax region — the primary user-facing value.
-     * {@link #taxRegionId} is retained for traceability only, not for display.
-     */
     private String taxRegionName;
 
     private String taxRegionCode;
 
     private UUID taxRegionId;
 
-    private UUID taxRateConfigurationId;
+    private UUID taxConfigurationId;
 
     private BigDecimal taxableAmount;
 
-    private BigDecimal cgstRate;
-
-    private BigDecimal cgstAmount;
-
-    private BigDecimal sgstRate;
-
-    private BigDecimal sgstAmount;
-
-    private BigDecimal igstRate;
-
-    private BigDecimal igstAmount;
+    private List<TaxCalculationComponentResponseDto> components;
 
     private BigDecimal totalTaxAmount;
 

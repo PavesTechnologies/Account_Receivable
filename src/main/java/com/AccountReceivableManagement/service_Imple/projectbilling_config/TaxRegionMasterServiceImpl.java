@@ -8,6 +8,7 @@ import com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMaste
 import com.AccountReceivableManagement.service_interface.projectbilling_config.TaxRegionMasterService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.UUID;
@@ -20,62 +21,123 @@ public class TaxRegionMasterServiceImpl implements TaxRegionMasterService {
     private final TaxRegionMasterRepository taxRegionRepository;
 
     @Override
-    public TaxRegionResponseDto createTaxRegion(TaxRegionRequestDto request) {
+    public TaxRegionResponseDto createTaxRegion(
+            TaxRegionRequestDto request
+    ) {
 
-        if (taxRegionRepository.existsByTaxRegionCodeIgnoreCase(request.getTaxRegionCode())) {
-            throw new GlobalExceptionHandler.DuplicateResourceException("Tax Region Code already exists.");
+        String code = request.getTaxRegionCode()
+                .trim()
+                .toUpperCase();
+
+        if (taxRegionRepository
+                .existsByTaxRegionCodeIgnoreCase(code)) {
+
+            throw new GlobalExceptionHandler
+                    .DuplicateResourceException(
+                    "Tax Region Code already exists."
+            );
         }
 
-        TaxRegionMaster taxRegion = TaxRegionMaster.builder()
-                .taxRegionCode(request.getTaxRegionCode().trim().toUpperCase())
-                .taxRegionName(request.getTaxRegionName().trim())
-                .taxRegime(request.getTaxRegime().trim())
-                .currencyCode(request.getCurrencyCode().trim().toUpperCase())
-                .description(request.getDescription())
-                .isActive(true)
-                .build();
+        TaxRegionMaster taxRegion =
+                TaxRegionMaster.builder()
+                        .taxRegionCode(code)
+                        .taxRegionName(
+                                request.getTaxRegionName().trim()
+                        )
+                        .taxRegime(
+                                request.getTaxRegime().trim()
+                        )
+                        .currencyCode(
+                                request.getCurrencyCode()
+                                        .trim()
+                                        .toUpperCase()
+                        )
+                        .description(
+                                request.getDescription()
+                        )
+                        .isActive(true)
+                        .build();
 
-        TaxRegionMaster saved = taxRegionRepository.save(taxRegion);
-
-        return mapToResponse(saved);
+        return mapToResponse(
+                taxRegionRepository.save(taxRegion)
+        );
     }
 
     @Override
-    public TaxRegionResponseDto updateTaxRegion(UUID taxRegionId,
-                                                TaxRegionRequestDto request) {
+    public TaxRegionResponseDto updateTaxRegion(
+            UUID taxRegionId,
+            TaxRegionRequestDto request
+    ) {
 
-        TaxRegionMaster taxRegion = taxRegionRepository.findById(taxRegionId)
-                .orElseThrow(() ->
-                        new GlobalExceptionHandler.ResourceNotFoundException("Tax Region not found."));
+        TaxRegionMaster taxRegion =
+                taxRegionRepository.findById(taxRegionId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Tax Region not found."
+                                )
+                        );
 
-        if (!taxRegion.getTaxRegionCode().equalsIgnoreCase(request.getTaxRegionCode())
-                && taxRegionRepository.existsByTaxRegionCodeIgnoreCase(request.getTaxRegionCode())) {
+        String code = request.getTaxRegionCode()
+                .trim()
+                .toUpperCase();
 
-            throw new GlobalExceptionHandler.DuplicateResourceException("Tax Region Code already exists.");
+        if (!taxRegion.getTaxRegionCode()
+                .equalsIgnoreCase(code)
+                && taxRegionRepository
+                .existsByTaxRegionCodeIgnoreCase(code)) {
+
+            throw new GlobalExceptionHandler
+                    .DuplicateResourceException(
+                    "Tax Region Code already exists."
+            );
         }
 
-        taxRegion.setTaxRegionCode(request.getTaxRegionCode().trim().toUpperCase());
-        taxRegion.setTaxRegionName(request.getTaxRegionName().trim());
-        taxRegion.setTaxRegime(request.getTaxRegime().trim());
-        taxRegion.setCurrencyCode(request.getCurrencyCode().trim().toUpperCase());
-        taxRegion.setDescription(request.getDescription());
+        taxRegion.setTaxRegionCode(code);
 
-        TaxRegionMaster updated = taxRegionRepository.save(taxRegion);
+        taxRegion.setTaxRegionName(
+                request.getTaxRegionName().trim()
+        );
 
-        return mapToResponse(updated);
+        taxRegion.setTaxRegime(
+                request.getTaxRegime().trim()
+        );
+
+        taxRegion.setCurrencyCode(
+                request.getCurrencyCode()
+                        .trim()
+                        .toUpperCase()
+        );
+
+        taxRegion.setDescription(
+                request.getDescription()
+        );
+
+        return mapToResponse(
+                taxRegionRepository.save(taxRegion)
+        );
     }
 
     @Override
-    public TaxRegionResponseDto getTaxRegionById(UUID taxRegionId) {
+    @Transactional(readOnly = true)
+    public TaxRegionResponseDto getTaxRegionById(
+            UUID taxRegionId
+    ) {
 
-        TaxRegionMaster taxRegion = taxRegionRepository.findById(taxRegionId)
-                .orElseThrow(() ->
-                        new GlobalExceptionHandler.ResourceNotFoundException("Tax Region not found."));
+        TaxRegionMaster taxRegion =
+                taxRegionRepository.findById(taxRegionId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Tax Region not found."
+                                )
+                        );
 
         return mapToResponse(taxRegion);
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<TaxRegionResponseDto> getAllTaxRegions() {
 
         return taxRegionRepository.findAll()
@@ -85,38 +147,68 @@ public class TaxRegionMasterServiceImpl implements TaxRegionMasterService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<TaxRegionResponseDto> getActiveTaxRegions() {
 
-        return taxRegionRepository.findByIsActiveTrueOrderByTaxRegionNameAsc()
+        return taxRegionRepository
+                .findByIsActiveTrueOrderByTaxRegionNameAsc()
                 .stream()
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
 
     @Override
-    public void deleteTaxRegion(UUID taxRegionId) {
+    public void deactivateTaxRegion(
+            UUID taxRegionId
+    ) {
 
-        TaxRegionMaster taxRegion = taxRegionRepository.findById(taxRegionId)
-                .orElseThrow(() ->
-                        new GlobalExceptionHandler.ResourceNotFoundException("Tax Region not found."));
+        TaxRegionMaster taxRegion =
+                taxRegionRepository.findById(taxRegionId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Tax Region not found."
+                                )
+                        );
 
         taxRegion.setIsActive(false);
 
         taxRegionRepository.save(taxRegion);
     }
 
-    private TaxRegionResponseDto mapToResponse(TaxRegionMaster taxRegion) {
+    private TaxRegionResponseDto mapToResponse(
+            TaxRegionMaster taxRegion
+    ) {
 
         return TaxRegionResponseDto.builder()
-                .taxRegionId(taxRegion.getTaxRegionId())
-                .taxRegionCode(taxRegion.getTaxRegionCode())
-                .taxRegionName(taxRegion.getTaxRegionName())
-                .taxRegime(taxRegion.getTaxRegime())
-                .currencyCode(taxRegion.getCurrencyCode())
-                .description(taxRegion.getDescription())
-                .isActive(taxRegion.getIsActive())
-                .createdAt(taxRegion.getCreatedAt())
-                .updatedAt(taxRegion.getUpdatedAt())
+                .taxRegionId(
+                        taxRegion.getTaxRegionId()
+                )
+                .taxRegionCode(
+                        taxRegion.getTaxRegionCode()
+                )
+                .taxRegionName(
+                        taxRegion.getTaxRegionName()
+                )
+                .taxRegime(
+                        taxRegion.getTaxRegime()
+                )
+                .currencyCode(
+                        taxRegion.getCurrencyCode()
+                )
+                .description(
+                        taxRegion.getDescription()
+                )
+                .isActive(
+                        taxRegion.getIsActive()
+                )
+                .createdAt(
+                        taxRegion.getCreatedAt()
+                )
+                .updatedAt(
+                        taxRegion.getUpdatedAt()
+                )
                 .build();
     }
+
 }

@@ -1,11 +1,11 @@
 package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 
-import com.AccountReceivableManagement.dto.projectbilling_config.TaxRateConfigurationRequestDto;
-import com.AccountReceivableManagement.dto.projectbilling_config.TaxRateConfigurationResponseDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationRequestDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationResponseDto;
 import com.AccountReceivableManagement.entity.projectbilling_config.TaxRateConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.TaxRegionMaster;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
-import com.AccountReceivableManagement.repo.projectbilling_config.TaxRateConfigurationRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,13 +30,13 @@ import static org.mockito.Mockito.*;
 class TaxRateConfigurationServiceImplTest {
 
     @Mock
-    private TaxRateConfigurationRepository taxRateConfigurationRepository;
+    private TaxConfigurationRepository taxRateConfigurationRepository;
 
     @Mock
     private TaxRegionMasterRepository taxRegionMasterRepository;
 
     @InjectMocks
-    private TaxRateConfigurationServiceImpl taxRateConfigurationService;
+    private TaxConfigurationServiceImpl taxRateConfigurationService;
 
     private TaxRegionMaster activeTaxRegion;
 
@@ -52,8 +52,8 @@ class TaxRateConfigurationServiceImplTest {
                 .build();
     }
 
-    private TaxRateConfigurationRequestDto validGstRequest() {
-        return TaxRateConfigurationRequestDto.builder()
+    private TaxConfigurationRequestDto validGstRequest() {
+        return TaxConfigurationRequestDto.builder()
                 .taxRegionId(activeTaxRegion.getTaxRegionId())
                 .taxType("GST")
                 .cgstRate(new BigDecimal("9.0000"))
@@ -74,7 +74,7 @@ class TaxRateConfigurationServiceImplTest {
         when(taxRateConfigurationRepository.save(any(TaxRateConfiguration.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        TaxRateConfigurationResponseDto response = taxRateConfigurationService.create(validGstRequest());
+        TaxConfigurationResponseDto response = taxRateConfigurationService.create(validGstRequest());
 
         assertThat(response.getTaxRegionId()).isEqualTo(activeTaxRegion.getTaxRegionId());
         assertThat(response.getTaxRegionCode()).isEqualTo("IN-KA");
@@ -88,7 +88,7 @@ class TaxRateConfigurationServiceImplTest {
     @Test
     void create_missingTaxRegion_throwsResourceNotFoundException() {
         UUID unknownRegionId = UUID.randomUUID();
-        TaxRateConfigurationRequestDto request = validGstRequest();
+        TaxConfigurationRequestDto request = validGstRequest();
         request.setTaxRegionId(unknownRegionId);
 
         when(taxRegionMasterRepository.findById(unknownRegionId)).thenReturn(Optional.empty());
@@ -106,7 +106,7 @@ class TaxRateConfigurationServiceImplTest {
         when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
                 .thenReturn(Optional.of(activeTaxRegion));
 
-        TaxRateConfigurationRequestDto request = validGstRequest();
+        TaxConfigurationRequestDto request = validGstRequest();
         request.setCgstRate(new BigDecimal("-1.00"));
 
         assertThatThrownBy(() -> taxRateConfigurationService.create(request))
@@ -122,7 +122,7 @@ class TaxRateConfigurationServiceImplTest {
         when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
                 .thenReturn(Optional.of(activeTaxRegion));
 
-        TaxRateConfigurationRequestDto request = validGstRequest();
+        TaxConfigurationRequestDto request = validGstRequest();
         request.setSgstRate(new BigDecimal("-1.00"));
 
         assertThatThrownBy(() -> taxRateConfigurationService.create(request))
@@ -138,7 +138,7 @@ class TaxRateConfigurationServiceImplTest {
         when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
                 .thenReturn(Optional.of(activeTaxRegion));
 
-        TaxRateConfigurationRequestDto request = validGstRequest();
+        TaxConfigurationRequestDto request = validGstRequest();
         request.setEffectiveFrom(LocalDate.of(2026, 4, 1));
         request.setEffectiveTo(LocalDate.of(2026, 3, 1));
 
@@ -165,7 +165,7 @@ class TaxRateConfigurationServiceImplTest {
 
         when(taxRateConfigurationRepository.findById(configId)).thenReturn(Optional.of(configuration));
 
-        TaxRateConfigurationResponseDto response = taxRateConfigurationService.getById(configId);
+        TaxConfigurationResponseDto response = taxRateConfigurationService.getById(configId);
 
         assertThat(response.getTaxRateConfigurationId()).isEqualTo(configId);
         assertThat(response.getTaxRegionCode()).isEqualTo("IN-KA");
@@ -196,7 +196,7 @@ class TaxRateConfigurationServiceImplTest {
         when(taxRateConfigurationRepository.findByIsActiveTrueOrderByEffectiveFromDesc())
                 .thenReturn(List.of(active));
 
-        List<TaxRateConfigurationResponseDto> response = taxRateConfigurationService.getActive();
+        List<TaxConfigurationResponseDto> response = taxRateConfigurationService.getActive();
 
         assertThat(response).hasSize(1);
         assertThat(response.get(0).getIsActive()).isTrue();
@@ -220,7 +220,7 @@ class TaxRateConfigurationServiceImplTest {
                 .findByTaxRegion_TaxRegionIdAndIsActiveTrueOrderByEffectiveFromDesc(activeTaxRegion.getTaxRegionId()))
                 .thenReturn(List.of(configuration));
 
-        List<TaxRateConfigurationResponseDto> response =
+        List<TaxConfigurationResponseDto> response =
                 taxRateConfigurationService.getByTaxRegion(activeTaxRegion.getTaxRegionId());
 
         assertThat(response).hasSize(1);
@@ -288,7 +288,7 @@ class TaxRateConfigurationServiceImplTest {
                 .isActive(false)
                 .build();
 
-        TaxRateConfigurationRequestDto request = validGstRequest();
+        TaxConfigurationRequestDto request = validGstRequest();
         request.setTaxRegionId(inactiveRegion.getTaxRegionId());
 
         when(taxRegionMasterRepository.findById(inactiveRegion.getTaxRegionId()))
@@ -311,11 +311,11 @@ class TaxRateConfigurationServiceImplTest {
         when(taxRateConfigurationRepository.save(any(TaxRateConfiguration.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        TaxRateConfigurationRequestDto request = validGstRequest();
+        TaxConfigurationRequestDto request = validGstRequest();
         request.setCgstRate(new BigDecimal("9.1234"));
         request.setSgstRate(new BigDecimal("9.1234"));
 
-        TaxRateConfigurationResponseDto response = taxRateConfigurationService.create(request);
+        TaxConfigurationResponseDto response = taxRateConfigurationService.create(request);
 
         assertThat(response.getCgstRate().scale()).isEqualTo(4);
         assertThat(response.getCgstRate()).isEqualByComparingTo(new BigDecimal("9.1234"));

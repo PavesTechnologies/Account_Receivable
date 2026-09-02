@@ -47,6 +47,8 @@ public class BillingSnapshotMapper {
                 .billingFrequencyName(configuration.getBillingFrequencyName())
                 .taxRegionId(snapshot.getTaxRegionId())
                 .taxRegionCode(configuration.getTaxRegionCode())
+                .sourceTaxJurisdictionCode(snapshot.getSourceTaxJurisdictionCode())
+                .destinationTaxJurisdictionCode(snapshot.getDestinationTaxJurisdictionCode())
                 .billingPeriodStart(snapshot.getBillingPeriodStart())
                 .billingPeriodEnd(snapshot.getBillingPeriodEnd())
                 .subtotal(snapshot.getSubtotal())

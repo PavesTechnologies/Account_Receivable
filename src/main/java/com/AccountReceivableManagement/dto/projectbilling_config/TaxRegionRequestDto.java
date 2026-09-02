@@ -13,7 +13,7 @@ import org.hibernate.annotations.SecondaryRow;
 public class TaxRegionRequestDto {
 
     @NotBlank(message = "Tax Region Code is required.")
-    @Size(max = 10)
+    @Size(max = 20)
     private String taxRegionCode;
 
     @NotBlank(message = "Tax Region Name is required.")

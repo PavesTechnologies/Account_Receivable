@@ -5,6 +5,7 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Getter
@@ -12,9 +13,9 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class TaxRateConfigurationResponseDto {
+public class TaxConfigurationResponseDto {
 
-    private UUID taxRateConfigurationId;
+    private UUID taxConfigurationId;
 
     private UUID taxRegionId;
 
@@ -24,19 +25,13 @@ public class TaxRateConfigurationResponseDto {
 
     private String taxRegime;
 
-    private String taxType;
-
-    private BigDecimal cgstRate;
-
-    private BigDecimal sgstRate;
-
-    private BigDecimal igstRate;
-
     private LocalDate effectiveFrom;
 
     private LocalDate effectiveTo;
 
     private Boolean isActive;
+
+    private List<TaxConfigurationComponentResponseDto> components;
 
     private LocalDateTime createdAt;
 

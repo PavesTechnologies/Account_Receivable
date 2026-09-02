@@ -379,7 +379,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             return null;
         }
 
-        return BillingConfigurationResponseDto.builder()
+        BillingConfigurationResponseDto.BillingConfigurationResponseDtoBuilder builder = 
+                BillingConfigurationResponseDto.builder()
                 .billingConfigurationId(configuration.getBillingConfigurationId())
 
                 .clientId(
@@ -402,7 +403,6 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 ? configuration.getProject().getProjectName()
                                 : null)
 
-                // ADD THESE
                 .projectBudget(
                         configuration.getProject() != null
                                 ? configuration.getProject().getProjectBudget()
@@ -447,11 +447,6 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 ? configuration.getPaymentTerm().getPaymentTermName()
                                 : null)
 
-                /*
-                 * IMPORTANT:
-                 * PaymentTermsMaster does not have paymentTermCode.
-                 * It has paymentDays instead.
-                 */
                 .paymentTermCode(
                         configuration.getPaymentTerm() != null
                                 ? String.valueOf(
@@ -515,8 +510,257 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         configuration.getCreatedAt())
 
                 .updatedAt(
-                        configuration.getUpdatedAt())
+                        configuration.getUpdatedAt());
 
+        // Populate billing-specific data based on billing type
+        if (configuration.getBillingType() != null) {
+            String billingTypeName = configuration.getBillingType().getBillingTypeName();
+            
+            if ("Fixed Price".equalsIgnoreCase(billingTypeName)) {
+                builder.fixedPriceDetails(getFixedPriceDetails(configuration));
+            } else if ("Recurring".equalsIgnoreCase(billingTypeName) || "Subscription".equalsIgnoreCase(billingTypeName)) {
+                builder.recurringDetails(getRecurringDetails(configuration));
+            } else if ("Time & Material".equalsIgnoreCase(billingTypeName)) {
+                builder.tmRateCards(getTMRateCards(configuration));
+            } else if ("Milestone Based".equalsIgnoreCase(billingTypeName)) {
+                builder.milestoneSchedules(getMilestoneSchedules(configuration));
+            }
+        }
+
+//        // Add change tracking information if configuration is PENDING_APPROVAL
+//        if (configuration.getApprovalStatus() == ApprovalStatus.PENDING_APPROVAL) {
+//            com.AccountReceivableManagement.entity.projectbilling_config.BillingConfigurationAudit audit =
+//                    changeTrackingService.getLatestAudit(configuration);
+//
+//            if (audit != null) {
+//                List<com.AccountReceivableManagement.entity.projectbilling_config.BillingConfigurationChangeDetail> details =
+//                        changeTrackingService.getChangeDetails(audit);
+//
+//                builder.changes(changeTrackingService.mapChangesToDto(details));
+//                builder.previousApprovalStatus(audit.getApprovalStatus().name());
+//                builder.previousBillingStatus(audit.getBillingStatus().name());
+//            }
+//        }
+
+        return builder.build();
+    }
+
+//    /**
+//     * Clones a BillingConfiguration for audit purposes.
+//     * Creates a shallow copy of the entity to capture previous state.
+//     */
+//    private BillingConfiguration cloneConfiguration(BillingConfiguration original) {
+//        if (original == null) {
+//            return null;
+//        }
+//
+//        BillingConfiguration clone = new BillingConfiguration();
+//        clone.setBillingConfigurationId(original.getBillingConfigurationId());
+//        clone.setApprovalStatus(original.getApprovalStatus());
+//        clone.setBillingStatus(original.getBillingStatus());
+//        clone.setContractValue(original.getContractValue());
+//        clone.setEffectiveFrom(original.getEffectiveFrom());
+//        clone.setEffectiveTo(original.getEffectiveTo());
+//        clone.setHourlyRate(original.getHourlyRate());
+//        clone.setPricingModel(original.getPricingModel());
+//        clone.setInvoiceGenerationType(original.getInvoiceGenerationType());
+//        clone.setExpenseBillingEligible(original.getExpenseBillingEligible());
+//        clone.setManuallyDeactivated(original.getManuallyDeactivated());
+//        clone.setRejectionReason(original.getRejectionReason());
+//
+//        return clone;
+//    }
+
+//    /**
+//     * Tracks general configuration field changes.
+//     */
+//    private void trackGeneralConfigurationChanges(
+//            com.AccountReceivableManagement.entity.projectbilling_config.BillingConfigurationAudit audit,
+//            BillingConfiguration previous,
+//            BillingConfiguration current) {
+//
+//        changeTrackingService.recordChange(audit, "contractValue", "Contract Value", "DECIMAL",
+//                previous.getContractValue(), current.getContractValue(), "COMMERCIAL");
+//        changeTrackingService.recordChange(audit, "effectiveFrom", "Effective From", "DATE",
+//                previous.getEffectiveFrom(), current.getEffectiveFrom(), "DATES");
+//        changeTrackingService.recordChange(audit, "effectiveTo", "Effective To", "DATE",
+//                previous.getEffectiveTo(), current.getEffectiveTo(), "DATES");
+//        changeTrackingService.recordChange(audit, "hourlyRate", "Hourly Rate", "DECIMAL",
+//                previous.getHourlyRate(), current.getHourlyRate(), "PRICING");
+//        changeTrackingService.recordChange(audit, "pricingModel", "Pricing Model", "ENUM",
+//                previous.getPricingModel(), current.getPricingModel(), "PRICING");
+//        changeTrackingService.recordChange(audit, "invoiceGenerationType", "Invoice Generation Type", "ENUM",
+//                previous.getInvoiceGenerationType(), current.getInvoiceGenerationType(), "BILLING");
+//        changeTrackingService.recordChange(audit, "expenseBillingEligible", "Expense Billing Eligible", "BOOLEAN",
+//                previous.getExpenseBillingEligible(), current.getExpenseBillingEligible(), "BILLING");
+//    }
+
+    private BillingFixedPriceResponseDto getFixedPriceDetails(BillingConfiguration configuration) {
+        try {
+            return billingFixedPriceRepository
+                    .findByBillingConfigurationAndIsActiveTrue(configuration)
+                    .map(this::mapFixedPriceToResponse)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.error("Error fetching fixed price details for configuration: {}", 
+                    configuration.getBillingConfigurationId(), e);
+            return null;
+        }
+    }
+
+    private BillingFixedPriceResponseDto mapFixedPriceToResponse(
+            com.AccountReceivableManagement.entity.projectbilling_config.BillingFixedPriceConfiguration fixedPrice) {
+        
+        java.math.BigDecimal contractValue = fixedPrice.getContractValue();
+        java.math.BigDecimal retentionPercentage = fixedPrice.getRetentionPercentage();
+        java.math.BigDecimal advanceReceived = fixedPrice.getAdvanceReceived();
+
+        // Calculate retention amount: Contract Value × Retention % / 100
+        java.math.BigDecimal retentionAmount = contractValue
+                .multiply(retentionPercentage)
+                .divide(java.math.BigDecimal.valueOf(100), 2, 
+                        java.math.RoundingMode.HALF_UP);
+
+        // Calculate billable amount: Contract Value − Retention Amount
+        java.math.BigDecimal billableAmount = contractValue.subtract(retentionAmount);
+
+        // Calculate remaining receivable: Billable Amount − Advance Received
+        java.math.BigDecimal remainingReceivable = billableAmount.subtract(advanceReceived);
+
+        return BillingFixedPriceResponseDto.builder()
+                .fixedPriceConfigurationId(fixedPrice.getFixedPriceConfigurationId())
+                .billingConfigurationId(
+                        fixedPrice.getBillingConfiguration() != null
+                                ? fixedPrice.getBillingConfiguration().getBillingConfigurationId()
+                                : null)
+                .contractValue(contractValue)
+                .pmsProjectBudget(fixedPrice.getPmsProjectBudget())
+                .contractValueSource(fixedPrice.getContractValueSource())
+                .retentionPercentage(retentionPercentage)
+                .retentionAmount(retentionAmount)
+                .billableAmount(billableAmount)
+                .advanceReceived(advanceReceived)
+                .remainingReceivable(remainingReceivable)
+                .effectiveFrom(fixedPrice.getEffectiveFrom())
+                .effectiveTo(fixedPrice.getEffectiveTo())
+                .remarks(fixedPrice.getRemarks())
+                .isActive(fixedPrice.getIsActive())
+                .createdAt(fixedPrice.getCreatedAt())
+                .updatedAt(fixedPrice.getUpdatedAt())
+                .build();
+    }
+
+    private RecurringBillingResponseDto getRecurringDetails(BillingConfiguration configuration) {
+        try {
+            return billingRecurringConfigurationRepository
+                    .findByBillingConfigurationAndIsActiveTrue(configuration)
+                    .map(this::mapRecurringToResponse)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.error("Error fetching recurring details for configuration: {}", 
+                    configuration.getBillingConfigurationId(), e);
+            return null;
+        }
+    }
+
+    private RecurringBillingResponseDto mapRecurringToResponse(
+            com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration recurring) {
+        
+        return RecurringBillingResponseDto.builder()
+                .recurringConfigurationId(recurring.getRecurringConfigurationId())
+                .recurringName(recurring.getRecurringName())
+                .contractValue(recurring.getContractValue())
+                .contractValueSource(recurring.getContractValueSource())
+                .billingFrequencyId(
+                        recurring.getBillingFrequency() != null
+                                ? recurring.getBillingFrequency().getBillingFrequencyId()
+                                : null)
+                .billingFrequencyName(
+                        recurring.getBillingFrequency() != null
+                                ? recurring.getBillingFrequency().getBillingFrequencyName()
+                                : null)
+                .recurringStartDate(recurring.getRecurringStartDate())
+                .recurringEndDate(recurring.getRecurringEndDate())
+                .renewalType(recurring.getRenewalType())
+                .renewalDurationType(recurring.getRenewalDurationType())
+                .renewalDurationValue(recurring.getRenewalDurationValue())
+                .renewalDurationUnit(recurring.getRenewalDurationUnit())
+                .renewalPricingType(recurring.getRenewalPricingType())
+                .renewalContractValue(recurring.getRenewalContractValue())
+                .renewalBillingFrequencyId(
+                        recurring.getRenewalBillingFrequency() != null
+                                ? recurring.getRenewalBillingFrequency().getBillingFrequencyId()
+                                : null)
+                .renewalBillingFrequencyName(
+                        recurring.getRenewalBillingFrequency() != null
+                                ? recurring.getRenewalBillingFrequency().getBillingFrequencyName()
+                                : null)
+                .renewalEffectiveFrom(recurring.getRenewalEffectiveFrom())
+                .remarks(recurring.getRemarks())
+                .createdAt(recurring.getCreatedAt())
+                .updatedAt(recurring.getUpdatedAt())
+                .build();
+    }
+
+    private java.util.List<BillingTMRateCardResponseDto> getTMRateCards(BillingConfiguration configuration) {
+        try {
+            return billingTMRateCardRepository
+                    .findByBillingConfigurationAndIsActiveTrueOrderByRoleNameAsc(configuration)
+                    .stream()
+                    .map(this::mapTMRateCardToResponse)
+                    .toList();
+        } catch (Exception e) {
+            log.error("Error fetching T&M rate cards for configuration: {}", 
+                    configuration.getBillingConfigurationId(), e);
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    private BillingTMRateCardResponseDto mapTMRateCardToResponse(
+            com.AccountReceivableManagement.entity.projectbilling_config.BillingTMRateCard rateCard) {
+        
+        return BillingTMRateCardResponseDto.builder()
+                .rateCardId(rateCard.getRateCardId())
+                .roleName(rateCard.getRoleName())
+                .rate(rateCard.getRate())
+                .ratePeriod(rateCard.getRatePeriod())
+                .effectiveFrom(rateCard.getEffectiveFrom())
+                .effectiveTo(rateCard.getEffectiveTo())
+                .remarks(rateCard.getRemarks())
+                .createdAt(rateCard.getCreatedAt())
+                .updatedAt(rateCard.getUpdatedAt())
+                .build();
+    }
+
+    private java.util.List<BillingScheduleResponseDto> getMilestoneSchedules(BillingConfiguration configuration) {
+        try {
+            return billingScheduleRepository
+                    .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration)
+                    .stream()
+                    .map(this::mapScheduleToResponse)
+                    .toList();
+        } catch (Exception e) {
+            log.error("Error fetching milestone schedules for configuration: {}", 
+                    configuration.getBillingConfigurationId(), e);
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    private BillingScheduleResponseDto mapScheduleToResponse(
+            com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule schedule) {
+        
+        return BillingScheduleResponseDto.builder()
+                .billingScheduleId(schedule.getBillingScheduleId())
+                .periodNumber(schedule.getPeriodNumber())
+                .periodStartDate(schedule.getPeriodStartDate())
+                .periodEndDate(schedule.getPeriodEndDate())
+                .billingAmount(schedule.getBillingAmount())
+                .scheduleType(schedule.getScheduleType())
+                .isPartialPeriod(schedule.getIsPartialPeriod())
+                .periodStatus(schedule.getPeriodStatus())
+                .isInvoiced(schedule.getIsInvoiced())
+                .invoiceDate(schedule.getInvoiceDate())
+                .remarks(schedule.getRemarks())
                 .build();
     }
 
@@ -737,6 +981,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+
         Client client =
                 clientRepository.findById(request.getClientId())
                         .orElseThrow(() ->
@@ -846,31 +1091,97 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         /*
-         * Do not automatically change approval status here.
-         *
-         * If an already approved configuration is edited,
-         * it should go through approval again.
+         * Update contract value from request.
+         * Note: For billing types with specific configurations (Fixed Price, Recurring),
+         * the contract value will be updated by those services after their specific calculations.
+         * This update handles cases where contract value is set directly on the configuration.
          */
-        configuration.setApprovalStatus(
-                ApprovalStatus.DRAFT);
+        configuration.setContractValue(
+                request.getContractValue()
+        );
 
-        configuration.setBillingStatus(
-                BillingConfigurationStatus.INACTIVE);
+        /*
+         * Handle approval state transitions based on current status.
+         * This implements the required workflow:
+         * - DRAFT → Edit → DRAFT (stay in draft)
+         * - PENDING_APPROVAL → Edit → PENDING_APPROVAL (stay pending)
+         * - APPROVED + ACTIVE → Edit → PENDING_APPROVAL + INACTIVE (require re-approval)
+         * - REJECTED → Edit → DRAFT (allow correction)
+         */
+        boolean needsStateTransitionSave = handleApprovalStateTransition(configuration);
 
-        configuration.setManuallyDeactivated(false);
-
-        configuration.setRejectionReason(null);
-
-        configuration.setUpdatedAt(
-                LocalDateTime.now());
+        if (!needsStateTransitionSave) {
+            // Only update timestamp if no state transition occurred
+            configuration.setUpdatedAt(LocalDateTime.now());
+        }
 
         BillingConfiguration saved =
                 billingConfigurationRepository.save(
                         configuration);
 
+
         return mapToResponse(saved);
     }
 
+
+    // =========================================================
+    // APPROVAL STATE TRANSITION HELPER
+    // =========================================================
+
+    /**
+     * Handles approval state transitions when a billing configuration is edited.
+     * 
+     * Workflow:
+     * - DRAFT → Edit → DRAFT (stay in draft)
+     * - PENDING_APPROVAL → Edit → PENDING_APPROVAL (stay pending)
+     * - APPROVED + ACTIVE → Edit → PENDING_APPROVAL + INACTIVE (require re-approval)
+     * - REJECTED → Edit → DRAFT (allow correction)
+     * 
+     * @param configuration The billing configuration being edited
+     * @return true if the parent configuration needs to be saved with updated approval state
+     */
+    private boolean handleApprovalStateTransition(BillingConfiguration configuration) {
+        ApprovalStatus currentStatus = configuration.getApprovalStatus();
+        BillingConfigurationStatus currentBillingStatus = configuration.getBillingStatus();
+        
+        boolean needsSave = false;
+        
+        switch (currentStatus) {
+            case DRAFT:
+                // Stay in DRAFT - no change needed
+                break;
+                
+            case PENDING_APPROVAL:
+                // Stay in PENDING_APPROVAL - already waiting for approval
+                break;
+                
+            case APPROVED:
+                // APPROVED + ACTIVE → PENDING_APPROVAL + INACTIVE
+                // This requires re-approval after editing
+                configuration.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+                configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+                configuration.setManuallyDeactivated(false);
+                configuration.setRejectionReason(null);
+                configuration.setUpdatedAt(LocalDateTime.now());
+                needsSave = true;
+                log.info("Edited APPROVED+ACTIVE configuration {} sent back to PENDING_APPROVAL+INACTIVE",
+                        configuration.getBillingConfigurationId());
+                break;
+                
+            case REJECTED:
+                // REJECTED → DRAFT (allow correction and resubmission)
+                configuration.setApprovalStatus(ApprovalStatus.DRAFT);
+                configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+                configuration.setRejectionReason(null);
+                configuration.setUpdatedAt(LocalDateTime.now());
+                needsSave = true;
+                log.info("Edited REJECTED configuration {} moved to DRAFT",
+                        configuration.getBillingConfigurationId());
+                break;
+        }
+        
+        return needsSave;
+    }
 
     // =========================================================
     // DEACTIVATE

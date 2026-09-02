@@ -9,7 +9,7 @@ import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.Bil
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
-import com.AccountReceivableManagement.repo.projectbilling_config.TaxRateConfigurationRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,7 +44,7 @@ class TaxCalculationServiceImplTest {
     private BillingSnapshotRepository billingSnapshotRepository;
 
     @Mock
-    private TaxRateConfigurationRepository taxRateConfigurationRepository;
+    private TaxConfigurationRepository taxRateConfigurationRepository;
 
     @Mock
     private BillingConfigurationService billingConfigurationService;

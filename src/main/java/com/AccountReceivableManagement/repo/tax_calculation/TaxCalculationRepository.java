@@ -10,7 +10,8 @@ import java.util.UUID;
 @Repository
 public interface TaxCalculationRepository extends JpaRepository<TaxCalculation, UUID> {
 
-    Optional<TaxCalculation> findByBillingSnapshotId(UUID billingSnapshotId);
+    Optional<TaxCalculation>
+    findByBillingSnapshotId(UUID billingSnapshotId);
 
     boolean existsByBillingSnapshotId(UUID billingSnapshotId);
 }

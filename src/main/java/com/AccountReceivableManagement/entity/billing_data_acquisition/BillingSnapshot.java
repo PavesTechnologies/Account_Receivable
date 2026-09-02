@@ -92,6 +92,18 @@ public class BillingSnapshot {
     @Column(name = "tax_region_code", length = 100)
     private String taxRegionCode;
 
+    @Column(
+            name = "source_tax_jurisdiction_code",
+            length = 50
+    )
+    private String sourceTaxJurisdictionCode;
+
+    @Column(
+            name = "destination_tax_jurisdiction_code",
+            length = 50
+    )
+    private String destinationTaxJurisdictionCode;
+
     @Column(name = "billing_period_start", nullable = false)
     private LocalDate billingPeriodStart;
 

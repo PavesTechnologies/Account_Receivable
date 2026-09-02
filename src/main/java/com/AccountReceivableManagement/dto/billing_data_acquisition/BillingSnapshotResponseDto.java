@@ -104,6 +104,16 @@ public class BillingSnapshotResponseDto {
     private String taxRegionCode;
 
     /**
+     * Source tax jurisdiction code (our company's tax region), frozen at snapshot creation time.
+     */
+    private String sourceTaxJurisdictionCode;
+
+    /**
+     * Destination tax jurisdiction code (client's tax region), frozen at snapshot creation time.
+     */
+    private String destinationTaxJurisdictionCode;
+
+    /**
      * Start date of the billing period this snapshot covers.
      */
     private LocalDate billingPeriodStart;

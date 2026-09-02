@@ -48,4 +48,8 @@ public class BillingSnapshotBuilderContext {
     private BigDecimal expenseAmount;
 
     private BigDecimal totalAmount;
+
+    private String sourceTaxJurisdictionCode;
+
+    private String destinationTaxJurisdictionCode;
 }

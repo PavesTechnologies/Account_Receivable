@@ -30,6 +30,7 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
     private final BillingFixedPriceRepository billingFixedPriceRepository;
     private final BillingConfigurationRepository billingConfigurationRepository;
+//    private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingConfigurationChangeTrackingService changeTrackingService;
 
     @Override
     public BillingFixedPriceResponseDto create(
@@ -78,12 +79,8 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                         .contractValue(request.getContractValue())
                         .pmsProjectBudget(request.getPmsProjectBudget())
                         .contractValueSource(request.getContractValueSource())
-                        .retentionPercentage(
-                                defaultZero(request.getRetentionPercentage())
-                        )
-                        .advanceReceived(
-                                defaultZero(request.getAdvanceReceived())
-                        )
+                        .retentionPercentage(request.getRetentionPercentage())
+                        .advanceReceived(request.getAdvanceReceived())
                         .effectiveFrom(request.getEffectiveFrom())
                         .effectiveTo(request.getEffectiveTo())
                         .remarks(request.getRemarks())
@@ -94,6 +91,12 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
         BillingFixedPriceConfiguration saved =
                 billingFixedPriceRepository.save(fixedPrice);
+
+        // Update parent BillingConfiguration with the actual contract value
+        BigDecimal finalContractValue = fixedPrice.getContractValue();
+        configuration.setContractValue(finalContractValue);
+        configuration.setUpdatedAt(LocalDateTime.now());
+        billingConfigurationRepository.save(configuration);
 
         return mapToResponse(saved);
     }
@@ -118,6 +121,10 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
         validateRequest(request);
 
+//        // Capture previous state for audit before any changes
+//        BillingFixedPriceConfiguration previousFixedPrice = cloneFixedPriceConfiguration(fixedPrice);
+//        BillingConfiguration previousConfiguration = cloneConfiguration(configuration);
+
         // Validate effective dates against project duration
         validateEffectiveDatesAgainstProjectDuration(
                 configuration,
@@ -140,12 +147,8 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
         fixedPrice.setContractValueSource(
                 request.getContractValueSource()
         );
-        fixedPrice.setRetentionPercentage(
-                defaultZero(request.getRetentionPercentage())
-        );
-        fixedPrice.setAdvanceReceived(
-                defaultZero(request.getAdvanceReceived())
-        );
+        fixedPrice.setRetentionPercentage(request.getRetentionPercentage());
+        fixedPrice.setAdvanceReceived(request.getAdvanceReceived());
         fixedPrice.setEffectiveFrom(request.getEffectiveFrom());
         fixedPrice.setEffectiveTo(request.getEffectiveTo());
         fixedPrice.setRemarks(request.getRemarks());
@@ -154,6 +157,29 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
         BillingFixedPriceConfiguration updated =
                 billingFixedPriceRepository.save(fixedPrice);
+
+        // Update parent BillingConfiguration with the actual contract value
+        BigDecimal finalContractValue = updated.getContractValue();
+        configuration.setContractValue(finalContractValue);
+        
+        // Handle approval state transition for the parent configuration
+        handleApprovalStateTransition(configuration);
+        
+        configuration.setUpdatedAt(LocalDateTime.now());
+        billingConfigurationRepository.save(configuration);
+
+//        // Create audit record if transitioning from APPROVED
+//        if (previousConfiguration.getApprovalStatus() == ApprovalStatus.APPROVED &&
+//            configuration.getApprovalStatus() == ApprovalStatus.PENDING_APPROVAL) {
+//
+//            com.AccountReceivableManagement.entity.projectbilling_config.BillingConfigurationAudit audit =
+//                    changeTrackingService.createAuditRecord(configuration, previousConfiguration);
+//
+//            if (audit != null) {
+//                // Track Fixed Price specific changes
+//                changeTrackingService.trackFixedPriceChanges(audit, previousFixedPrice, updated);
+//            }
+//        }
 
         return mapToResponse(updated);
     }
@@ -229,14 +255,9 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
             );
         }
 
-        // Only an approved configuration cannot be modified.
-        if (configuration.getApprovalStatus() ==
-                ApprovalStatus.APPROVED) {
-
-            throw new GlobalExceptionHandler.ValidationException(
-                    "Approved Billing Configuration cannot be modified."
-            );
-        }
+        // Removed validation that blocked editing approved configurations.
+        // Approved configurations can now be edited, which will trigger
+        // the approval state transition to PENDING_APPROVAL + INACTIVE.
     }
 
     private void validateRequest(
@@ -300,11 +321,39 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                 fixedPrice.getContractValue();
 
         BigDecimal retentionPercentage =
-                defaultZero(fixedPrice.getRetentionPercentage());
+                fixedPrice.getRetentionPercentage();
 
         BigDecimal advanceReceived =
-                defaultZero(fixedPrice.getAdvanceReceived());
+                fixedPrice.getAdvanceReceived();
 
+        // Validate retention percentage is not null and within valid range
+        if (retentionPercentage == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Retention Percentage is required."
+            );
+        }
+
+        if (retentionPercentage.compareTo(BigDecimal.ZERO) < 0 ||
+                retentionPercentage.compareTo(BigDecimal.valueOf(100)) > 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Retention Percentage must be between 0 and 100."
+            );
+        }
+
+        // Validate advance received is not null and not negative
+        if (advanceReceived == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Advance Received is required."
+            );
+        }
+
+        if (advanceReceived.compareTo(BigDecimal.ZERO) < 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Advance Received cannot be negative."
+            );
+        }
+
+        // Calculate retention amount
         BigDecimal retentionAmount =
                 contractValue
                         .multiply(retentionPercentage)
@@ -314,11 +363,12 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                                 RoundingMode.HALF_UP
                         );
 
+        // Calculate billable amount
         BigDecimal billableAmount =
                 contractValue.subtract(retentionAmount);
 
+        // Validate advance received does not exceed billable amount
         if (advanceReceived.compareTo(billableAmount) > 0) {
-
             throw new GlobalExceptionHandler.ValidationException(
                     "Advance Received cannot exceed the billable amount after retention."
             );
@@ -332,6 +382,86 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                 : value;
     }
 
+    /**
+     * Handles approval state transitions when a billing configuration is edited.
+     * 
+     * Workflow:
+     * - DRAFT → Edit → DRAFT (stay in draft)
+     * - PENDING_APPROVAL → Edit → PENDING_APPROVAL (stay pending)
+     * - APPROVED + ACTIVE → Edit → PENDING_APPROVAL + INACTIVE (require re-approval)
+     * - REJECTED → Edit → DRAFT (allow correction)
+     * 
+     * @param configuration The billing configuration being edited
+     */
+    private void handleApprovalStateTransition(BillingConfiguration configuration) {
+        ApprovalStatus currentStatus = configuration.getApprovalStatus();
+        
+        switch (currentStatus) {
+            case DRAFT:
+                // Stay in DRAFT - no change needed
+                break;
+                
+            case PENDING_APPROVAL:
+                // Stay in PENDING_APPROVAL - already waiting for approval
+                break;
+                
+            case APPROVED:
+                // APPROVED + ACTIVE → PENDING_APPROVAL + INACTIVE
+                // This requires re-approval after editing
+                configuration.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+                configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+                configuration.setManuallyDeactivated(false);
+                configuration.setRejectionReason(null);
+                break;
+                
+            case REJECTED:
+                // REJECTED → DRAFT (allow correction and resubmission)
+                configuration.setApprovalStatus(ApprovalStatus.DRAFT);
+                configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+                configuration.setRejectionReason(null);
+                break;
+        }
+    }
+
+    /**
+     * Clones a BillingFixedPriceConfiguration for audit purposes.
+     */
+    private BillingFixedPriceConfiguration cloneFixedPriceConfiguration(BillingFixedPriceConfiguration original) {
+        if (original == null) {
+            return null;
+        }
+        
+        BillingFixedPriceConfiguration clone = new BillingFixedPriceConfiguration();
+        clone.setFixedPriceConfigurationId(original.getFixedPriceConfigurationId());
+        clone.setContractValue(original.getContractValue());
+        clone.setPmsProjectBudget(original.getPmsProjectBudget());
+        clone.setContractValueSource(original.getContractValueSource());
+        clone.setRetentionPercentage(original.getRetentionPercentage());
+        clone.setAdvanceReceived(original.getAdvanceReceived());
+        clone.setEffectiveFrom(original.getEffectiveFrom());
+        clone.setEffectiveTo(original.getEffectiveTo());
+        clone.setRemarks(original.getRemarks());
+        
+        return clone;
+    }
+
+    /**
+     * Clones a BillingConfiguration for audit purposes.
+     */
+    private BillingConfiguration cloneConfiguration(BillingConfiguration original) {
+        if (original == null) {
+            return null;
+        }
+        
+        BillingConfiguration clone = new BillingConfiguration();
+        clone.setBillingConfigurationId(original.getBillingConfigurationId());
+        clone.setApprovalStatus(original.getApprovalStatus());
+        clone.setBillingStatus(original.getBillingStatus());
+        clone.setContractValue(original.getContractValue());
+        
+        return clone;
+    }
+
     private BillingFixedPriceResponseDto mapToResponse(
             BillingFixedPriceConfiguration fixedPrice) {
 
@@ -339,11 +469,12 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                 fixedPrice.getContractValue();
 
         BigDecimal retentionPercentage =
-                defaultZero(fixedPrice.getRetentionPercentage());
+                fixedPrice.getRetentionPercentage();
 
         BigDecimal advanceReceived =
-                defaultZero(fixedPrice.getAdvanceReceived());
+                fixedPrice.getAdvanceReceived();
 
+        // Calculate retention amount: Contract Value × Retention % / 100
         BigDecimal retentionAmount =
                 contractValue
                         .multiply(retentionPercentage)
@@ -353,9 +484,11 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                                 RoundingMode.HALF_UP
                         );
 
+        // Calculate billable amount: Contract Value − Retention Amount
         BigDecimal billableAmount =
                 contractValue.subtract(retentionAmount);
 
+        // Calculate remaining receivable: Billable Amount − Advance Received
         BigDecimal remainingReceivable =
                 billableAmount.subtract(advanceReceived);
 

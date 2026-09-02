@@ -21,84 +21,83 @@ public class TaxRegionMasterController {
     private final TaxRegionMasterService taxRegionService;
 
     @PostMapping
-    public ResponseEntity<ApiResponse<TaxRegionResponseDto>> createTaxRegion(
+    public ResponseEntity<ApiResponse<TaxRegionResponseDto>> create(
             @Valid @RequestBody TaxRegionRequestDto request) {
-
-        TaxRegionResponseDto response = taxRegionService.createTaxRegion(request);
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.<TaxRegionResponseDto>builder()
                         .success(true)
                         .message("Tax Region created successfully.")
-                        .data(response)
+                        .data(taxRegionService.createTaxRegion(request))
                         .build());
     }
 
     @PutMapping("/{taxRegionId}")
-    public ResponseEntity<ApiResponse<TaxRegionResponseDto>> updateTaxRegion(
+    public ResponseEntity<ApiResponse<TaxRegionResponseDto>> update(
             @PathVariable UUID taxRegionId,
             @Valid @RequestBody TaxRegionRequestDto request) {
 
-        TaxRegionResponseDto response =
-                taxRegionService.updateTaxRegion(taxRegionId, request);
-
-        return ResponseEntity.ok(ApiResponse.<TaxRegionResponseDto>builder()
-                .success(true)
-                .message("Tax Region updated successfully.")
-                .data(response)
-                .build());
+        return ResponseEntity.ok(
+                ApiResponse.<TaxRegionResponseDto>builder()
+                        .success(true)
+                        .message("Tax Region updated successfully.")
+                        .data(taxRegionService.updateTaxRegion(
+                                taxRegionId,
+                                request
+                        ))
+                        .build()
+        );
     }
 
     @GetMapping("/{taxRegionId}")
-    public ResponseEntity<ApiResponse<TaxRegionResponseDto>> getTaxRegionById(
+    public ResponseEntity<ApiResponse<TaxRegionResponseDto>> getById(
             @PathVariable UUID taxRegionId) {
 
-        TaxRegionResponseDto response =
-                taxRegionService.getTaxRegionById(taxRegionId);
-
-        return ResponseEntity.ok(ApiResponse.<TaxRegionResponseDto>builder()
-                .success(true)
-                .message("Tax Region retrieved successfully.")
-                .data(response)
-                .build());
+        return ResponseEntity.ok(
+                ApiResponse.<TaxRegionResponseDto>builder()
+                        .success(true)
+                        .message("Tax Region retrieved successfully.")
+                        .data(taxRegionService.getTaxRegionById(taxRegionId))
+                        .build()
+        );
     }
 
     @GetMapping
-    public ResponseEntity<ApiResponse<List<TaxRegionResponseDto>>> getAllTaxRegions() {
+    public ResponseEntity<ApiResponse<List<TaxRegionResponseDto>>> getAll() {
 
-        List<TaxRegionResponseDto> response =
-                taxRegionService.getAllTaxRegions();
-
-        return ResponseEntity.ok(ApiResponse.<List<TaxRegionResponseDto>>builder()
-                .success(true)
-                .message("Tax Regions retrieved successfully.")
-                .data(response)
-                .build());
+        return ResponseEntity.ok(
+                ApiResponse.<List<TaxRegionResponseDto>>builder()
+                        .success(true)
+                        .message("Tax Regions retrieved successfully.")
+                        .data(taxRegionService.getAllTaxRegions())
+                        .build()
+        );
     }
 
     @GetMapping("/active")
-    public ResponseEntity<ApiResponse<List<TaxRegionResponseDto>>> getActiveTaxRegions() {
+    public ResponseEntity<ApiResponse<List<TaxRegionResponseDto>>> getActive() {
 
-        List<TaxRegionResponseDto> response =
-                taxRegionService.getActiveTaxRegions();
-
-        return ResponseEntity.ok(ApiResponse.<List<TaxRegionResponseDto>>builder()
-                .success(true)
-                .message("Active Tax Regions retrieved successfully.")
-                .data(response)
-                .build());
+        return ResponseEntity.ok(
+                ApiResponse.<List<TaxRegionResponseDto>>builder()
+                        .success(true)
+                        .message("Active Tax Regions retrieved successfully.")
+                        .data(taxRegionService.getActiveTaxRegions())
+                        .build()
+        );
     }
 
-    @DeleteMapping("/{taxRegionId}")
-    public ResponseEntity<ApiResponse<Void>> deleteTaxRegion(
+    @PatchMapping("/{taxRegionId}/deactivate")
+    public ResponseEntity<ApiResponse<Void>> deactivate(
             @PathVariable UUID taxRegionId) {
 
-        taxRegionService.deleteTaxRegion(taxRegionId);
+        taxRegionService.deactivateTaxRegion(taxRegionId);
 
-        return ResponseEntity.ok(ApiResponse.<Void>builder()
-                .success(true)
-                .message("Tax Region deleted successfully.")
-                .data(null)
-                .build());
+        return ResponseEntity.ok(
+                ApiResponse.<Void>builder()
+                        .success(true)
+                        .message("Tax Region deactivated successfully.")
+                        .data(null)
+                        .build()
+        );
     }
 }
