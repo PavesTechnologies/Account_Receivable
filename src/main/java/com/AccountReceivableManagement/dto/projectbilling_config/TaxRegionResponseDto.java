@@ -12,13 +12,13 @@ import java.util.UUID;
 @Builder
 public class TaxRegionResponseDto {
 
+    private UUID taxRegionId;
+
     private String taxRegionCode;
 
     private String taxRegionName;
 
     private String taxRegime;
-
-    private UUID taxRegionId;
 
     private String currencyCode;
 

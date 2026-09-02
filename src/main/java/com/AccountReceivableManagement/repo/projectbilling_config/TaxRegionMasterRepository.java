@@ -11,9 +11,14 @@ import java.util.UUID;
 @Repository
 public interface TaxRegionMasterRepository extends JpaRepository<TaxRegionMaster, UUID> {
 
-    Optional<TaxRegionMaster> findByTaxRegionCodeIgnoreCase(String taxRegionCode);
+    Optional<TaxRegionMaster>
+    findByTaxRegionCodeIgnoreCase(String taxRegionCode);
+
+    Optional<TaxRegionMaster>
+    findByTaxRegionNameIgnoreCase(String taxRegionName);
 
     boolean existsByTaxRegionCodeIgnoreCase(String taxRegionCode);
 
-    List<TaxRegionMaster> findByIsActiveTrueOrderByTaxRegionNameAsc();
+    List<TaxRegionMaster>
+    findByIsActiveTrueOrderByTaxRegionNameAsc();
 }

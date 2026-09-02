@@ -1,9 +1,9 @@
 package com.AccountReceivableManagement.controller.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
-import com.AccountReceivableManagement.dto.projectbilling_config.TaxRateConfigurationRequestDto;
-import com.AccountReceivableManagement.dto.projectbilling_config.TaxRateConfigurationResponseDto;
-import com.AccountReceivableManagement.service_interface.projectbilling_config.TaxRateConfigurationService;
+import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationRequestDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationResponseDto;
+import com.AccountReceivableManagement.service_interface.projectbilling_config.TaxConfigurationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -16,18 +16,18 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/tax-rate-configurations")
 @RequiredArgsConstructor
-public class TaxRateConfigurationController {
+public class TaxConfigurationController {
 
-    private final TaxRateConfigurationService taxRateConfigurationService;
+    private final TaxConfigurationService taxRateConfigurationService;
 
     @PostMapping
-    public ResponseEntity<ApiResponse<TaxRateConfigurationResponseDto>> create(
-            @Valid @RequestBody TaxRateConfigurationRequestDto request) {
+    public ResponseEntity<ApiResponse<TaxConfigurationResponseDto>> create(
+            @Valid @RequestBody TaxConfigurationRequestDto request) {
 
-        TaxRateConfigurationResponseDto response = taxRateConfigurationService.create(request);
+        TaxConfigurationResponseDto response = taxRateConfigurationService.create(request);
 
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.<TaxRateConfigurationResponseDto>builder()
+                .body(ApiResponse.<TaxConfigurationResponseDto>builder()
                         .success(true)
                         .message("Tax Rate Configuration created successfully.")
                         .data(response)
@@ -35,14 +35,14 @@ public class TaxRateConfigurationController {
     }
 
     @PutMapping("/{taxRateConfigurationId}")
-    public ResponseEntity<ApiResponse<TaxRateConfigurationResponseDto>> update(
+    public ResponseEntity<ApiResponse<TaxConfigurationResponseDto>> update(
             @PathVariable UUID taxRateConfigurationId,
-            @Valid @RequestBody TaxRateConfigurationRequestDto request) {
+            @Valid @RequestBody TaxConfigurationRequestDto request) {
 
-        TaxRateConfigurationResponseDto response =
+        TaxConfigurationResponseDto response =
                 taxRateConfigurationService.update(taxRateConfigurationId, request);
 
-        return ResponseEntity.ok(ApiResponse.<TaxRateConfigurationResponseDto>builder()
+        return ResponseEntity.ok(ApiResponse.<TaxConfigurationResponseDto>builder()
                 .success(true)
                 .message("Tax Rate Configuration updated successfully.")
                 .data(response)
@@ -50,13 +50,13 @@ public class TaxRateConfigurationController {
     }
 
     @GetMapping("/{taxRateConfigurationId}")
-    public ResponseEntity<ApiResponse<TaxRateConfigurationResponseDto>> getById(
+    public ResponseEntity<ApiResponse<TaxConfigurationResponseDto>> getById(
             @PathVariable UUID taxRateConfigurationId) {
 
-        TaxRateConfigurationResponseDto response =
+        TaxConfigurationResponseDto response =
                 taxRateConfigurationService.getById(taxRateConfigurationId);
 
-        return ResponseEntity.ok(ApiResponse.<TaxRateConfigurationResponseDto>builder()
+        return ResponseEntity.ok(ApiResponse.<TaxConfigurationResponseDto>builder()
                 .success(true)
                 .message("Tax Rate Configuration retrieved successfully.")
                 .data(response)
@@ -64,11 +64,11 @@ public class TaxRateConfigurationController {
     }
 
     @GetMapping
-    public ResponseEntity<ApiResponse<List<TaxRateConfigurationResponseDto>>> getAll() {
+    public ResponseEntity<ApiResponse<List<TaxConfigurationResponseDto>>> getAll() {
 
-        List<TaxRateConfigurationResponseDto> response = taxRateConfigurationService.getAll();
+        List<TaxConfigurationResponseDto> response = taxRateConfigurationService.getAll();
 
-        return ResponseEntity.ok(ApiResponse.<List<TaxRateConfigurationResponseDto>>builder()
+        return ResponseEntity.ok(ApiResponse.<List<TaxConfigurationResponseDto>>builder()
                 .success(true)
                 .message("Tax Rate Configurations retrieved successfully.")
                 .data(response)
@@ -76,11 +76,11 @@ public class TaxRateConfigurationController {
     }
 
     @GetMapping("/active")
-    public ResponseEntity<ApiResponse<List<TaxRateConfigurationResponseDto>>> getActive() {
+    public ResponseEntity<ApiResponse<List<TaxConfigurationResponseDto>>> getActive() {
 
-        List<TaxRateConfigurationResponseDto> response = taxRateConfigurationService.getActive();
+        List<TaxConfigurationResponseDto> response = taxRateConfigurationService.getActive();
 
-        return ResponseEntity.ok(ApiResponse.<List<TaxRateConfigurationResponseDto>>builder()
+        return ResponseEntity.ok(ApiResponse.<List<TaxConfigurationResponseDto>>builder()
                 .success(true)
                 .message("Active Tax Rate Configurations retrieved successfully.")
                 .data(response)
@@ -88,13 +88,13 @@ public class TaxRateConfigurationController {
     }
 
     @GetMapping("/tax-region/{taxRegionId}")
-    public ResponseEntity<ApiResponse<List<TaxRateConfigurationResponseDto>>> getByTaxRegion(
+    public ResponseEntity<ApiResponse<List<TaxConfigurationResponseDto>>> getByTaxRegion(
             @PathVariable UUID taxRegionId) {
 
-        List<TaxRateConfigurationResponseDto> response =
+        List<TaxConfigurationResponseDto> response =
                 taxRateConfigurationService.getByTaxRegion(taxRegionId);
 
-        return ResponseEntity.ok(ApiResponse.<List<TaxRateConfigurationResponseDto>>builder()
+        return ResponseEntity.ok(ApiResponse.<List<TaxConfigurationResponseDto>>builder()
                 .success(true)
                 .message("Tax Rate Configurations retrieved successfully.")
                 .data(response)

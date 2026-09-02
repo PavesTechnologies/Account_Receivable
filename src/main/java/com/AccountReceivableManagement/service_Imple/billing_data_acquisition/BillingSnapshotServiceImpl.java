@@ -19,6 +19,7 @@ import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnap
 import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingSnapshotService;
 import com.AccountReceivableManagement.strategy.billing_data_acquisition.BillingAcquisitionStrategy;
 import com.AccountReceivableManagement.validator.billing_data_acquisition.BillingAcquisitionValidator;
+import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -53,6 +54,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     private final BillingSnapshotBuilder billingSnapshotBuilder;
     private final BillingSnapshotMapper billingSnapshotMapper;
     private final com.AccountReceivableManagement.repo.projectbilling_config.CurrencyMasterRepository currencyMasterRepository;
+    private final com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository projectMasterReferenceRepository;
+    private final com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository taxRegionMasterRepository;
     private final Map<BillingType, BillingAcquisitionStrategy> strategiesByBillingType;
 
     public BillingSnapshotServiceImpl(BillingSnapshotRepository billingSnapshotRepository,
@@ -62,6 +65,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
             BillingSnapshotBuilder billingSnapshotBuilder,
             BillingSnapshotMapper billingSnapshotMapper,
             com.AccountReceivableManagement.repo.projectbilling_config.CurrencyMasterRepository currencyMasterRepository,
+            com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository projectMasterReferenceRepository,
+            com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository taxRegionMasterRepository,
             List<BillingAcquisitionStrategy> strategies) {
         this.billingSnapshotRepository = billingSnapshotRepository;
         this.billingConfigurationIntegration = billingConfigurationIntegration;
@@ -70,6 +75,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         this.billingSnapshotBuilder = billingSnapshotBuilder;
         this.billingSnapshotMapper = billingSnapshotMapper;
         this.currencyMasterRepository = currencyMasterRepository;
+        this.projectMasterReferenceRepository = projectMasterReferenceRepository;
+        this.taxRegionMasterRepository = taxRegionMasterRepository;
         this.strategiesByBillingType = strategies.stream()
                 .collect(Collectors.toMap(BillingAcquisitionStrategy::getSupportedBillingType, Function.identity()));
     }
@@ -95,6 +102,12 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         if (configuration == null || !configuration.isApproved()) {
             return ApiResponse.failure("Approved Billing Configuration not found.");
         }
+
+        // Resolve source tax jurisdiction from BillingConfiguration
+        String sourceTaxJurisdictionCode = resolveSourceTaxJurisdiction(configuration);
+
+        // Resolve destination tax jurisdiction from ProjectMasterReference.primaryLocation
+        String destinationTaxJurisdictionCode = resolveDestinationTaxJurisdiction(request.getProjectId());
 
         // Fallback resolution for currencyId if not set in configuration DTO
         if (configuration.getCurrencyId() == null) {
@@ -129,7 +142,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
 
         BillingSnapshotBuilderContext context = buildContext(
                 configuration, request, validationResult.getAcquisitionResult(),
-                clientId, snapshotNumber, createdBy, status, amounts);
+                clientId, snapshotNumber, createdBy, status, amounts,
+                sourceTaxJurisdictionCode, destinationTaxJurisdictionCode);
 
         BillingSnapshot snapshot = billingSnapshotBuilder.build(context);
 
@@ -209,7 +223,9 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
             String snapshotNumber,
             String createdBy,
             BillingSnapshotStatus status,
-            BillingAmountSummary amounts) {
+            BillingAmountSummary amounts,
+            String sourceTaxJurisdictionCode,
+            String destinationTaxJurisdictionCode) {
         return BillingSnapshotBuilderContext.builder()
                 .configuration(configuration)
                 .request(request)
@@ -221,7 +237,43 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 .subtotal(amounts.getSubtotal())
                 .expenseAmount(amounts.getExpenseAmount())
                 .totalAmount(amounts.getTotalAmount())
+                .sourceTaxJurisdictionCode(sourceTaxJurisdictionCode)
+                .destinationTaxJurisdictionCode(destinationTaxJurisdictionCode)
                 .build();
+    }
+
+    private String resolveSourceTaxJurisdiction(BillingConfigurationResponseDto configuration) {
+        if (configuration.getTaxRegionCode() == null || configuration.getTaxRegionCode().isBlank()) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Tax jurisdiction could not be determined because the billing configuration has no tax region.");
+        }
+        return configuration.getTaxRegionCode().trim().toUpperCase();
+    }
+
+    private String resolveDestinationTaxJurisdiction(Long projectId) {
+        com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference project =
+                projectMasterReferenceRepository.findBypmsProjectId(projectId)
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Project not found with id: " + projectId));
+
+        String primaryLocation = project.getPrimaryLocation();
+        if (primaryLocation == null || primaryLocation.isBlank()) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Client tax jurisdiction could not be determined because project primary location is missing.");
+        }
+
+        String locationName = primaryLocation.trim();
+        return taxRegionMasterRepository.findByTaxRegionNameIgnoreCase(locationName)
+                .map(taxRegion -> {
+                    String code = taxRegion.getTaxRegionCode();
+                    if (code == null || code.isBlank()) {
+                        throw new GlobalExceptionHandler.ValidationException(
+                                "Tax region code is missing for client location: " + locationName);
+                    }
+                    return code.trim().toUpperCase();
+                })
+                .orElseThrow(() -> new GlobalExceptionHandler.ValidationException(
+                        "No tax region found for client location: " + locationName));
     }
 
     private BillingSnapshot persistSnapshot(BillingSnapshot snapshot) {

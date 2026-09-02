@@ -8,16 +8,22 @@ import java.util.UUID;
 
 public interface TaxRegionMasterService {
 
-    TaxRegionResponseDto createTaxRegion(TaxRegionRequestDto request);
+    TaxRegionResponseDto createTaxRegion(
+            TaxRegionRequestDto request
+    );
 
-    TaxRegionResponseDto updateTaxRegion(UUID taxRegionId,
-                                         TaxRegionRequestDto request);
+    TaxRegionResponseDto updateTaxRegion(
+            UUID taxRegionId,
+            TaxRegionRequestDto request
+    );
 
-    TaxRegionResponseDto getTaxRegionById(UUID taxRegionId);
+    TaxRegionResponseDto getTaxRegionById(
+            UUID taxRegionId
+    );
 
     List<TaxRegionResponseDto> getAllTaxRegions();
 
     List<TaxRegionResponseDto> getActiveTaxRegions();
 
-    void deleteTaxRegion(UUID taxRegionId);
+    void deactivateTaxRegion(UUID taxRegionId);
 }

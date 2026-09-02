@@ -51,6 +51,8 @@ public class BillingSnapshotBuilder {
                 .billingFrequency(context.getConfiguration().getBillingFrequencyName())
                 .taxRegionId(context.getConfiguration().getTaxRegionId())
                 .taxRegionCode(context.getConfiguration().getTaxRegionCode())
+                .sourceTaxJurisdictionCode(context.getSourceTaxJurisdictionCode())
+                .destinationTaxJurisdictionCode(context.getDestinationTaxJurisdictionCode())
                 .billingPeriodStart(context.getRequest().getBillingPeriodStart())
                 .billingPeriodEnd(context.getRequest().getBillingPeriodEnd())
                 .status(context.getStatus())

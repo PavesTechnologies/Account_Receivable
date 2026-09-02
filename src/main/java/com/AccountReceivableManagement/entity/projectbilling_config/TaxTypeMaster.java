@@ -7,64 +7,45 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "tax_region_master")
+@Table(
+        name = "tax_type_master",
+        indexes = {
+                @Index(
+                        name = "idx_tax_type_code",
+                        columnList = "tax_type_code"
+                ),
+                @Index(
+                        name = "idx_tax_type_active",
+                        columnList = "is_active"
+                )
+        }
+)
 @Getter
 @Setter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class TaxRegionMaster {
+public class TaxTypeMaster {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "tax_region_id")
-    private UUID taxRegionId;
+    @Column(name = "tax_type_id")
+    private UUID taxTypeId;
 
-    /**
-     * Country / primary tax jurisdiction code.
-     *
-     * Examples:
-     * IN
-     * US
-     * GB
-     * AE
-     */
     @Column(
-            name = "tax_region_code",
+            name = "tax_type_code",
             nullable = false,
             unique = true,
-            length = 20
+            length = 50
     )
-    private String taxRegionCode;
+    private String taxTypeCode;
 
     @Column(
-            name = "tax_region_name",
+            name = "tax_type_name",
             nullable = false,
             length = 100
     )
-    private String taxRegionName;
-
-    /**
-     * High-level tax regime.
-     *
-     * Examples:
-     * GST
-     * VAT
-     * SALES_TAX
-     */
-    @Column(
-            name = "tax_regime",
-            nullable = false,
-            length = 50
-    )
-    private String taxRegime;
-
-    @Column(
-            name = "currency_code",
-            nullable = false,
-            length = 10
-    )
-    private String currencyCode;
+    private String taxTypeName;
 
     @Column(
             name = "description",
@@ -79,10 +60,7 @@ public class TaxRegionMaster {
     @Builder.Default
     private Boolean isActive = true;
 
-    @Column(
-            name = "created_at",
-            nullable = false
-    )
+    @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
     @Column(name = "updated_at")
