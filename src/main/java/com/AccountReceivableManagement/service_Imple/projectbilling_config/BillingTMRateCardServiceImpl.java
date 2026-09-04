@@ -227,7 +227,8 @@ public class BillingTMRateCardServiceImpl implements BillingTMRateCardService {
         if (configuration.getBillingType() == null ||
                 !configuration.getBillingType()
                         .getBillingTypeName()
-                        .equalsIgnoreCase("Time & Material")) {
+                        .trim()
+                        .equalsIgnoreCase("Timesheet Based")) {
 
             throw new GlobalExceptionHandler.ValidationException(
                     "Time & Material Rate Cards can only be created for Time & Material billing.");

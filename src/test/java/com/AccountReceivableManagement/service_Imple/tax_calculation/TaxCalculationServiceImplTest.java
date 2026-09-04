@@ -71,7 +71,7 @@ class TaxCalculationServiceImplTest {
                 .taxRegionCode("IN-KA")
                 .billingPeriodStart(billingPeriodStart)
                 .billingPeriodEnd(LocalDate.of(2026, 7, 31))
-                .status(BillingSnapshotStatus.READY_TO_TAX)
+                .status(BillingSnapshotStatus.READY_FOR_TAX)
                 .subtotal(totalAmount)
                 .expenseAmount(BigDecimal.ZERO)
                 .totalAmount(totalAmount)
