@@ -84,7 +84,7 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
         }
 
         if (snapshot.getStatus()
-                != BillingSnapshotStatus.READY_TO_TAX) {
+                != BillingSnapshotStatus.READY_FOR_TAX) {
 
             throw new GlobalExceptionHandler
                     .ValidationException(

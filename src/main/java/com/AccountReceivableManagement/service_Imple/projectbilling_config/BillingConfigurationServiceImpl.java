@@ -143,7 +143,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
          * Time & Material validation.
          */
         if (billingType.getBillingTypeName()
-                .equalsIgnoreCase("Time & Material")) {
+                .trim()
+                .equalsIgnoreCase("Timesheet Based")) {
 
             if (request.getPricingModel() == null) {
                 throw new ValidationException(
@@ -520,7 +521,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 builder.fixedPriceDetails(getFixedPriceDetails(configuration));
             } else if ("Recurring".equalsIgnoreCase(billingTypeName) || "Subscription".equalsIgnoreCase(billingTypeName)) {
                 builder.recurringDetails(getRecurringDetails(configuration));
-            } else if ("Time & Material".equalsIgnoreCase(billingTypeName)) {
+            } else if ("Timesheet Based".equalsIgnoreCase(billingTypeName.trim())) {
                 builder.tmRateCards(getTMRateCards(configuration));
             } else if ("Milestone Based".equalsIgnoreCase(billingTypeName)) {
                 builder.milestoneSchedules(getMilestoneSchedules(configuration));
