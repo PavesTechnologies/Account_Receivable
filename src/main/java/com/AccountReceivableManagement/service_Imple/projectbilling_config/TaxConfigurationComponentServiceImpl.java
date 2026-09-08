@@ -8,6 +8,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.TaxTypeMaste
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationComponentRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxTypeMasterRepository;
+import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.TaxConfigurationComponentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -36,26 +37,26 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
 
         TaxConfiguration configuration =
                 taxConfigurationRepository.findById(taxConfigurationId)
-                        .orElseThrow(() -> new IllegalArgumentException(
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                                 "Tax configuration not found with ID: "
                                         + taxConfigurationId
                         ));
 
         if (Boolean.FALSE.equals(configuration.getIsActive())) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.ValidationException(
                     "Cannot add component to an inactive tax configuration."
             );
         }
 
         TaxTypeMaster taxType =
                 taxTypeMasterRepository.findById(request.getTaxTypeId())
-                        .orElseThrow(() -> new IllegalArgumentException(
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                                 "Tax type not found with ID: "
                                         + request.getTaxTypeId()
                         ));
 
         if (Boolean.FALSE.equals(taxType.getIsActive())) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.ValidationException(
                     "Cannot use an inactive tax type."
             );
         }
@@ -68,7 +69,7 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
                         );
 
         if (alreadyExists) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.DuplicateResourceException(
                     "Tax type '" + taxType.getTaxTypeCode()
                             + "' already exists in this tax configuration."
             );
@@ -99,7 +100,7 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
 
         TaxConfigurationComponent component =
                 componentRepository.findById(taxConfigurationComponentId)
-                        .orElseThrow(() -> new IllegalArgumentException(
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                                 "Tax configuration component not found with ID: "
                                         + taxConfigurationComponentId
                         ));
@@ -108,20 +109,20 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
                 component.getTaxConfiguration();
 
         if (Boolean.FALSE.equals(configuration.getIsActive())) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.ValidationException(
                     "Cannot update a component of an inactive tax configuration."
             );
         }
 
         TaxTypeMaster taxType =
                 taxTypeMasterRepository.findById(request.getTaxTypeId())
-                        .orElseThrow(() -> new IllegalArgumentException(
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                                 "Tax type not found with ID: "
                                         + request.getTaxTypeId()
                         ));
 
         if (Boolean.FALSE.equals(taxType.getIsActive())) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.ValidationException(
                     "Cannot use an inactive tax type."
             );
         }
@@ -135,7 +136,7 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
                         );
 
         if (alreadyExists) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.DuplicateResourceException(
                     "Tax type '" + taxType.getTaxTypeCode()
                             + "' already exists in this tax configuration."
             );
@@ -161,7 +162,7 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
 
         TaxConfigurationComponent component =
                 componentRepository.findById(taxConfigurationComponentId)
-                        .orElseThrow(() -> new IllegalArgumentException(
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                                 "Tax configuration component not found with ID: "
                                         + taxConfigurationComponentId
                         ));
@@ -175,10 +176,10 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
     getComponentsByConfiguration(UUID taxConfigurationId) {
 
         if (!taxConfigurationRepository.existsById(taxConfigurationId)) {
-            throw new IllegalArgumentException(
-                    "Tax configuration not found with ID: "
-                            + taxConfigurationId
-            );
+            throw new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Tax configuration not found with ID: "
+                                        + taxConfigurationId
+                        );
         }
 
         return componentRepository
@@ -208,7 +209,7 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
 
         TaxConfigurationComponent component =
                 componentRepository.findById(taxConfigurationComponentId)
-                        .orElseThrow(() -> new IllegalArgumentException(
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                                 "Tax configuration component not found with ID: "
                                         + taxConfigurationComponentId
                         ));
@@ -221,19 +222,19 @@ public class TaxConfigurationComponentServiceImpl implements TaxConfigurationCom
     private void validateTaxRate(BigDecimal taxRate) {
 
         if (taxRate == null) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.ValidationException(
                     "Tax rate is required."
             );
         }
 
         if (taxRate.compareTo(BigDecimal.ZERO) < 0) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.ValidationException(
                     "Tax rate cannot be negative."
             );
         }
 
         if (taxRate.compareTo(new BigDecimal("100")) > 0) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.ValidationException(
                     "Tax rate cannot exceed 100%."
             );
         }

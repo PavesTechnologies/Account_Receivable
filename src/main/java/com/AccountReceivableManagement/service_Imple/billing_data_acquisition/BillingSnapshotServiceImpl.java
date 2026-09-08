@@ -91,8 +91,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
         if (existingOpt.isPresent()) {
             BillingSnapshot existing = existingOpt.get();
-            BillingConfigurationResponseDto configuration = billingConfigurationIntegration
-                    .getApprovedBillingConfigurationById(existing.getBillingConfigurationId());
+            BillingConfigurationResponseDto configuration =
+                    resolveHistoricalConfiguration(existing.getBillingConfigurationId());
             BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(existing, configuration);
             return ApiResponse.success(
                     "Billing Snapshot already exists for the selected project and billing period.", responseDto);
@@ -171,11 +171,30 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         }
 
         BillingSnapshot snapshot = snapshotOptional.get();
-        BillingConfigurationResponseDto configuration = billingConfigurationIntegration
-                .getApprovedBillingConfigurationById(snapshot.getBillingConfigurationId());
+        BillingConfigurationResponseDto configuration =
+                resolveHistoricalConfiguration(snapshot.getBillingConfigurationId());
 
         BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(snapshot, configuration);
         return ApiResponse.success("Billing Snapshot retrieved successfully.", responseDto);
+    }
+
+    /**
+     * Resolves the Billing Configuration referenced by a snapshot's frozen,
+     * historical {@code billingConfigurationId}. That id is never re-pointed
+     * at the project's currently active configuration; if the historical
+     * configuration has since been deleted, the snapshot itself must still
+     * be returned, so only the display-enrichment fields are affected.
+     */
+    private BillingConfigurationResponseDto resolveHistoricalConfiguration(UUID billingConfigurationId) {
+        try {
+            return billingConfigurationIntegration.getApprovedBillingConfigurationById(billingConfigurationId);
+        } catch (GlobalExceptionHandler.ResourceNotFoundException ex) {
+            log.warn(
+                    "[BillingSnapshotHistoricalConfigurationMissing] billingConfigurationId={} could not be resolved; "
+                            + "returning snapshot with configuration-derived fields omitted. Reason: {}",
+                    billingConfigurationId, ex.getMessage());
+            return BillingConfigurationResponseDto.builder().build();
+        }
     }
 
     private BillingConfigurationResponseDto loadApprovedBillingConfiguration(BillingSnapshotCreateRequestDto request) {
