@@ -4,6 +4,7 @@ import com.AccountReceivableManagement.dto.tax_calculation.TaxTypeRequestDto;
 import com.AccountReceivableManagement.dto.tax_calculation.TaxTypeResponseDto;
 import com.AccountReceivableManagement.entity.projectbilling_config.TaxTypeMaster;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxTypeMasterRepository;
+import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.service_interface.tax_calculation.TaxTypeMasterService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -27,7 +28,7 @@ public class TaxTypeMasterServiceImpl implements TaxTypeMasterService {
                 .toUpperCase();
 
         if (taxTypeMasterRepository.existsByTaxTypeCodeIgnoreCase(taxTypeCode)) {
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.DuplicateResourceException(
                     "Tax type with code '" + taxTypeCode + "' already exists"
             );
         }
@@ -56,7 +57,7 @@ public class TaxTypeMasterServiceImpl implements TaxTypeMasterService {
     ) {
 
         TaxTypeMaster taxType = taxTypeMasterRepository.findById(taxTypeId)
-                .orElseThrow(() -> new IllegalArgumentException(
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                         "Tax type not found with ID: " + taxTypeId
                 ));
 
@@ -70,7 +71,7 @@ public class TaxTypeMasterServiceImpl implements TaxTypeMasterService {
                         taxTypeId
                 )) {
 
-            throw new IllegalArgumentException(
+            throw new GlobalExceptionHandler.DuplicateResourceException(
                     "Tax type with code '" + taxTypeCode + "' already exists"
             );
         }
@@ -95,7 +96,7 @@ public class TaxTypeMasterServiceImpl implements TaxTypeMasterService {
     public TaxTypeResponseDto getTaxTypeById(UUID taxTypeId) {
 
         TaxTypeMaster taxType = taxTypeMasterRepository.findById(taxTypeId)
-                .orElseThrow(() -> new IllegalArgumentException(
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                         "Tax type not found with ID: " + taxTypeId
                 ));
 
@@ -128,7 +129,7 @@ public class TaxTypeMasterServiceImpl implements TaxTypeMasterService {
     public void deactivateTaxType(UUID taxTypeId) {
 
         TaxTypeMaster taxType = taxTypeMasterRepository.findById(taxTypeId)
-                .orElseThrow(() -> new IllegalArgumentException(
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                         "Tax type not found with ID: " + taxTypeId
                 ));
 

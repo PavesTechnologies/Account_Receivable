@@ -44,6 +44,30 @@ public class GlobalExceptionHandler {
                         .build());
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<Object>> handleIllegalArgument(
+            IllegalArgumentException ex) {
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.builder()
+                        .success(false)
+                        .message(ex.getMessage())
+                        .data(null)
+                        .build());
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ApiResponse<Object>> handleIllegalState(
+            IllegalStateException ex) {
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.builder()
+                        .success(false)
+                        .message(ex.getMessage())
+                        .data(null)
+                        .build());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Object>> handleException(
             Exception ex) {

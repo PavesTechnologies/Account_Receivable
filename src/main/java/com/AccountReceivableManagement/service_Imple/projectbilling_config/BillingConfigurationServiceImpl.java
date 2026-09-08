@@ -46,6 +46,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingRecurringConfigurationRepository billingRecurringConfigurationRepository;
     private final ProjectMasterReferenceRepository projectMasterReferenceRepository;
     private final BillingScheduleRepository billingScheduleRepository;
+    private final com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository billingSnapshotRepository;
 
     // =========================================================
     // CREATE BILLING CONFIGURATION
@@ -1251,6 +1252,14 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         if (configuration.getApprovalStatus() != ApprovalStatus.DRAFT) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Only draft billing configurations can be deleted.");
+        }
+
+        // A configuration that has been used by a Billing Snapshot must
+        // remain available for historical integrity, even though it is
+        // currently back in DRAFT status.
+        if (billingSnapshotRepository.existsByBillingConfigurationId(billingConfigurationId)) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "This billing configuration cannot be deleted because it is referenced by historical Billing Snapshot data.");
         }
 
         // Delete child configurations first

@@ -3,9 +3,12 @@ package com.AccountReceivableManagement.service_Imple.tax_calculation;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.dto.tax_calculation.TaxCalculationResponseDto;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
-import com.AccountReceivableManagement.entity.projectbilling_config.TaxRateConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfigurationComponent;
+import com.AccountReceivableManagement.entity.projectbilling_config.TaxTypeMaster;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
+import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxApplicabilityType;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
@@ -24,6 +27,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,7 +48,7 @@ class TaxCalculationServiceImplTest {
     private BillingSnapshotRepository billingSnapshotRepository;
 
     @Mock
-    private TaxConfigurationRepository taxRateConfigurationRepository;
+    private TaxConfigurationRepository taxConfigurationRepository;
 
     @Mock
     private BillingConfigurationService billingConfigurationService;
@@ -56,19 +60,54 @@ class TaxCalculationServiceImplTest {
     private UUID taxRegionId;
     private LocalDate billingPeriodStart;
 
+    private TaxTypeMaster cgstType;
+    private TaxTypeMaster sgstType;
+    private TaxTypeMaster igstType;
+
     @BeforeEach
     void setUp() {
         snapshotId = UUID.randomUUID();
         taxRegionId = UUID.randomUUID();
         billingPeriodStart = LocalDate.of(2026, 7, 1);
+
+        cgstType = TaxTypeMaster.builder()
+                .taxTypeId(UUID.randomUUID())
+                .taxTypeCode("CGST")
+                .taxTypeName("Central GST")
+                .isActive(true)
+                .build();
+
+        sgstType = TaxTypeMaster.builder()
+                .taxTypeId(UUID.randomUUID())
+                .taxTypeCode("SGST")
+                .taxTypeName("State GST")
+                .isActive(true)
+                .build();
+
+        igstType = TaxTypeMaster.builder()
+                .taxTypeId(UUID.randomUUID())
+                .taxTypeCode("IGST")
+                .taxTypeName("Integrated GST")
+                .isActive(true)
+                .build();
     }
 
     private BillingSnapshot readySnapshot(BigDecimal totalAmount) {
+        return readySnapshot(totalAmount, null, null);
+    }
+
+    private BillingSnapshot readySnapshot(
+            BigDecimal totalAmount,
+            String sourceJurisdiction,
+            String destinationJurisdiction
+    ) {
         return BillingSnapshot.builder()
                 .id(snapshotId)
                 .snapshotNumber("BS-20260701120000")
                 .taxRegionId(taxRegionId)
                 .taxRegionCode("IN-KA")
+                .sourceTaxJurisdictionCode(sourceJurisdiction)
+                .destinationTaxJurisdictionCode(destinationJurisdiction)
                 .billingPeriodStart(billingPeriodStart)
                 .billingPeriodEnd(LocalDate.of(2026, 7, 31))
                 .status(BillingSnapshotStatus.READY_FOR_TAX)
@@ -88,39 +127,51 @@ class TaxCalculationServiceImplTest {
                 .build();
     }
 
-    private TaxRateConfiguration cgstSgstConfiguration() {
-        return TaxRateConfiguration.builder()
-                .taxRateConfigurationId(UUID.randomUUID())
-                .taxType("GST")
-                .cgstRate(new BigDecimal("9.0000"))
-                .sgstRate(new BigDecimal("9.0000"))
-                .igstRate(null)
+    private TaxConfiguration configurationOf(TaxConfigurationComponent... components) {
+        TaxConfiguration configuration = TaxConfiguration.builder()
+                .taxConfigurationId(UUID.randomUUID())
+                .taxRegime("GST")
                 .effectiveFrom(LocalDate.of(2026, 4, 1))
                 .isActive(true)
+                .components(new ArrayList<>(List.of(components)))
+                .build();
+
+        for (TaxConfigurationComponent component : components) {
+            component.setTaxConfiguration(configuration);
+        }
+
+        return configuration;
+    }
+
+    private TaxConfigurationComponent componentOf(
+            TaxTypeMaster taxType,
+            String rate,
+            TaxApplicabilityType applicabilityType,
+            boolean active
+    ) {
+        return TaxConfigurationComponent.builder()
+                .taxConfigurationComponentId(UUID.randomUUID())
+                .taxType(taxType)
+                .taxRate(new BigDecimal(rate))
+                .applicabilityType(applicabilityType)
+                .isActive(active)
                 .build();
     }
 
-    private TaxRateConfiguration igstConfiguration() {
-        return TaxRateConfiguration.builder()
-                .taxRateConfigurationId(UUID.randomUUID())
-                .taxType("GST")
-                .cgstRate(null)
-                .sgstRate(null)
-                .igstRate(new BigDecimal("18.0000"))
-                .effectiveFrom(LocalDate.of(2026, 4, 1))
-                .isActive(true)
-                .build();
-    }
-
-    // CASE 1 — Valid CGST + SGST
+    // CASE 1 — Valid CGST + SGST components, both applicable to every transaction.
     @Test
     void calculateTax_validCgstSgst_calculatesAndCompletesSnapshot() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
 
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.ALL, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.ALL, true)
+        );
+
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
-                .thenReturn(List.of(cgstSgstConfiguration()));
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
         when(taxCalculationRepository.save(any(TaxCalculation.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
@@ -131,9 +182,16 @@ class TaxCalculationServiceImplTest {
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
         assertThat(response.getTaxableAmount()).isEqualByComparingTo("168000.00");
-        assertThat(response.getCgstAmount()).isEqualByComparingTo("15120.00");
-        assertThat(response.getSgstAmount()).isEqualByComparingTo("15120.00");
-        assertThat(response.getIgstAmount()).isNull();
+        assertThat(response.getComponents()).hasSize(2);
+        assertThat(response.getComponents())
+                .anySatisfy(c -> {
+                    assertThat(c.getTaxTypeCode()).isEqualTo("CGST");
+                    assertThat(c.getTaxAmount()).isEqualByComparingTo("15120.00");
+                })
+                .anySatisfy(c -> {
+                    assertThat(c.getTaxTypeCode()).isEqualTo("SGST");
+                    assertThat(c.getTaxAmount()).isEqualByComparingTo("15120.00");
+                });
         assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("30240.00");
         assertThat(response.getGrandTotal()).isEqualByComparingTo("198240.00");
         assertThat(response.getStatus()).isEqualTo(TaxCalculationStatus.CALCULATED);
@@ -151,15 +209,19 @@ class TaxCalculationServiceImplTest {
         verify(billingSnapshotRepository).save(snapshot);
     }
 
-    // CASE 2 — Valid IGST
+    // CASE 2 — A single IGST component.
     @Test
     void calculateTax_validIgst_calculatesCorrectly() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
 
+        TaxConfiguration configuration = configurationOf(
+                componentOf(igstType, "18.0000", TaxApplicabilityType.ALL, true)
+        );
+
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
-                .thenReturn(List.of(igstConfiguration()));
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
         when(taxCalculationRepository.save(any(TaxCalculation.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
@@ -169,14 +231,14 @@ class TaxCalculationServiceImplTest {
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
-        assertThat(response.getCgstAmount()).isNull();
-        assertThat(response.getSgstAmount()).isNull();
-        assertThat(response.getIgstAmount()).isEqualByComparingTo("30240.00");
+        assertThat(response.getComponents()).hasSize(1);
+        assertThat(response.getComponents().get(0).getTaxTypeCode()).isEqualTo("IGST");
+        assertThat(response.getComponents().get(0).getTaxAmount()).isEqualByComparingTo("30240.00");
         assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("30240.00");
         assertThat(response.getGrandTotal()).isEqualByComparingTo("198240.00");
     }
 
-    // CASE 3 — Snapshot not found
+    // CASE 3 — Snapshot not found.
     @Test
     void calculateTax_snapshotNotFound_throwsResourceNotFoundException() {
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.empty());
@@ -188,7 +250,7 @@ class TaxCalculationServiceImplTest {
         verify(taxCalculationRepository, never()).save(any());
     }
 
-    // CASE 4 — Snapshot not READY_TO_TAX
+    // CASE 4 — Snapshot not READY_FOR_TAX.
     @Test
     void calculateTax_snapshotNotReadyForTax_throwsValidationException() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
@@ -204,7 +266,7 @@ class TaxCalculationServiceImplTest {
         verify(taxCalculationRepository, never()).save(any());
     }
 
-    // CASE 5 — Missing tax region
+    // CASE 5 — Missing tax region.
     @Test
     void calculateTax_missingTaxRegion_throwsValidationException() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
@@ -215,19 +277,19 @@ class TaxCalculationServiceImplTest {
 
         assertThatThrownBy(() -> taxCalculationService.calculateTax(snapshotId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessage("Tax calculation cannot proceed because no tax region is configured for this billing snapshot.");
+                .hasMessage("Tax region is not configured for this billing snapshot.");
 
         verify(taxCalculationRepository, never()).save(any());
     }
 
-    // CASE 6 — No applicable configuration
+    // CASE 6 — No applicable configuration.
     @Test
     void calculateTax_noApplicableConfiguration_throwsValidationException() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
 
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
                 .thenReturn(List.of());
 
         assertThatThrownBy(() -> taxCalculationService.calculateTax(snapshotId))
@@ -238,7 +300,7 @@ class TaxCalculationServiceImplTest {
         verify(billingSnapshotRepository, never()).save(any());
     }
 
-    // CASE 7 — Existing completed calculation
+    // CASE 7 — Existing completed calculation.
     @Test
     void calculateTax_existingCalculation_throwsDuplicateResourceException() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
@@ -251,18 +313,23 @@ class TaxCalculationServiceImplTest {
                 .hasMessage("Tax calculation has already been completed for this billing snapshot.");
 
         verify(taxCalculationRepository, never()).save(any());
-        verify(taxRateConfigurationRepository, never()).findApplicableConfigurations(any(), any());
+        verify(taxConfigurationRepository, never()).findApplicableConfigurations(any(), any());
     }
 
-    // CASE 7b — Concurrent duplicate caught at the DB unique-constraint level
+    // CASE 7b — Concurrent duplicate caught at the DB unique-constraint level.
     @Test
     void calculateTax_concurrentDuplicateAtSave_throwsDuplicateResourceException() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
 
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.ALL, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.ALL, true)
+        );
+
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
-                .thenReturn(List.of(cgstSgstConfiguration()));
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
         when(taxCalculationRepository.save(any(TaxCalculation.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate key"));
 
@@ -271,16 +338,21 @@ class TaxCalculationServiceImplTest {
                 .hasMessage("Tax calculation has already been completed for this billing snapshot.");
     }
 
-    // CASE 8 — Effective date: must use billingPeriodStart, not "current date"
+    // CASE 8 — Effective date: must use billingPeriodStart, not "current date".
     @Test
     void calculateTax_resolvesConfigurationUsingBillingPeriodStart() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
         snapshot.setBillingPeriodStart(LocalDate.of(2020, 1, 1)); // far from "today" to prove it's not LocalDate.now()
 
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.ALL, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.ALL, true)
+        );
+
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(any(), any()))
-                .thenReturn(List.of(cgstSgstConfiguration()));
+        when(taxConfigurationRepository.findApplicableConfigurations(any(), any()))
+                .thenReturn(List.of(configuration));
         when(taxCalculationRepository.save(any(TaxCalculation.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
@@ -291,20 +363,25 @@ class TaxCalculationServiceImplTest {
         taxCalculationService.calculateTax(snapshotId);
 
         ArgumentCaptor<LocalDate> dateCaptor = ArgumentCaptor.forClass(LocalDate.class);
-        verify(taxRateConfigurationRepository).findApplicableConfigurations(eq(taxRegionId), dateCaptor.capture());
+        verify(taxConfigurationRepository).findApplicableConfigurations(eq(taxRegionId), dateCaptor.capture());
         assertThat(dateCaptor.getValue()).isEqualTo(LocalDate.of(2020, 1, 1));
     }
 
-    // CASE 9 — Tax amount rounding
+    // CASE 9 — Tax amount rounding.
     @Test
     void calculateTax_roundsMonetaryAmountsToTwoDecimalPlacesHalfUp() {
         // 333.33 * 9 / 100 = 29.9997 -> rounds HALF_UP to 30.00
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("333.33"));
 
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.ALL, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.ALL, true)
+        );
+
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
-                .thenReturn(List.of(cgstSgstConfiguration()));
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
         when(taxCalculationRepository.save(any(TaxCalculation.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
@@ -314,22 +391,29 @@ class TaxCalculationServiceImplTest {
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
-        assertThat(response.getCgstAmount()).isEqualByComparingTo("30.00");
-        assertThat(response.getCgstAmount().scale()).isEqualTo(2);
-        assertThat(response.getSgstAmount()).isEqualByComparingTo("30.00");
+        assertThat(response.getComponents())
+                .allSatisfy(c -> {
+                    assertThat(c.getTaxAmount()).isEqualByComparingTo("30.00");
+                    assertThat(c.getTaxAmount().scale()).isEqualTo(2);
+                });
         assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("60.00");
         assertThat(response.getGrandTotal()).isEqualByComparingTo("393.33");
     }
 
-    // CASE 10 — Snapshot remains pre-tax
+    // CASE 10 — Snapshot's pre-tax figures remain unchanged.
     @Test
     void calculateTax_billingSnapshotTotalAmountRemainsUnchanged() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
 
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.ALL, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.ALL, true)
+        );
+
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
-                .thenReturn(List.of(cgstSgstConfiguration()));
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
         when(taxCalculationRepository.save(any(TaxCalculation.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
@@ -346,15 +430,20 @@ class TaxCalculationServiceImplTest {
         assertThat(response.getGrandTotal()).isNotEqualByComparingTo(snapshot.getTotalAmount());
     }
 
-    // CASE 11 — Transaction failure: snapshot must not become TAX_COMPLETED if persistence fails
+    // CASE 11 — Transaction failure: snapshot must not become TAX_COMPLETED if persistence fails.
     @Test
     void calculateTax_taxCalculationPersistenceFails_snapshotNotMarkedCompleted() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
 
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.ALL, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.ALL, true)
+        );
+
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
-                .thenReturn(List.of(cgstSgstConfiguration()));
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
         when(taxCalculationRepository.save(any(TaxCalculation.class)))
                 .thenThrow(new RuntimeException("unexpected database error"));
 
@@ -368,62 +457,123 @@ class TaxCalculationServiceImplTest {
         assertThat(snapshot.getStatus()).isNotEqualTo(BillingSnapshotStatus.TAX_COMPLETED);
     }
 
-    // Additional coverage — invalid tax component combination
+    // CASE 12 — Inactive components are skipped and excluded from the total.
     @Test
-    void calculateTax_cgstOnlyWithoutSgst_throwsValidationException() {
+    void calculateTax_inactiveComponentIsSkipped() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
 
-        TaxRateConfiguration invalidConfiguration = TaxRateConfiguration.builder()
-                .taxRateConfigurationId(UUID.randomUUID())
-                .taxType("GST")
-                .cgstRate(new BigDecimal("9.0000"))
-                .sgstRate(null)
-                .igstRate(null)
-                .effectiveFrom(LocalDate.of(2026, 4, 1))
-                .isActive(true)
-                .build();
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.ALL, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.ALL, false)
+        );
 
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
-                .thenReturn(List.of(invalidConfiguration));
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+        when(taxCalculationRepository.save(any(TaxCalculation.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(snapshotConfiguration());
 
-        assertThatThrownBy(() -> taxCalculationService.calculateTax(snapshotId))
-                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessageContaining("invalid combination");
+        TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
-        verify(taxCalculationRepository, never()).save(any());
+        assertThat(response.getComponents()).hasSize(1);
+        assertThat(response.getComponents().get(0).getTaxTypeCode()).isEqualTo("CGST");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("15120.00");
     }
 
-    // Additional coverage — an explicit zero rate is treated as "not applicable",
-    // same as a blank/null rate, not as a valid CGST+SGST pairing
+    // CASE 13 — A component whose applicability doesn't match the transaction is excluded,
+    // resulting in legitimately zero tax when nothing else applies.
     @Test
-    void calculateTax_zeroCgstRateWithSgst_throwsValidationException() {
-        BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
+    void calculateTax_noApplicableComponents_resultsInZeroTax() {
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"), "IN-KA", "IN-KA");
 
-        TaxRateConfiguration zeroCgstConfiguration = TaxRateConfiguration.builder()
-                .taxRateConfigurationId(UUID.randomUUID())
-                .taxType("GST")
-                .cgstRate(BigDecimal.ZERO)
-                .sgstRate(new BigDecimal("9.0000"))
-                .igstRate(null)
-                .effectiveFrom(LocalDate.of(2026, 4, 1))
-                .isActive(true)
-                .build();
+        TaxConfiguration configuration = configurationOf(
+                componentOf(igstType, "18.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, true)
+        );
 
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
-        when(taxRateConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
-                .thenReturn(List.of(zeroCgstConfiguration));
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+        when(taxCalculationRepository.save(any(TaxCalculation.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(snapshotConfiguration());
 
-        assertThatThrownBy(() -> taxCalculationService.calculateTax(snapshotId))
-                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessageContaining("invalid combination");
+        TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
-        verify(taxCalculationRepository, never()).save(any());
+        assertThat(response.getComponents()).isEmpty();
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("0");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo("168000.00");
     }
 
-    // GET — existing calculation retrieved
+    // CASE 14 — Same-jurisdiction transactions apply CGST/SGST components and skip IGST.
+    @Test
+    void calculateTax_sameJurisdiction_appliesCgstSgstOnly() {
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"), "IN-KA", "IN-KA");
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(igstType, "18.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, true)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+        when(taxCalculationRepository.save(any(TaxCalculation.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(snapshotConfiguration());
+
+        TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
+
+        assertThat(response.getComponents())
+                .extracting("taxTypeCode")
+                .containsExactlyInAnyOrder("CGST", "SGST");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("30240.00");
+    }
+
+    // CASE 15 — Cross-jurisdiction transactions apply IGST and skip CGST/SGST.
+    @Test
+    void calculateTax_differentJurisdiction_appliesIgstOnly() {
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"), "IN-KA", "IN-MH");
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(igstType, "18.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, true)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+        when(taxCalculationRepository.save(any(TaxCalculation.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(snapshotConfiguration());
+
+        TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
+
+        assertThat(response.getComponents())
+                .extracting("taxTypeCode")
+                .containsExactly("IGST");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("30240.00");
+    }
+
+    // GET — existing calculation retrieved.
     @Test
     void getTaxCalculationBySnapshotId_existingCalculation_returnsIt() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
@@ -433,12 +583,8 @@ class TaxCalculationServiceImplTest {
                 .taxCalculationId(UUID.randomUUID())
                 .billingSnapshotId(snapshotId)
                 .taxRegionId(taxRegionId)
-                .taxRateConfigurationId(UUID.randomUUID())
+                .taxConfigurationId(UUID.randomUUID())
                 .taxableAmount(new BigDecimal("168000.00"))
-                .cgstRate(new BigDecimal("9.0000"))
-                .cgstAmount(new BigDecimal("15120.00"))
-                .sgstRate(new BigDecimal("9.0000"))
-                .sgstAmount(new BigDecimal("15120.00"))
                 .totalTaxAmount(new BigDecimal("30240.00"))
                 .grandTotal(new BigDecimal("198240.00"))
                 .status(TaxCalculationStatus.CALCULATED)
@@ -458,7 +604,7 @@ class TaxCalculationServiceImplTest {
         assertThat(response.getTaxRegionName()).isEqualTo("Domestic (GST 18%)");
     }
 
-    // GET — no calculation exists yet
+    // GET — no calculation exists yet.
     @Test
     void getTaxCalculationBySnapshotId_noCalculation_throwsResourceNotFoundException() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"));
@@ -469,5 +615,15 @@ class TaxCalculationServiceImplTest {
         assertThatThrownBy(() -> taxCalculationService.getTaxCalculationBySnapshotId(snapshotId))
                 .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
                 .hasMessage("No tax calculation has been completed for this billing snapshot.");
+    }
+
+    // GET — snapshot not found.
+    @Test
+    void getTaxCalculationBySnapshotId_snapshotNotFound_throwsResourceNotFoundException() {
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> taxCalculationService.getTaxCalculationBySnapshotId(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Billing snapshot could not be found.");
     }
 }

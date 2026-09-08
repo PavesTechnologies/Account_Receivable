@@ -1,12 +1,17 @@
 package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 
+import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationComponentRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationResponseDto;
-import com.AccountReceivableManagement.entity.projectbilling_config.TaxRateConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfigurationComponent;
 import com.AccountReceivableManagement.entity.projectbilling_config.TaxRegionMaster;
+import com.AccountReceivableManagement.entity.projectbilling_config.TaxTypeMaster;
+import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxApplicabilityType;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.TaxTypeMasterRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,15 +36,20 @@ import static org.mockito.Mockito.*;
 class TaxRateConfigurationServiceImplTest {
 
     @Mock
-    private TaxConfigurationRepository taxRateConfigurationRepository;
+    private TaxConfigurationRepository configurationRepository;
 
     @Mock
     private TaxRegionMasterRepository taxRegionMasterRepository;
 
+    @Mock
+    private TaxTypeMasterRepository taxTypeMasterRepository;
+
     @InjectMocks
-    private TaxConfigurationServiceImpl taxRateConfigurationService;
+    private TaxConfigurationServiceImpl taxConfigurationService;
 
     private TaxRegionMaster activeTaxRegion;
+
+    private TaxTypeMaster activeTaxType;
 
     @BeforeEach
     void setUp() {
@@ -50,233 +61,97 @@ class TaxRateConfigurationServiceImplTest {
                 .currencyCode("INR")
                 .isActive(true)
                 .build();
-    }
 
-    private TaxConfigurationRequestDto validGstRequest() {
-        return TaxConfigurationRequestDto.builder()
-                .taxRegionId(activeTaxRegion.getTaxRegionId())
-                .taxType("GST")
-                .cgstRate(new BigDecimal("9.0000"))
-                .sgstRate(new BigDecimal("9.0000"))
-                .igstRate(BigDecimal.ZERO)
-                .effectiveFrom(LocalDate.of(2026, 4, 1))
-                .effectiveTo(null)
+        activeTaxType = TaxTypeMaster.builder()
+                .taxTypeId(UUID.randomUUID())
+                .taxTypeCode("GST")
+                .taxTypeName("Goods and Services Tax")
+                .isActive(true)
                 .build();
     }
 
-    // 1. Create valid GST configuration.
+    private TaxConfigurationComponentRequestDto validComponentRequest() {
+        return TaxConfigurationComponentRequestDto.builder()
+                .taxTypeId(activeTaxType.getTaxTypeId())
+                .taxRate(new BigDecimal("9.0000"))
+                .applicabilityType(TaxApplicabilityType.ALL)
+                .build();
+    }
+
+    private TaxConfigurationRequestDto validRequest() {
+        return TaxConfigurationRequestDto.builder()
+                .taxRegionId(activeTaxRegion.getTaxRegionId())
+                .taxRegime("GST")
+                .effectiveFrom(LocalDate.of(2026, 4, 1))
+                .effectiveTo(null)
+                .components(new ArrayList<>(List.of(validComponentRequest())))
+                .build();
+    }
+
+    private TaxConfiguration existingConfiguration(UUID id) {
+        TaxConfiguration configuration = TaxConfiguration.builder()
+                .taxConfigurationId(id)
+                .taxRegion(activeTaxRegion)
+                .taxRegime("GST")
+                .effectiveFrom(LocalDate.of(2026, 4, 1))
+                .isActive(true)
+                .components(new ArrayList<>())
+                .build();
+
+        TaxConfigurationComponent component = TaxConfigurationComponent.builder()
+                .taxConfigurationComponentId(UUID.randomUUID())
+                .taxConfiguration(configuration)
+                .taxType(activeTaxType)
+                .taxRate(new BigDecimal("9.0000"))
+                .applicabilityType(TaxApplicabilityType.ALL)
+                .isActive(true)
+                .build();
+
+        configuration.getComponents().add(component);
+        return configuration;
+    }
+
+    // 1. Create a valid configuration with one active component.
     @Test
-    void create_validGstConfiguration_returnsSavedConfiguration() {
+    void create_validConfiguration_returnsSavedConfiguration() {
         when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
                 .thenReturn(Optional.of(activeTaxRegion));
-        when(taxRateConfigurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
+        when(configurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
                 .thenReturn(List.of());
-        when(taxRateConfigurationRepository.save(any(TaxRateConfiguration.class)))
+        when(taxTypeMasterRepository.findById(activeTaxType.getTaxTypeId()))
+                .thenReturn(Optional.of(activeTaxType));
+        when(configurationRepository.save(any(TaxConfiguration.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        TaxConfigurationResponseDto response = taxRateConfigurationService.create(validGstRequest());
+        TaxConfigurationResponseDto response = taxConfigurationService.create(validRequest());
 
         assertThat(response.getTaxRegionId()).isEqualTo(activeTaxRegion.getTaxRegionId());
         assertThat(response.getTaxRegionCode()).isEqualTo("IN-KA");
-        assertThat(response.getTaxType()).isEqualTo("GST");
-        assertThat(response.getCgstRate()).isEqualByComparingTo("9.0000");
+        assertThat(response.getTaxRegime()).isEqualTo("GST");
         assertThat(response.getIsActive()).isTrue();
-        verify(taxRateConfigurationRepository).save(any(TaxRateConfiguration.class));
+        assertThat(response.getComponents()).hasSize(1);
+        assertThat(response.getComponents().get(0).getTaxTypeCode()).isEqualTo("GST");
+        assertThat(response.getComponents().get(0).getTaxRate()).isEqualByComparingTo("9.0000");
+        verify(configurationRepository).save(any(TaxConfiguration.class));
     }
 
     // 2. Reject missing tax region.
     @Test
     void create_missingTaxRegion_throwsResourceNotFoundException() {
         UUID unknownRegionId = UUID.randomUUID();
-        TaxConfigurationRequestDto request = validGstRequest();
+        TaxConfigurationRequestDto request = validRequest();
         request.setTaxRegionId(unknownRegionId);
 
         when(taxRegionMasterRepository.findById(unknownRegionId)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> taxRateConfigurationService.create(request))
+        assertThatThrownBy(() -> taxConfigurationService.create(request))
                 .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
-                .hasMessage("Tax region could not be found.");
+                .hasMessage("Tax region not found.");
 
-        verify(taxRateConfigurationRepository, never()).save(any());
+        verify(configurationRepository, never()).save(any());
     }
 
-    // 3. Reject negative CGST rate.
-    @Test
-    void create_negativeCgstRate_throwsValidationException() {
-        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
-                .thenReturn(Optional.of(activeTaxRegion));
-
-        TaxConfigurationRequestDto request = validGstRequest();
-        request.setCgstRate(new BigDecimal("-1.00"));
-
-        assertThatThrownBy(() -> taxRateConfigurationService.create(request))
-                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessage("Tax rates cannot be negative.");
-
-        verify(taxRateConfigurationRepository, never()).save(any());
-    }
-
-    // 4. Reject negative SGST rate.
-    @Test
-    void create_negativeSgstRate_throwsValidationException() {
-        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
-                .thenReturn(Optional.of(activeTaxRegion));
-
-        TaxConfigurationRequestDto request = validGstRequest();
-        request.setSgstRate(new BigDecimal("-1.00"));
-
-        assertThatThrownBy(() -> taxRateConfigurationService.create(request))
-                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessage("Tax rates cannot be negative.");
-
-        verify(taxRateConfigurationRepository, never()).save(any());
-    }
-
-    // 5. Reject invalid effective date range.
-    @Test
-    void create_invalidEffectiveDateRange_throwsValidationException() {
-        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
-                .thenReturn(Optional.of(activeTaxRegion));
-
-        TaxConfigurationRequestDto request = validGstRequest();
-        request.setEffectiveFrom(LocalDate.of(2026, 4, 1));
-        request.setEffectiveTo(LocalDate.of(2026, 3, 1));
-
-        assertThatThrownBy(() -> taxRateConfigurationService.create(request))
-                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessage("Effective end date cannot be earlier than effective start date.");
-
-        verify(taxRateConfigurationRepository, never()).save(any());
-    }
-
-    // 6. Retrieve configuration.
-    @Test
-    void getById_existingConfiguration_returnsConfiguration() {
-        UUID configId = UUID.randomUUID();
-        TaxRateConfiguration configuration = TaxRateConfiguration.builder()
-                .taxRateConfigurationId(configId)
-                .taxRegion(activeTaxRegion)
-                .taxType("GST")
-                .cgstRate(new BigDecimal("9.0000"))
-                .sgstRate(new BigDecimal("9.0000"))
-                .effectiveFrom(LocalDate.of(2026, 4, 1))
-                .isActive(true)
-                .build();
-
-        when(taxRateConfigurationRepository.findById(configId)).thenReturn(Optional.of(configuration));
-
-        TaxConfigurationResponseDto response = taxRateConfigurationService.getById(configId);
-
-        assertThat(response.getTaxRateConfigurationId()).isEqualTo(configId);
-        assertThat(response.getTaxRegionCode()).isEqualTo("IN-KA");
-    }
-
-    @Test
-    void getById_missingConfiguration_throwsResourceNotFoundException() {
-        UUID configId = UUID.randomUUID();
-        when(taxRateConfigurationRepository.findById(configId)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> taxRateConfigurationService.getById(configId))
-                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
-                .hasMessage("Tax rate configuration not found.");
-    }
-
-    // 7. Retrieve active configurations.
-    @Test
-    void getActive_returnsOnlyActiveConfigurations() {
-        TaxRateConfiguration active = TaxRateConfiguration.builder()
-                .taxRateConfigurationId(UUID.randomUUID())
-                .taxRegion(activeTaxRegion)
-                .taxType("GST")
-                .cgstRate(new BigDecimal("9.0000"))
-                .effectiveFrom(LocalDate.of(2026, 4, 1))
-                .isActive(true)
-                .build();
-
-        when(taxRateConfigurationRepository.findByIsActiveTrueOrderByEffectiveFromDesc())
-                .thenReturn(List.of(active));
-
-        List<TaxConfigurationResponseDto> response = taxRateConfigurationService.getActive();
-
-        assertThat(response).hasSize(1);
-        assertThat(response.get(0).getIsActive()).isTrue();
-    }
-
-    // 8. Retrieve configuration by tax region.
-    @Test
-    void getByTaxRegion_returnsConfigurationsForRegion() {
-        TaxRateConfiguration configuration = TaxRateConfiguration.builder()
-                .taxRateConfigurationId(UUID.randomUUID())
-                .taxRegion(activeTaxRegion)
-                .taxType("GST")
-                .cgstRate(new BigDecimal("9.0000"))
-                .effectiveFrom(LocalDate.of(2026, 4, 1))
-                .isActive(true)
-                .build();
-
-        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
-                .thenReturn(Optional.of(activeTaxRegion));
-        when(taxRateConfigurationRepository
-                .findByTaxRegion_TaxRegionIdAndIsActiveTrueOrderByEffectiveFromDesc(activeTaxRegion.getTaxRegionId()))
-                .thenReturn(List.of(configuration));
-
-        List<TaxConfigurationResponseDto> response =
-                taxRateConfigurationService.getByTaxRegion(activeTaxRegion.getTaxRegionId());
-
-        assertThat(response).hasSize(1);
-        assertThat(response.get(0).getTaxRegionId()).isEqualTo(activeTaxRegion.getTaxRegionId());
-    }
-
-    // 9. Deactivate configuration.
-    @Test
-    void deactivate_existingConfiguration_setsIsActiveFalse() {
-        UUID configId = UUID.randomUUID();
-        TaxRateConfiguration configuration = TaxRateConfiguration.builder()
-                .taxRateConfigurationId(configId)
-                .taxRegion(activeTaxRegion)
-                .taxType("GST")
-                .cgstRate(new BigDecimal("9.0000"))
-                .effectiveFrom(LocalDate.of(2026, 4, 1))
-                .isActive(true)
-                .build();
-
-        when(taxRateConfigurationRepository.findById(configId)).thenReturn(Optional.of(configuration));
-        when(taxRateConfigurationRepository.save(any(TaxRateConfiguration.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
-        taxRateConfigurationService.deactivate(configId);
-
-        ArgumentCaptor<TaxRateConfiguration> captor = ArgumentCaptor.forClass(TaxRateConfiguration.class);
-        verify(taxRateConfigurationRepository).save(captor.capture());
-        assertThat(captor.getValue().getIsActive()).isFalse();
-    }
-
-    // 10. Detect conflicting/overlapping effective periods.
-    @Test
-    void create_overlappingEffectivePeriod_throwsValidationException() {
-        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
-                .thenReturn(Optional.of(activeTaxRegion));
-
-        TaxRateConfiguration existing = TaxRateConfiguration.builder()
-                .taxRateConfigurationId(UUID.randomUUID())
-                .taxRegion(activeTaxRegion)
-                .taxType("GST")
-                .cgstRate(new BigDecimal("9.0000"))
-                .effectiveFrom(LocalDate.of(2026, 1, 1))
-                .isActive(true)
-                .build();
-
-        when(taxRateConfigurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
-                .thenReturn(List.of(existing));
-
-        assertThatThrownBy(() -> taxRateConfigurationService.create(validGstRequest()))
-                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessage("An active tax configuration already exists for this tax region and effective period.");
-
-        verify(taxRateConfigurationRepository, never()).save(any());
-    }
-
-    // 11. Reject inactive/missing tax region.
+    // 3. Reject inactive tax region.
     @Test
     void create_inactiveTaxRegion_throwsValidationException() {
         TaxRegionMaster inactiveRegion = TaxRegionMaster.builder()
@@ -288,36 +163,268 @@ class TaxRateConfigurationServiceImplTest {
                 .isActive(false)
                 .build();
 
-        TaxConfigurationRequestDto request = validGstRequest();
+        TaxConfigurationRequestDto request = validRequest();
         request.setTaxRegionId(inactiveRegion.getTaxRegionId());
 
         when(taxRegionMasterRepository.findById(inactiveRegion.getTaxRegionId()))
                 .thenReturn(Optional.of(inactiveRegion));
 
-        assertThatThrownBy(() -> taxRateConfigurationService.create(request))
+        assertThatThrownBy(() -> taxConfigurationService.create(request))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessage("Tax region is inactive and cannot be used for a tax rate configuration.");
+                .hasMessage("Tax region is inactive.");
 
-        verify(taxRateConfigurationRepository, never()).save(any());
+        verify(configurationRepository, never()).save(any());
     }
 
-    // 12. Verify BigDecimal precision.
+    // 4. Reject invalid effective date range.
     @Test
-    void create_preservesBigDecimalScale() {
+    void create_invalidEffectiveDateRange_throwsValidationException() {
         when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
                 .thenReturn(Optional.of(activeTaxRegion));
-        when(taxRateConfigurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
+
+        TaxConfigurationRequestDto request = validRequest();
+        request.setEffectiveFrom(LocalDate.of(2026, 4, 1));
+        request.setEffectiveTo(LocalDate.of(2026, 3, 1));
+
+        assertThatThrownBy(() -> taxConfigurationService.create(request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Effective end date cannot be earlier than effective start date.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // 5. Reject a request with no tax components.
+    @Test
+    void create_missingComponents_throwsValidationException() {
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+
+        TaxConfigurationRequestDto request = validRequest();
+        request.setComponents(List.of());
+
+        assertThatThrownBy(() -> taxConfigurationService.create(request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("At least one tax component is required.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // 6. Reject a negative tax rate on a component.
+    @Test
+    void create_negativeComponentTaxRate_throwsValidationException() {
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+
+        TaxConfigurationRequestDto request = validRequest();
+        request.setComponents(List.of(
+                TaxConfigurationComponentRequestDto.builder()
+                        .taxTypeId(activeTaxType.getTaxTypeId())
+                        .taxRate(new BigDecimal("-1.00"))
+                        .applicabilityType(TaxApplicabilityType.ALL)
+                        .build()
+        ));
+
+        assertThatThrownBy(() -> taxConfigurationService.create(request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Tax rate cannot be negative.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // 7. Reject the same tax type being configured more than once.
+    @Test
+    void create_duplicateTaxTypeInComponents_throwsValidationException() {
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+
+        TaxConfigurationRequestDto request = validRequest();
+        request.setComponents(List.of(validComponentRequest(), validComponentRequest()));
+
+        assertThatThrownBy(() -> taxConfigurationService.create(request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("A tax type cannot be configured more than once in the same configuration.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // 8. Detect conflicting/overlapping effective periods.
+    @Test
+    void create_overlappingEffectivePeriod_throwsValidationException() {
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+        when(configurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
+                .thenReturn(List.of(existingConfiguration(UUID.randomUUID())));
+
+        assertThatThrownBy(() -> taxConfigurationService.create(validRequest()))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("An active tax configuration already exists for this tax region and effective period.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // 9. Reject a component referencing an unknown tax type.
+    @Test
+    void create_missingTaxType_throwsResourceNotFoundException() {
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+        when(configurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
                 .thenReturn(List.of());
-        when(taxRateConfigurationRepository.save(any(TaxRateConfiguration.class)))
+        when(taxTypeMasterRepository.findById(activeTaxType.getTaxTypeId()))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> taxConfigurationService.create(validRequest()))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Tax type not found.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // 10. Reject a component referencing an inactive tax type.
+    @Test
+    void create_inactiveTaxType_throwsValidationException() {
+        TaxTypeMaster inactiveTaxType = TaxTypeMaster.builder()
+                .taxTypeId(activeTaxType.getTaxTypeId())
+                .taxTypeCode("GST")
+                .taxTypeName("Goods and Services Tax")
+                .isActive(false)
+                .build();
+
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+        when(configurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
+                .thenReturn(List.of());
+        when(taxTypeMasterRepository.findById(activeTaxType.getTaxTypeId()))
+                .thenReturn(Optional.of(inactiveTaxType));
+
+        assertThatThrownBy(() -> taxConfigurationService.create(validRequest()))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Tax type is inactive.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // 11. Retrieve configuration by id.
+    @Test
+    void getById_existingConfiguration_returnsConfiguration() {
+        UUID configId = UUID.randomUUID();
+        TaxConfiguration configuration = existingConfiguration(configId);
+
+        when(configurationRepository.findById(configId)).thenReturn(Optional.of(configuration));
+
+        TaxConfigurationResponseDto response = taxConfigurationService.getById(configId);
+
+        assertThat(response.getTaxConfigurationId()).isEqualTo(configId);
+        assertThat(response.getTaxRegionCode()).isEqualTo("IN-KA");
+        assertThat(response.getComponents()).hasSize(1);
+    }
+
+    @Test
+    void getById_missingConfiguration_throwsResourceNotFoundException() {
+        UUID configId = UUID.randomUUID();
+        when(configurationRepository.findById(configId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> taxConfigurationService.getById(configId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Tax configuration not found.");
+    }
+
+    // 12. Retrieve active configurations.
+    @Test
+    void getActive_returnsOnlyActiveConfigurations() {
+        TaxConfiguration active = existingConfiguration(UUID.randomUUID());
+
+        when(configurationRepository.findByIsActiveTrueOrderByEffectiveFromDesc())
+                .thenReturn(List.of(active));
+
+        List<TaxConfigurationResponseDto> response = taxConfigurationService.getActive();
+
+        assertThat(response).hasSize(1);
+        assertThat(response.get(0).getIsActive()).isTrue();
+    }
+
+    // 13. Retrieve configurations by tax region.
+    @Test
+    void getByTaxRegion_returnsConfigurationsForRegion() {
+        TaxConfiguration configuration = existingConfiguration(UUID.randomUUID());
+
+        when(taxRegionMasterRepository.existsById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(true);
+        when(configurationRepository
+                .findByTaxRegion_TaxRegionIdAndIsActiveTrueOrderByEffectiveFromDesc(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(List.of(configuration));
+
+        List<TaxConfigurationResponseDto> response =
+                taxConfigurationService.getByTaxRegion(activeTaxRegion.getTaxRegionId());
+
+        assertThat(response).hasSize(1);
+        assertThat(response.get(0).getTaxRegionId()).isEqualTo(activeTaxRegion.getTaxRegionId());
+    }
+
+    // 14. Reject retrieval for an unknown tax region.
+    @Test
+    void getByTaxRegion_missingRegion_throwsResourceNotFoundException() {
+        UUID unknownRegionId = UUID.randomUUID();
+        when(taxRegionMasterRepository.existsById(unknownRegionId)).thenReturn(false);
+
+        assertThatThrownBy(() -> taxConfigurationService.getByTaxRegion(unknownRegionId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Tax region not found.");
+    }
+
+    // 15. Deactivate configuration.
+    @Test
+    void deactivate_existingConfiguration_setsIsActiveFalse() {
+        UUID configId = UUID.randomUUID();
+        TaxConfiguration configuration = existingConfiguration(configId);
+
+        when(configurationRepository.findById(configId)).thenReturn(Optional.of(configuration));
+        when(configurationRepository.save(any(TaxConfiguration.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        TaxConfigurationRequestDto request = validGstRequest();
-        request.setCgstRate(new BigDecimal("9.1234"));
-        request.setSgstRate(new BigDecimal("9.1234"));
+        taxConfigurationService.deactivate(configId);
 
-        TaxConfigurationResponseDto response = taxRateConfigurationService.create(request);
+        ArgumentCaptor<TaxConfiguration> captor = ArgumentCaptor.forClass(TaxConfiguration.class);
+        verify(configurationRepository).save(captor.capture());
+        assertThat(captor.getValue().getIsActive()).isFalse();
+    }
 
-        assertThat(response.getCgstRate().scale()).isEqualTo(4);
-        assertThat(response.getCgstRate()).isEqualByComparingTo(new BigDecimal("9.1234"));
+    @Test
+    void deactivate_missingConfiguration_throwsResourceNotFoundException() {
+        UUID configId = UUID.randomUUID();
+        when(configurationRepository.findById(configId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> taxConfigurationService.deactivate(configId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Tax configuration not found.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // 16. Verify BigDecimal precision is preserved through the component mapping.
+    @Test
+    void create_preservesBigDecimalScaleOnComponents() {
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+        when(configurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
+                .thenReturn(List.of());
+        when(taxTypeMasterRepository.findById(activeTaxType.getTaxTypeId()))
+                .thenReturn(Optional.of(activeTaxType));
+        when(configurationRepository.save(any(TaxConfiguration.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        TaxConfigurationRequestDto request = validRequest();
+        request.setComponents(List.of(
+                TaxConfigurationComponentRequestDto.builder()
+                        .taxTypeId(activeTaxType.getTaxTypeId())
+                        .taxRate(new BigDecimal("9.1234"))
+                        .applicabilityType(TaxApplicabilityType.ALL)
+                        .build()
+        ));
+
+        TaxConfigurationResponseDto response = taxConfigurationService.create(request);
+
+        BigDecimal taxRate = response.getComponents().get(0).getTaxRate();
+        assertThat(taxRate.scale()).isEqualTo(4);
+        assertThat(taxRate).isEqualByComparingTo(new BigDecimal("9.1234"));
     }
 }
