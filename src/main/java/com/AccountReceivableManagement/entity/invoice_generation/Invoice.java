@@ -169,11 +169,23 @@ public class Invoice {
     @Column(name = "generated_at", nullable = false)
     private LocalDateTime generatedAt;
 
+    /*
+     * columnDefinition is explicit here (rather than relying on `length`)
+     * because Hibernate 6's MySQLDialect maps a plain @Enumerated(STRING)
+     * column to a native MySQL ENUM(...) type - frozen to whichever Java
+     * constants exist at table-creation time - not VARCHAR. That silently
+     * broke GENERATED -> PENDING_APPROVAL once PENDING_APPROVAL was added
+     * after the table already existed ("Data truncated for column
+     * 'status'"), since `ddl-auto=update` never widens an existing native
+     * ENUM's value list. Forcing VARCHAR keeps this status lifecycle
+     * (which will keep growing) from hitting that class of bug again.
+     */
     @Enumerated(EnumType.STRING)
     @Column(
             name = "status",
             nullable = false,
-            length = 20
+            length = 20,
+            columnDefinition = "VARCHAR(20)"
     )
     private InvoiceStatus status;
 

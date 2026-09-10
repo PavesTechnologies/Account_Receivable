@@ -1,5 +1,6 @@
--- Invoice Generation.
--- Reference DDL for invoice, invoice_item, invoice_tax_component.
+-- Invoice Generation and Invoice Approval (Phase 1).
+-- Reference DDL for invoice, invoice_item, invoice_tax_component,
+-- invoice_approval_history.
 --
 -- The frozen, final commercial document generated for exactly one
 -- billing_snapshot once its tax_calculation is complete. Financial totals
@@ -7,6 +8,12 @@
 -- persisted tax_calculation - never recalculated. Line items and tax
 -- components are copied as-is from billing_snapshot_item and
 -- tax_calculation_component respectively.
+--
+-- Invoice status lifecycle (Phase 1 implements GENERATED -> PENDING_APPROVAL
+-- -> APPROVED only; REJECTED is provisioned in the enum/model but not yet
+-- reachable):
+--   GENERATED -> PENDING_APPROVAL -> APPROVED
+--                                 -> REJECTED (future)
 --
 -- NOTE: This project has no Flyway/Liquibase migration runner; schema is
 -- managed via `spring.jpa.hibernate.ddl-auto=update` (see application.properties).
@@ -79,4 +86,23 @@ CREATE TABLE IF NOT EXISTS invoice_tax_component (
     applicability_type               VARCHAR(30)  NOT NULL,
     PRIMARY KEY (invoice_tax_component_id),
     CONSTRAINT fk_invoice_tax_component_invoice FOREIGN KEY (invoice_id) REFERENCES invoice (invoice_id)
+);
+
+-- Audit trail of Invoice status transitions (submit, approve - later
+-- reject). No foreign key to invoice (invoice_id is a plain reference,
+-- validated only at the application layer) - this table only records
+-- history, it does not own or cascade with invoice, matching the
+-- software_billing_history convention. comment stays nullable here even
+-- though the future REJECTED action will require it - that requirement is
+-- enforced at the service layer, not the schema.
+CREATE TABLE IF NOT EXISTS invoice_approval_history (
+    invoice_approval_history_id     CHAR(36)      NOT NULL,
+    invoice_id                      CHAR(36)      NOT NULL,
+    previous_status                  VARCHAR(20)  NOT NULL,
+    new_status                       VARCHAR(20)  NOT NULL,
+    action                            VARCHAR(20)  NOT NULL,
+    action_by                        VARCHAR(100) NOT NULL,
+    action_at                        DATETIME     NOT NULL,
+    comment                          VARCHAR(500)     NULL,
+    PRIMARY KEY (invoice_approval_history_id)
 );
