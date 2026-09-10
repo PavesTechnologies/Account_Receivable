@@ -1,21 +1,27 @@
 package com.AccountReceivableManagement.service_Imple.invoice_generation;
 
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalHistoryResponseDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalSummaryResponseDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalWorkspaceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceSummaryResponseDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshotItem;
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceApprovalHistory;
 import com.AccountReceivableManagement.entity.projectbilling_config.PaymentTermsMaster;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculationComponent;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingItemType;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
+import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceApprovalAction;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxApplicabilityType;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
+import com.AccountReceivableManagement.repo.invoice_generation.InvoiceApprovalHistoryRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
@@ -23,6 +29,7 @@ import com.AccountReceivableManagement.service_interface.projectbilling_config.B
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -46,6 +53,9 @@ class InvoiceServiceImplTest {
 
     @Mock
     private InvoiceRepository invoiceRepository;
+
+    @Mock
+    private InvoiceApprovalHistoryRepository invoiceApprovalHistoryRepository;
 
     @Mock
     private BillingSnapshotRepository billingSnapshotRepository;
@@ -531,5 +541,500 @@ class InvoiceServiceImplTest {
         verifyNoInteractions(billingSnapshotRepository);
         verifyNoInteractions(taxCalculationRepository);
         verifyNoInteractions(billingConfigurationService);
+    }
+
+    // =====================================================================
+    // Invoice Approval — Phase 1: GENERATED -> PENDING_APPROVAL -> APPROVED
+    // =====================================================================
+
+    // SUBMIT CASE 1 — GENERATED invoice submits successfully.
+    @Test
+    void submitForApproval_generatedInvoice_transitionsToPendingApprovalAndRecordsHistory() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.GENERATED);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.submitForApproval(invoiceId);
+
+        // Status transition.
+        assertThat(response.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        // Financial values, identity, and every other field remain exactly as generated.
+        assertThat(response.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+        assertThat(response.getSubtotal()).isEqualByComparingTo("5500.00");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo("6490.00");
+        assertThat(response.getBillingSnapshotId()).isEqualTo(snapshotId);
+        assertThat(response.getBillingSnapshotNumber()).isEqualTo("BS-20260908164549");
+
+        // BillingSnapshot / TaxCalculation are never touched by this operation.
+        verifyNoInteractions(billingSnapshotRepository);
+        verifyNoInteractions(taxCalculationRepository);
+
+        // No new invoice is generated - exactly one save, of the same instance.
+        verify(invoiceRepository, times(1)).save(invoice);
+
+        // Approval history recorded.
+        ArgumentCaptor<InvoiceApprovalHistory> historyCaptor = ArgumentCaptor.forClass(InvoiceApprovalHistory.class);
+        verify(invoiceApprovalHistoryRepository).save(historyCaptor.capture());
+        InvoiceApprovalHistory history = historyCaptor.getValue();
+        assertThat(history.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.GENERATED);
+        assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
+        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionAt()).isNotNull();
+    }
+
+    // SUBMIT CASE 2 — Invoice not found.
+    @Test
+    void submitForApproval_invoiceNotFound_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> invoiceService.submitForApproval(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Invoice could not be found.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // SUBMIT CASE 3/4/5 — Only GENERATED can be submitted.
+    @Test
+    void submitForApproval_pendingApprovalInvoice_throwsValidationException() {
+        assertSubmitRejected(InvoiceStatus.PENDING_APPROVAL);
+    }
+
+    @Test
+    void submitForApproval_approvedInvoice_throwsValidationException() {
+        assertSubmitRejected(InvoiceStatus.APPROVED);
+    }
+
+    @Test
+    void submitForApproval_rejectedInvoice_throwsValidationException() {
+        assertSubmitRejected(InvoiceStatus.REJECTED);
+    }
+
+    private void assertSubmitRejected(InvoiceStatus currentStatus) {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(currentStatus);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        assertThatThrownBy(() -> invoiceService.submitForApproval(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Only invoices with status GENERATED can be submitted for approval.");
+
+        assertThat(invoice.getStatus()).isEqualTo(currentStatus);
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // APPROVE CASE 1 — PENDING_APPROVAL invoice approves successfully.
+    @Test
+    void approveInvoice_pendingApprovalInvoice_transitionsToApprovedAndRecordsHistory() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.PENDING_APPROVAL);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.approveInvoice(invoiceId);
+
+        assertThat(response.getStatus()).isEqualTo(InvoiceStatus.APPROVED);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.APPROVED);
+
+        // Financial values unchanged - no recalculation.
+        assertThat(response.getSubtotal()).isEqualByComparingTo("5500.00");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo("6490.00");
+
+        // BillingSnapshot stays INVOICED - not modified by approval.
+        verifyNoInteractions(billingSnapshotRepository);
+        verifyNoInteractions(taxCalculationRepository);
+
+        // No new invoice is created.
+        verify(invoiceRepository, times(1)).save(invoice);
+
+        ArgumentCaptor<InvoiceApprovalHistory> historyCaptor = ArgumentCaptor.forClass(InvoiceApprovalHistory.class);
+        verify(invoiceApprovalHistoryRepository).save(historyCaptor.capture());
+        InvoiceApprovalHistory history = historyCaptor.getValue();
+        assertThat(history.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.APPROVED);
+        assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.APPROVED);
+        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+    }
+
+    // APPROVE CASE 2 — Invoice not found.
+    @Test
+    void approveInvoice_invoiceNotFound_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> invoiceService.approveInvoice(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Invoice could not be found.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // APPROVE CASE 3/4/5 — Only PENDING_APPROVAL can be approved.
+    @Test
+    void approveInvoice_generatedInvoice_throwsValidationException() {
+        assertApproveRejected(InvoiceStatus.GENERATED);
+    }
+
+    @Test
+    void approveInvoice_alreadyApprovedInvoice_throwsValidationException() {
+        assertApproveRejected(InvoiceStatus.APPROVED);
+    }
+
+    @Test
+    void approveInvoice_rejectedInvoice_throwsValidationException() {
+        assertApproveRejected(InvoiceStatus.REJECTED);
+    }
+
+    private void assertApproveRejected(InvoiceStatus currentStatus) {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(currentStatus);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        assertThatThrownBy(() -> invoiceService.approveInvoice(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Only invoices pending approval can be approved.");
+
+        assertThat(invoice.getStatus()).isEqualTo(currentStatus);
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // HISTORY CASE 1 — History returned in chronological order.
+    @Test
+    void getApprovalHistory_multipleEntries_returnsInChronologicalOrder() {
+        UUID invoiceId = UUID.randomUUID();
+        LocalDateTime submittedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        LocalDateTime approvedAt = LocalDateTime.of(2026, 9, 9, 11, 0);
+
+        InvoiceApprovalHistory submitted = InvoiceApprovalHistory.builder()
+                .invoiceApprovalHistoryId(UUID.randomUUID())
+                .invoiceId(invoiceId)
+                .previousStatus(InvoiceStatus.GENERATED)
+                .newStatus(InvoiceStatus.PENDING_APPROVAL)
+                .action(InvoiceApprovalAction.SUBMITTED)
+                .actionBy("SYSTEM")
+                .actionAt(submittedAt)
+                .build();
+
+        InvoiceApprovalHistory approved = InvoiceApprovalHistory.builder()
+                .invoiceApprovalHistoryId(UUID.randomUUID())
+                .invoiceId(invoiceId)
+                .previousStatus(InvoiceStatus.PENDING_APPROVAL)
+                .newStatus(InvoiceStatus.APPROVED)
+                .action(InvoiceApprovalAction.APPROVED)
+                .actionBy("SYSTEM")
+                .actionAt(approvedAt)
+                .build();
+
+        when(invoiceRepository.existsById(invoiceId)).thenReturn(true);
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenReturn(List.of(submitted, approved));
+
+        List<InvoiceApprovalHistoryResponseDto> history = invoiceService.getApprovalHistory(invoiceId);
+
+        assertThat(history).hasSize(2);
+        assertThat(history.get(0).getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
+        assertThat(history.get(0).getPreviousStatus()).isEqualTo(InvoiceStatus.GENERATED);
+        assertThat(history.get(0).getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(history.get(0).getActionAt()).isEqualTo(submittedAt);
+        assertThat(history.get(1).getAction()).isEqualTo(InvoiceApprovalAction.APPROVED);
+        assertThat(history.get(1).getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(history.get(1).getNewStatus()).isEqualTo(InvoiceStatus.APPROVED);
+        assertThat(history.get(1).getActionAt()).isEqualTo(approvedAt);
+    }
+
+    // HISTORY CASE 2 — Unknown invoice fails correctly.
+    @Test
+    void getApprovalHistory_invoiceNotFound_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        when(invoiceRepository.existsById(invoiceId)).thenReturn(false);
+
+        assertThatThrownBy(() -> invoiceService.getApprovalHistory(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Invoice could not be found.");
+    }
+
+    // PENDING APPROVAL LIST CASE 1 — Only PENDING_APPROVAL invoices are returned.
+    @Test
+    void getPendingApprovalInvoices_returnsOnlyPendingApprovalInvoices() {
+        Invoice pending = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        pending.setInvoiceId(UUID.randomUUID());
+        pending.setStatus(InvoiceStatus.PENDING_APPROVAL);
+
+        LocalDateTime submittedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        InvoiceApprovalHistory submission = InvoiceApprovalHistory.builder()
+                .invoiceApprovalHistoryId(UUID.randomUUID())
+                .invoiceId(pending.getInvoiceId())
+                .previousStatus(InvoiceStatus.GENERATED)
+                .newStatus(InvoiceStatus.PENDING_APPROVAL)
+                .action(InvoiceApprovalAction.SUBMITTED)
+                .actionBy("SYSTEM")
+                .actionAt(submittedAt)
+                .build();
+
+        when(invoiceRepository.findAllByStatusOrderByGeneratedAtDesc(InvoiceStatus.PENDING_APPROVAL))
+                .thenReturn(List.of(pending));
+        when(invoiceApprovalHistoryRepository.findTopByInvoiceIdAndActionOrderByActionAtDesc(
+                pending.getInvoiceId(), InvoiceApprovalAction.SUBMITTED))
+                .thenReturn(Optional.of(submission));
+
+        List<InvoiceApprovalSummaryResponseDto> response = invoiceService.getPendingApprovalInvoices();
+
+        assertThat(response).hasSize(1);
+        InvoiceApprovalSummaryResponseDto dto = response.get(0);
+        assertThat(dto.getInvoiceId()).isEqualTo(pending.getInvoiceId());
+        assertThat(dto.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+        assertThat(dto.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(dto.getBillingSnapshotId()).isEqualTo(snapshotId);
+        assertThat(dto.getBillingSnapshotNumber()).isEqualTo("BS-20260908164549");
+        assertThat(dto.getClientName()).isEqualTo("Account Management");
+        assertThat(dto.getProjectName()).isEqualTo("Website Redesign");
+        assertThat(dto.getGrandTotal()).isEqualByComparingTo("6490.00");
+        assertThat(dto.getSubmittedAt()).isEqualTo(submittedAt);
+        assertThat(dto.getSubmittedBy()).isEqualTo("SYSTEM");
+
+        // Only the PENDING_APPROVAL filter is queried - never all invoices.
+        verify(invoiceRepository, never()).findAllByOrderByGeneratedAtDesc();
+    }
+
+    // PENDING APPROVAL LIST CASE 2 — Empty when nothing is pending; repository-level filter, not client-side.
+    @Test
+    void getPendingApprovalInvoices_noneWaiting_returnsEmptyList() {
+        when(invoiceRepository.findAllByStatusOrderByGeneratedAtDesc(InvoiceStatus.PENDING_APPROVAL))
+                .thenReturn(List.of());
+
+        List<InvoiceApprovalSummaryResponseDto> response = invoiceService.getPendingApprovalInvoices();
+
+        assertThat(response).isEmpty();
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // =====================================================================
+    // Invoice Approval Dashboard — GET /api/v1/invoices/approval-workspace
+    // =====================================================================
+
+    private InvoiceApprovalHistory historyEntry(
+            UUID invoiceId,
+            InvoiceStatus previousStatus,
+            InvoiceStatus newStatus,
+            InvoiceApprovalAction action,
+            LocalDateTime actionAt
+    ) {
+        return InvoiceApprovalHistory.builder()
+                .invoiceApprovalHistoryId(UUID.randomUUID())
+                .invoiceId(invoiceId)
+                .previousStatus(previousStatus)
+                .newStatus(newStatus)
+                .action(action)
+                .actionBy("SYSTEM")
+                .actionAt(actionAt)
+                .build();
+    }
+
+    // WORKSPACE CASE 1 — A never-submitted GENERATED invoice is excluded (repository-level, via EXISTS).
+    @Test
+    void getApprovalWorkspaceInvoices_generatedInvoiceNeverSubmitted_isExcludedByRepositoryQuery() {
+        // The EXISTS-subquery repository method itself decides inclusion; a GENERATED
+        // invoice that was never submitted simply never appears in what it returns.
+        when(invoiceRepository.findAllInApprovalWorkflowOrderByGeneratedAtDesc())
+                .thenReturn(List.of());
+
+        List<InvoiceApprovalWorkspaceResponseDto> response = invoiceService.getApprovalWorkspaceInvoices();
+
+        assertThat(response).isEmpty();
+        // No history bulk-fetch is even attempted when there is nothing to enrich.
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // WORKSPACE CASE 2/3/4 — PENDING_APPROVAL, APPROVED, and REJECTED invoices are all included.
+    @Test
+    void getApprovalWorkspaceInvoices_pendingApprovedAndRejectedInvoices_areAllIncluded() {
+        Invoice pending = persistedInvoice(
+                "INV-P", "BS-P", UUID.randomUUID(), "Client Pending", "Project Pending");
+        pending.setInvoiceId(UUID.randomUUID());
+        pending.setStatus(InvoiceStatus.PENDING_APPROVAL);
+
+        Invoice approved = persistedInvoice(
+                "INV-A", "BS-A", UUID.randomUUID(), "Client Approved", "Project Approved");
+        approved.setInvoiceId(UUID.randomUUID());
+        approved.setStatus(InvoiceStatus.APPROVED);
+
+        Invoice rejected = persistedInvoice(
+                "INV-R", "BS-R", UUID.randomUUID(), "Client Rejected", "Project Rejected");
+        rejected.setInvoiceId(UUID.randomUUID());
+        rejected.setStatus(InvoiceStatus.REJECTED);
+
+        when(invoiceRepository.findAllInApprovalWorkflowOrderByGeneratedAtDesc())
+                .thenReturn(List.of(pending, approved, rejected));
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdInOrderByActionAtAsc(any()))
+                .thenReturn(List.of());
+
+        List<InvoiceApprovalWorkspaceResponseDto> response = invoiceService.getApprovalWorkspaceInvoices();
+
+        assertThat(response).hasSize(3);
+        assertThat(response)
+                .extracting(InvoiceApprovalWorkspaceResponseDto::getStatus)
+                .containsExactlyInAnyOrder(
+                        InvoiceStatus.PENDING_APPROVAL,
+                        InvoiceStatus.APPROVED,
+                        InvoiceStatus.REJECTED
+                );
+    }
+
+    // WORKSPACE CASE 5/6/7 — submittedAt/submittedBy come from the latest SUBMITTED entry;
+    // lastAction/lastActionAt come from the latest entry overall (an APPROVED invoice here).
+    @Test
+    void getApprovalWorkspaceInvoices_approvedInvoice_resolvesSubmittedAndLastActionCorrectly() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice approved = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        approved.setInvoiceId(invoiceId);
+        approved.setStatus(InvoiceStatus.APPROVED);
+
+        LocalDateTime submittedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        LocalDateTime approvedAt = LocalDateTime.of(2026, 9, 9, 11, 0);
+
+        InvoiceApprovalHistory submitted = historyEntry(
+                invoiceId, InvoiceStatus.GENERATED, InvoiceStatus.PENDING_APPROVAL,
+                InvoiceApprovalAction.SUBMITTED, submittedAt);
+        InvoiceApprovalHistory approvedEntry = historyEntry(
+                invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.APPROVED,
+                InvoiceApprovalAction.APPROVED, approvedAt);
+
+        when(invoiceRepository.findAllInApprovalWorkflowOrderByGeneratedAtDesc())
+                .thenReturn(List.of(approved));
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdInOrderByActionAtAsc(List.of(invoiceId)))
+                .thenReturn(List.of(submitted, approvedEntry));
+
+        List<InvoiceApprovalWorkspaceResponseDto> response = invoiceService.getApprovalWorkspaceInvoices();
+
+        assertThat(response).hasSize(1);
+        InvoiceApprovalWorkspaceResponseDto dto = response.get(0);
+
+        // submittedAt/submittedBy from the SUBMITTED entry specifically...
+        assertThat(dto.getSubmittedAt()).isEqualTo(submittedAt);
+        assertThat(dto.getSubmittedBy()).isEqualTo("SYSTEM");
+
+        // ...while lastAction/lastActionAt reflect the most recent entry overall (APPROVED), not SUBMITTED.
+        assertThat(dto.getLastAction()).isEqualTo(InvoiceApprovalAction.APPROVED);
+        assertThat(dto.getLastActionAt()).isEqualTo(approvedAt);
+
+        // WORKSPACE CASE 8 — grand total comes directly from the persisted Invoice.
+        assertThat(dto.getGrandTotal()).isEqualByComparingTo("6490.00");
+        assertThat(dto.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(dto.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+        assertThat(dto.getBillingSnapshotId()).isEqualTo(snapshotId);
+        assertThat(dto.getBillingSnapshotNumber()).isEqualTo("BS-20260908164549");
+    }
+
+    // WORKSPACE CASE — Efficient by construction: exactly one repository call for the invoice
+    // list and one bulk call for history, never a per-invoice history lookup.
+    @Test
+    void getApprovalWorkspaceInvoices_multipleInvoices_fetchesHistoryInOneBulkCall() {
+        Invoice first = persistedInvoice(
+                "INV-1", "BS-1", UUID.randomUUID(), "Client One", "Project One");
+        first.setInvoiceId(UUID.randomUUID());
+        first.setStatus(InvoiceStatus.PENDING_APPROVAL);
+
+        Invoice second = persistedInvoice(
+                "INV-2", "BS-2", UUID.randomUUID(), "Client Two", "Project Two");
+        second.setInvoiceId(UUID.randomUUID());
+        second.setStatus(InvoiceStatus.APPROVED);
+
+        when(invoiceRepository.findAllInApprovalWorkflowOrderByGeneratedAtDesc())
+                .thenReturn(List.of(first, second));
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdInOrderByActionAtAsc(any()))
+                .thenReturn(List.of());
+
+        invoiceService.getApprovalWorkspaceInvoices();
+
+        verify(invoiceApprovalHistoryRepository, times(1))
+                .findByInvoiceIdInOrderByActionAtAsc(any());
+        verify(invoiceApprovalHistoryRepository, never())
+                .findByInvoiceIdOrderByActionAtAsc(any());
+        verify(invoiceApprovalHistoryRepository, never())
+                .findTopByInvoiceIdAndActionOrderByActionAtDesc(any(), any());
+    }
+
+    // WORKSPACE CASE 9 — The existing pending-approval endpoint is unaffected: still only PENDING_APPROVAL.
+    @Test
+    void getPendingApprovalInvoices_stillReturnsOnlyPendingApprovalAfterWorkspaceAddition() {
+        Invoice pending = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        pending.setInvoiceId(UUID.randomUUID());
+        pending.setStatus(InvoiceStatus.PENDING_APPROVAL);
+
+        when(invoiceRepository.findAllByStatusOrderByGeneratedAtDesc(InvoiceStatus.PENDING_APPROVAL))
+                .thenReturn(List.of(pending));
+        when(invoiceApprovalHistoryRepository.findTopByInvoiceIdAndActionOrderByActionAtDesc(any(), any()))
+                .thenReturn(Optional.empty());
+
+        List<InvoiceApprovalSummaryResponseDto> response = invoiceService.getPendingApprovalInvoices();
+
+        assertThat(response).hasSize(1);
+        assertThat(response.get(0).getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        // The workspace's EXISTS-based query is never touched by the pending-approval endpoint.
+        verify(invoiceRepository, never()).findAllInApprovalWorkflowOrderByGeneratedAtDesc();
+    }
+
+    // WORKSPACE CASE 10 — The existing submit/approve flow is unaffected by the new endpoint's
+    // presence: submitForApproval and approveInvoice behave exactly as before.
+    @Test
+    void submitAndApprove_stillWorkExactlyAsBeforeAfterWorkspaceAddition() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.GENERATED);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        InvoiceResponseDto submitted = invoiceService.submitForApproval(invoiceId);
+        assertThat(submitted.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        InvoiceResponseDto approved = invoiceService.approveInvoice(invoiceId);
+        assertThat(approved.getStatus()).isEqualTo(InvoiceStatus.APPROVED);
+
+        verify(invoiceApprovalHistoryRepository, times(2)).save(any(InvoiceApprovalHistory.class));
+        verifyNoInteractions(billingSnapshotRepository);
+        verifyNoInteractions(taxCalculationRepository);
     }
 }
