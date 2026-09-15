@@ -3,13 +3,18 @@ package com.AccountReceivableManagement.service_Imple.invoice_generation;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalHistoryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalSummaryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalWorkspaceResponseDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceNonFinancialCorrectionRequestDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceRejectionRequestDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceSummaryResponseDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceTaxComponentResponseDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshotItem;
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceApprovalHistory;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceItem;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceTaxComponent;
 import com.AccountReceivableManagement.entity.projectbilling_config.PaymentTermsMaster;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculationComponent;
@@ -607,7 +612,7 @@ class InvoiceServiceImplTest {
         verifyNoInteractions(invoiceApprovalHistoryRepository);
     }
 
-    // SUBMIT CASE 3/4/5 — Only GENERATED can be submitted.
+    // SUBMIT CASE 3/4 — Only GENERATED and REJECTED can be submitted.
     @Test
     void submitForApproval_pendingApprovalInvoice_throwsValidationException() {
         assertSubmitRejected(InvoiceStatus.PENDING_APPROVAL);
@@ -616,11 +621,6 @@ class InvoiceServiceImplTest {
     @Test
     void submitForApproval_approvedInvoice_throwsValidationException() {
         assertSubmitRejected(InvoiceStatus.APPROVED);
-    }
-
-    @Test
-    void submitForApproval_rejectedInvoice_throwsValidationException() {
-        assertSubmitRejected(InvoiceStatus.REJECTED);
     }
 
     private void assertSubmitRejected(InvoiceStatus currentStatus) {
@@ -635,11 +635,272 @@ class InvoiceServiceImplTest {
 
         assertThatThrownBy(() -> invoiceService.submitForApproval(invoiceId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessage("Only invoices with status GENERATED can be submitted for approval.");
+                .hasMessage("Only invoices with status GENERATED or REJECTED can be submitted for approval.");
 
         assertThat(invoice.getStatus()).isEqualTo(currentStatus);
         verify(invoiceRepository, never()).save(any());
         verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // =====================================================================
+    // Invoice Rejection — Phase 2: PENDING_APPROVAL -> REJECTED -> (correction)
+    // -> PENDING_APPROVAL (resubmission) -> APPROVED
+    // =====================================================================
+
+    // SUBMIT CASE 5 — A REJECTED invoice can be resubmitted for approval after correction.
+    @Test
+    void submitForApproval_rejectedInvoice_transitionsToPendingApprovalAndRecordsNewSubmittedHistory() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        // A correction refresh (CORRECTED) already occurred after the latest REJECTED
+        // entry, so Phase 2B's resubmission guard is satisfied.
+        LocalDateTime rejectedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        LocalDateTime correctedAt = LocalDateTime.of(2026, 9, 9, 10, 30);
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenReturn(List.of(
+                        historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.REJECTED, rejectedAt),
+                        historyEntry(invoiceId, InvoiceStatus.REJECTED, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.CORRECTED, correctedAt)
+                ));
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.submitForApproval(invoiceId);
+
+        assertThat(response.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        // Financial fields remain untouched - no invoice-amount editing occurs on resubmission.
+        assertThat(response.getSubtotal()).isEqualByComparingTo("5500.00");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo("6490.00");
+        verifyNoInteractions(billingSnapshotRepository);
+        verifyNoInteractions(taxCalculationRepository);
+
+        ArgumentCaptor<InvoiceApprovalHistory> historyCaptor = ArgumentCaptor.forClass(InvoiceApprovalHistory.class);
+        verify(invoiceApprovalHistoryRepository).save(historyCaptor.capture());
+        InvoiceApprovalHistory history = historyCaptor.getValue();
+        assertThat(history.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
+        assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+    }
+
+    // REJECT CASE 1 — PENDING_APPROVAL invoice rejects successfully and records history.
+    @Test
+    void rejectInvoice_pendingApprovalInvoice_transitionsToRejectedAndRecordsHistory() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.PENDING_APPROVAL);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        InvoiceRejectionRequestDto request = InvoiceRejectionRequestDto.builder()
+                .reason("Billing hours are incorrect for the selected period.")
+                .build();
+
+        InvoiceResponseDto response = invoiceService.rejectInvoice(invoiceId, request);
+
+        // Status transition.
+        assertThat(response.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+
+        // Financial values are never touched by rejection.
+        assertThat(response.getSubtotal()).isEqualByComparingTo("5500.00");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo("6490.00");
+        verifyNoInteractions(billingSnapshotRepository);
+        verifyNoInteractions(taxCalculationRepository);
+
+        verify(invoiceRepository, times(1)).save(invoice);
+
+        // Approval history recorded with the exact rejection reason.
+        ArgumentCaptor<InvoiceApprovalHistory> historyCaptor = ArgumentCaptor.forClass(InvoiceApprovalHistory.class);
+        verify(invoiceApprovalHistoryRepository).save(historyCaptor.capture());
+        InvoiceApprovalHistory history = historyCaptor.getValue();
+        assertThat(history.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.REJECTED);
+        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionAt()).isNotNull();
+        assertThat(history.getComment())
+                .isEqualTo("Billing hours are incorrect for the selected period.");
+    }
+
+    // REJECT CASE 2 — Null rejection reason is rejected.
+    @Test
+    void rejectInvoice_nullReason_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceRejectionRequestDto request = InvoiceRejectionRequestDto.builder()
+                .reason(null)
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.rejectInvoice(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Rejection reason is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // REJECT CASE 3 — Blank rejection reason is rejected.
+    @Test
+    void rejectInvoice_blankReason_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceRejectionRequestDto request = InvoiceRejectionRequestDto.builder()
+                .reason("")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.rejectInvoice(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Rejection reason is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // REJECT CASE 4 — Whitespace-only rejection reason is rejected.
+    @Test
+    void rejectInvoice_whitespaceOnlyReason_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceRejectionRequestDto request = InvoiceRejectionRequestDto.builder()
+                .reason("   ")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.rejectInvoice(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Rejection reason is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // REJECT CASE 5 — Invoice not found.
+    @Test
+    void rejectInvoice_invoiceNotFound_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
+
+        InvoiceRejectionRequestDto request = InvoiceRejectionRequestDto.builder()
+                .reason("Incorrect billing hours.")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.rejectInvoice(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Invoice could not be found.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // REJECT CASE 6/7/8 — Only PENDING_APPROVAL can be rejected.
+    @Test
+    void rejectInvoice_generatedInvoice_throwsValidationException() {
+        assertRejectRejected(InvoiceStatus.GENERATED);
+    }
+
+    @Test
+    void rejectInvoice_approvedInvoice_throwsValidationException() {
+        assertRejectRejected(InvoiceStatus.APPROVED);
+    }
+
+    @Test
+    void rejectInvoice_alreadyRejectedInvoice_throwsValidationException() {
+        assertRejectRejected(InvoiceStatus.REJECTED);
+    }
+
+    private void assertRejectRejected(InvoiceStatus currentStatus) {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(currentStatus);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        InvoiceRejectionRequestDto request = InvoiceRejectionRequestDto.builder()
+                .reason("Incorrect billing hours.")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.rejectInvoice(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Only invoices pending approval can be rejected.");
+
+        assertThat(invoice.getStatus()).isEqualTo(currentStatus);
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // FULL CYCLE — submit -> reject -> resubmit -> approve, preserving every history entry
+    // in chronological order (as required by the approval-history endpoint).
+    @Test
+    void fullRejectionAndResubmissionCycle_preservesEveryHistoryEntryInOrder() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.GENERATED);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // GENERATED -> PENDING_APPROVAL
+        invoiceService.submitForApproval(invoiceId);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        // PENDING_APPROVAL -> REJECTED
+        invoiceService.rejectInvoice(invoiceId, InvoiceRejectionRequestDto.builder()
+                .reason("Incorrect billing hours.")
+                .build());
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+
+        // REJECTED -> PENDING_APPROVAL (resubmission after correction)
+        invoiceService.submitForApproval(invoiceId);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        // PENDING_APPROVAL -> APPROVED
+        invoiceService.approveInvoice(invoiceId);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.APPROVED);
+
+        ArgumentCaptor<InvoiceApprovalHistory> historyCaptor = ArgumentCaptor.forClass(InvoiceApprovalHistory.class);
+        verify(invoiceApprovalHistoryRepository, times(4)).save(historyCaptor.capture());
+        List<InvoiceApprovalHistory> entries = historyCaptor.getAllValues();
+
+        assertThat(entries).hasSize(4);
+
+        assertThat(entries.get(0).getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
+        assertThat(entries.get(0).getPreviousStatus()).isEqualTo(InvoiceStatus.GENERATED);
+        assertThat(entries.get(0).getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        assertThat(entries.get(1).getAction()).isEqualTo(InvoiceApprovalAction.REJECTED);
+        assertThat(entries.get(1).getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(entries.get(1).getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(entries.get(1).getComment()).isEqualTo("Incorrect billing hours.");
+
+        assertThat(entries.get(2).getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
+        assertThat(entries.get(2).getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(entries.get(2).getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        assertThat(entries.get(3).getAction()).isEqualTo(InvoiceApprovalAction.APPROVED);
+        assertThat(entries.get(3).getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(entries.get(3).getNewStatus()).isEqualTo(InvoiceStatus.APPROVED);
+
+        // The original REJECTED history entry is untouched by the later resubmission/approval.
+        assertThat(entries.get(1).getComment()).isEqualTo("Incorrect billing hours.");
     }
 
     // APPROVE CASE 1 — PENDING_APPROVAL invoice approves successfully.
@@ -1036,5 +1297,913 @@ class InvoiceServiceImplTest {
         verify(invoiceApprovalHistoryRepository, times(2)).save(any(InvoiceApprovalHistory.class));
         verifyNoInteractions(billingSnapshotRepository);
         verifyNoInteractions(taxCalculationRepository);
+    }
+
+    // =====================================================================
+    // Invoice Correction — Phase 2B: refresh-after-correction
+    // =====================================================================
+
+    // REFRESH CASE 1/8/9/10/11/12/13/15 — A REJECTED invoice refreshes successfully:
+    // status stays REJECTED, invoiceId/invoiceNumber preserved, financial fields, line
+    // items, and tax components come from the authoritative BillingSnapshot/TaxCalculation,
+    // and a CORRECTED history entry is recorded.
+    @Test
+    void refreshAfterCorrection_rejectedInvoice_refreshesFinancialSnapshotAndRecordsCorrectedHistory() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-STALE", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        // The invoice's frozen line items/tax components are stale (pre-correction) -
+        // refresh must replace them entirely from the authoritative snapshot/tax calculation.
+        invoice.getItems().add(InvoiceItem.builder()
+                .invoiceItemId(UUID.randomUUID())
+                .invoice(invoice)
+                .itemType(BillingItemType.TIME_ENTRY)
+                .itemName("Stale Line Item")
+                .amount(new BigDecimal("999.00"))
+                .build());
+        invoice.getTaxComponents().add(InvoiceTaxComponent.builder()
+                .invoiceTaxComponentId(UUID.randomUUID())
+                .invoice(invoice)
+                .taxTypeId(UUID.randomUUID())
+                .taxTypeCode("STALE")
+                .taxTypeName("Stale Tax")
+                .appliedRate(new BigDecimal("1.0000"))
+                .taxAmount(new BigDecimal("9.00"))
+                .applicabilityType(TaxApplicabilityType.ALL)
+                .build());
+
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.INVOICED); // realistic post-generation state
+        TaxCalculation taxCalculation = completedTaxCalculation();
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.refreshAfterCorrection(invoiceId);
+
+        // Status stays REJECTED - correction alone never advances the workflow.
+        assertThat(response.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+
+        // Business identity preserved.
+        assertThat(response.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(response.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+        assertThat(invoice.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(invoice.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+
+        // Financial fields refreshed from the authoritative TaxCalculation.
+        assertThat(response.getSubtotal()).isEqualByComparingTo("5500.00");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo("6490.00");
+        assertThat(response.getBillingSnapshotNumber()).isEqualTo("BS-20260908164549");
+        assertThat(response.getBillingPeriodStart()).isEqualTo(LocalDate.of(2026, 6, 1));
+        assertThat(response.getBillingPeriodEnd()).isEqualTo(LocalDate.of(2026, 8, 30));
+        assertThat(response.getDueDate()).isEqualTo(response.getInvoiceDate().plusDays(30));
+
+        // Line items replaced entirely - the stale item is gone.
+        assertThat(response.getItems()).hasSize(1);
+        assertThat(response.getItems().get(0).getItemName()).isEqualTo("Backend Development");
+        assertThat(response.getItems()).noneMatch(i -> "Stale Line Item".equals(i.getItemName()));
+
+        // Tax components replaced entirely - the stale component is gone.
+        assertThat(response.getTaxComponents()).hasSize(2);
+        assertThat(response.getTaxComponents())
+                .extracting(InvoiceTaxComponentResponseDto::getTaxTypeCode)
+                .containsExactlyInAnyOrder("CGST", "SGST");
+
+        // No tax recalculation - TaxCalculation is only ever read, never saved.
+        verify(taxCalculationRepository, never()).save(any());
+
+        // CORRECTED history entry recorded, status unchanged in the record itself.
+        ArgumentCaptor<InvoiceApprovalHistory> historyCaptor = ArgumentCaptor.forClass(InvoiceApprovalHistory.class);
+        verify(invoiceApprovalHistoryRepository, times(1)).save(historyCaptor.capture());
+        InvoiceApprovalHistory history = historyCaptor.getValue();
+        assertThat(history.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.CORRECTED);
+        assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getComment()).isEqualTo("Invoice refreshed from corrected billing/tax data.");
+    }
+
+    // REFRESH CASE 2/3/4 — Only REJECTED invoices can be refreshed.
+    @Test
+    void refreshAfterCorrection_generatedInvoice_throwsValidationException() {
+        assertRefreshRejected(InvoiceStatus.GENERATED);
+    }
+
+    @Test
+    void refreshAfterCorrection_pendingApprovalInvoice_throwsValidationException() {
+        assertRefreshRejected(InvoiceStatus.PENDING_APPROVAL);
+    }
+
+    @Test
+    void refreshAfterCorrection_approvedInvoice_throwsValidationException() {
+        assertRefreshRejected(InvoiceStatus.APPROVED);
+    }
+
+    private void assertRefreshRejected(InvoiceStatus currentStatus) {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(currentStatus);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        assertThatThrownBy(() -> invoiceService.refreshAfterCorrection(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Only rejected invoices can be refreshed after correction.");
+
+        assertThat(invoice.getStatus()).isEqualTo(currentStatus);
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+        verifyNoInteractions(billingSnapshotRepository);
+        verifyNoInteractions(taxCalculationRepository);
+    }
+
+    // REFRESH CASE — Invoice not found.
+    @Test
+    void refreshAfterCorrection_invoiceNotFound_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> invoiceService.refreshAfterCorrection(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Invoice could not be found.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // REFRESH CASE — BillingSnapshot has not completed tax calculation (e.g. still IN_TAX).
+    @Test
+    void refreshAfterCorrection_billingSnapshotNotTaxCompleted_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.IN_TAX);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+
+        assertThatThrownBy(() -> invoiceService.refreshAfterCorrection(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Invoice cannot be refreshed because this billing snapshot has not completed tax calculation.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+        verifyNoInteractions(taxCalculationRepository);
+    }
+
+    // REFRESH CASE — TaxCalculation missing for the snapshot.
+    @Test
+    void refreshAfterCorrection_taxCalculationMissing_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.INVOICED);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> invoiceService.refreshAfterCorrection(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("No tax calculation has been completed for this billing snapshot. Invoice cannot be refreshed.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // REFRESH CASE — TaxCalculation exists but has not completed successfully (FAILED).
+    @Test
+    void refreshAfterCorrection_taxCalculationFailed_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.INVOICED);
+        TaxCalculation taxCalculation = completedTaxCalculation();
+        taxCalculation.setStatus(TaxCalculationStatus.FAILED);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+
+        assertThatThrownBy(() -> invoiceService.refreshAfterCorrection(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Invoice cannot be refreshed because tax calculation has not completed successfully.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // REFRESH CASE — Inconsistent tax calculation totals are detected instead of silently accepted.
+    @Test
+    void refreshAfterCorrection_taxCalculationTotalsInconsistent_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.INVOICED);
+        TaxCalculation taxCalculation = completedTaxCalculation();
+        taxCalculation.setGrandTotal(new BigDecimal("9999.00")); // deliberately wrong
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+
+        assertThatThrownBy(() -> invoiceService.refreshAfterCorrection(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Tax calculation totals are inconsistent for this billing snapshot. Invoice cannot be refreshed.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // REFRESH CASE 20 — Transaction integrity: if persisting the refreshed invoice fails,
+    // no CORRECTED history entry is ever recorded (the audit trail cannot become
+    // inconsistent with what was actually persisted).
+    @Test
+    void refreshAfterCorrection_persistenceFails_noHistoryRecorded() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.INVOICED);
+        TaxCalculation taxCalculation = completedTaxCalculation();
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class)))
+                .thenThrow(new RuntimeException("unexpected database error"));
+
+        assertThatThrownBy(() -> invoiceService.refreshAfterCorrection(invoiceId))
+                .isInstanceOf(RuntimeException.class);
+
+        // The @Transactional boundary rolls back the in-memory field/item/component
+        // mutations at the database level; here we assert history is never even reached.
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // RESUBMISSION SAFETY CASE 1 — A REJECTED invoice with no correction refresh cannot resubmit.
+    @Test
+    void submitForApproval_rejectedInvoiceWithoutCorrectionRefresh_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        LocalDateTime rejectedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenReturn(List.of(
+                        historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.REJECTED, rejectedAt)
+                ));
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        assertThatThrownBy(() -> invoiceService.submitForApproval(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Invoice must be refreshed after correction before resubmission.");
+
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(billingSnapshotRepository);
+    }
+
+    // RESUBMISSION SAFETY CASE 2 — A correction refresh recorded *before* the latest
+    // rejection (i.e. belonging to an earlier rejection cycle) does not satisfy the
+    // newer rejection - resubmission must still be blocked.
+    @Test
+    void submitForApproval_correctionFromEarlierRejectionCycle_doesNotSatisfyNewerRejection() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        LocalDateTime firstRejectedAt = LocalDateTime.of(2026, 9, 9, 9, 0);
+        LocalDateTime firstCorrectedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        LocalDateTime secondRejectedAt = LocalDateTime.of(2026, 9, 9, 12, 0);
+
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenReturn(List.of(
+                        historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.REJECTED, firstRejectedAt),
+                        historyEntry(invoiceId, InvoiceStatus.REJECTED, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.CORRECTED, firstCorrectedAt),
+                        historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.REJECTED, secondRejectedAt)
+                ));
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        assertThatThrownBy(() -> invoiceService.submitForApproval(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Invoice must be refreshed after correction before resubmission.");
+
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        verify(invoiceRepository, never()).save(any());
+    }
+
+    // FULL CYCLE — GENERATED -> submit -> reject -> (blocked resubmit) -> refresh -> resubmit
+    // -> reject again -> (blocked resubmit) -> refresh -> resubmit -> approve, across two full
+    // rejection/correction cycles, driven entirely through the public service methods.
+    @Test
+    void fullCorrectionCycle_acrossTwoRejectionCycles_enforcesLatestCorrectionOnly() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.GENERATED);
+
+        List<InvoiceApprovalHistory> savedHistory = new ArrayList<>();
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(invoiceApprovalHistoryRepository.save(any(InvoiceApprovalHistory.class)))
+                .thenAnswer(inv -> {
+                    InvoiceApprovalHistory saved = inv.getArgument(0);
+                    savedHistory.add(saved);
+                    return saved;
+                });
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenAnswer(inv -> new ArrayList<>(savedHistory));
+
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.INVOICED);
+        TaxCalculation taxCalculation = completedTaxCalculation();
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+
+        // Cycle 1.
+        invoiceService.submitForApproval(invoiceId);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        invoiceService.rejectInvoice(invoiceId, InvoiceRejectionRequestDto.builder()
+                .reason("First rejection reason.")
+                .build());
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+
+        assertThatThrownBy(() -> invoiceService.submitForApproval(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Invoice must be refreshed after correction before resubmission.");
+
+        InvoiceResponseDto refreshed = invoiceService.refreshAfterCorrection(invoiceId);
+        assertThat(refreshed.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+
+        invoiceService.submitForApproval(invoiceId);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        // Cycle 2 - a second, independent rejection/correction cycle.
+        invoiceService.rejectInvoice(invoiceId, InvoiceRejectionRequestDto.builder()
+                .reason("Second rejection reason.")
+                .build());
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+
+        assertThatThrownBy(() -> invoiceService.submitForApproval(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Invoice must be refreshed after correction before resubmission.");
+
+        invoiceService.refreshAfterCorrection(invoiceId);
+        invoiceService.submitForApproval(invoiceId);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+
+        invoiceService.approveInvoice(invoiceId);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.APPROVED);
+
+        // Both rejection reasons preserved distinctly - the earlier REJECTED entry's
+        // comment is never overwritten by the later cycle.
+        List<InvoiceApprovalHistory> rejectedEntries = savedHistory.stream()
+                .filter(h -> h.getAction() == InvoiceApprovalAction.REJECTED)
+                .toList();
+        assertThat(rejectedEntries).hasSize(2);
+        assertThat(rejectedEntries.get(0).getComment()).isEqualTo("First rejection reason.");
+        assertThat(rejectedEntries.get(1).getComment()).isEqualTo("Second rejection reason.");
+
+        long correctedCount = savedHistory.stream()
+                .filter(h -> h.getAction() == InvoiceApprovalAction.CORRECTED)
+                .count();
+        assertThat(correctedCount).isEqualTo(2);
+
+        // Business identity preserved across every correction/resubmission cycle.
+        assertThat(invoice.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(invoice.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+    }
+
+    // WORKSPACE CASE — correctionRequired reflects history: true when REJECTED with no
+    // CORRECTED entry since the latest REJECTED entry, false once corrected.
+    @Test
+    void getApprovalWorkspaceInvoices_rejectedInvoices_correctionRequiredReflectsHistory() {
+        Invoice needsCorrection = persistedInvoice(
+                "INV-NEEDS-CORRECTION", "BS-1", UUID.randomUUID(), "Client One", "Project One");
+        needsCorrection.setInvoiceId(UUID.randomUUID());
+        needsCorrection.setStatus(InvoiceStatus.REJECTED);
+
+        Invoice corrected = persistedInvoice(
+                "INV-CORRECTED", "BS-2", UUID.randomUUID(), "Client Two", "Project Two");
+        corrected.setInvoiceId(UUID.randomUUID());
+        corrected.setStatus(InvoiceStatus.REJECTED);
+
+        LocalDateTime rejectedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        LocalDateTime correctedAt = LocalDateTime.of(2026, 9, 9, 11, 0);
+
+        InvoiceApprovalHistory needsCorrectionRejected = historyEntry(
+                needsCorrection.getInvoiceId(), InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                InvoiceApprovalAction.REJECTED, rejectedAt);
+
+        InvoiceApprovalHistory correctedRejected = historyEntry(
+                corrected.getInvoiceId(), InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                InvoiceApprovalAction.REJECTED, rejectedAt);
+        InvoiceApprovalHistory correctedCorrection = historyEntry(
+                corrected.getInvoiceId(), InvoiceStatus.REJECTED, InvoiceStatus.REJECTED,
+                InvoiceApprovalAction.CORRECTED, correctedAt);
+
+        when(invoiceRepository.findAllInApprovalWorkflowOrderByGeneratedAtDesc())
+                .thenReturn(List.of(needsCorrection, corrected));
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdInOrderByActionAtAsc(any()))
+                .thenReturn(List.of(needsCorrectionRejected, correctedRejected, correctedCorrection));
+
+        List<InvoiceApprovalWorkspaceResponseDto> response = invoiceService.getApprovalWorkspaceInvoices();
+
+        assertThat(response).hasSize(2);
+
+        InvoiceApprovalWorkspaceResponseDto needsCorrectionDto = response.stream()
+                .filter(dto -> dto.getInvoiceId().equals(needsCorrection.getInvoiceId()))
+                .findFirst().orElseThrow();
+        assertThat(needsCorrectionDto.isCorrectionRequired()).isTrue();
+        assertThat(needsCorrectionDto.getLastCorrectedAt()).isNull();
+
+        InvoiceApprovalWorkspaceResponseDto correctedDto = response.stream()
+                .filter(dto -> dto.getInvoiceId().equals(corrected.getInvoiceId()))
+                .findFirst().orElseThrow();
+        assertThat(correctedDto.isCorrectionRequired()).isFalse();
+        assertThat(correctedDto.getLastCorrectedAt()).isEqualTo(correctedAt);
+
+        // Still no per-invoice history query - bulk-fetched only.
+        verify(invoiceApprovalHistoryRepository, times(1)).findByInvoiceIdInOrderByActionAtAsc(any());
+        verify(invoiceApprovalHistoryRepository, never()).findByInvoiceIdOrderByActionAtAsc(any());
+    }
+
+    // WORKSPACE CASE — non-REJECTED statuses always report correctionRequired = false.
+    @Test
+    void getApprovalWorkspaceInvoices_approvedInvoice_correctionRequiredIsFalse() {
+        Invoice approved = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        approved.setInvoiceId(UUID.randomUUID());
+        approved.setStatus(InvoiceStatus.APPROVED);
+
+        when(invoiceRepository.findAllInApprovalWorkflowOrderByGeneratedAtDesc())
+                .thenReturn(List.of(approved));
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdInOrderByActionAtAsc(any()))
+                .thenReturn(List.of());
+
+        List<InvoiceApprovalWorkspaceResponseDto> response = invoiceService.getApprovalWorkspaceInvoices();
+
+        assertThat(response).hasSize(1);
+        assertThat(response.get(0).isCorrectionRequired()).isFalse();
+        assertThat(response.get(0).getLastCorrectedAt()).isNull();
+    }
+
+    // =====================================================================
+    // Invoice Correction — Phase 2C: non-financial correction
+    // (correctNonFinancialFields / PATCH /{invoiceId}/non-financial-correction)
+    // =====================================================================
+
+    // NON-FINANCIAL CORRECTION CASE 1/2/3/4/5/6/7/8/9/10 — A REJECTED invoice's clientName
+    // and projectName are updated (trimmed), status stays REJECTED, invoiceId/invoiceNumber
+    // are preserved, every financial value/relationship is untouched, the prior REJECTED
+    // history entry is preserved, a CORRECTED history entry is recorded, and
+    // correctionRequired becomes false once that CORRECTED entry exists.
+    @Test
+    void correctNonFinancialFields_rejectedInvoice_updatesClientAndProjectNameAndRecordsCorrectedHistory() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Stale Client Name", "Stale Project Name");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        LocalDateTime rejectedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        List<InvoiceApprovalHistory> savedHistory = new ArrayList<>(
+                List.of(historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                        InvoiceApprovalAction.REJECTED, rejectedAt))
+        );
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(invoiceApprovalHistoryRepository.save(any(InvoiceApprovalHistory.class)))
+                .thenAnswer(inv -> {
+                    InvoiceApprovalHistory saved = inv.getArgument(0);
+                    savedHistory.add(saved);
+                    return saved;
+                });
+        // Stateful, like a real repository: reflects the CORRECTED entry once it is saved,
+        // so correctionRequired is computed from what was actually persisted, not a stale read.
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenAnswer(inv -> new ArrayList<>(savedHistory));
+
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("  Corrected Client Name  ")
+                .projectName("  Corrected Project Name  ")
+                .build();
+
+        InvoiceResponseDto response = invoiceService.correctNonFinancialFields(invoiceId, request);
+
+        // clientName / projectName updated and trimmed - the only two fields changed.
+        assertThat(response.getClientName()).isEqualTo("Corrected Client Name");
+        assertThat(response.getProjectName()).isEqualTo("Corrected Project Name");
+        assertThat(invoice.getClientName()).isEqualTo("Corrected Client Name");
+        assertThat(invoice.getProjectName()).isEqualTo("Corrected Project Name");
+
+        // Status stays REJECTED - correction alone never advances the workflow.
+        assertThat(response.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+
+        // Business identity preserved.
+        assertThat(response.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(response.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+        assertThat(invoice.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(invoice.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+
+        // Every financial value and every other field/reference is untouched.
+        assertThat(response.getSubtotal()).isEqualByComparingTo("5500.00");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo("6490.00");
+        assertThat(response.getBillingSnapshotId()).isEqualTo(snapshotId);
+        assertThat(response.getBillingSnapshotNumber()).isEqualTo("BS-20260908164549");
+        assertThat(response.getTaxCalculationId()).isEqualTo(invoice.getTaxCalculationId());
+        assertThat(response.getClientId()).isEqualTo(invoice.getClientId());
+        assertThat(response.getProjectId()).isEqualTo(23L);
+        assertThat(response.getBillingPeriodStart()).isEqualTo(LocalDate.of(2026, 6, 1));
+        assertThat(response.getBillingPeriodEnd()).isEqualTo(LocalDate.of(2026, 8, 30));
+        assertThat(response.getCurrencyCode()).isEqualTo("USD");
+        assertThat(response.getPaymentTermCode()).isEqualTo("NET_30");
+        assertThat(response.getInvoiceDate()).isEqualTo(LocalDate.of(2026, 9, 9));
+        assertThat(response.getDueDate()).isEqualTo(LocalDate.of(2026, 10, 9));
+        assertThat(response.getItems()).isEmpty();
+        assertThat(response.getTaxComponents()).isEmpty();
+
+        // No financial correction path is invoked - not the BillingSnapshot/TaxCalculation flow.
+        verifyNoInteractions(billingSnapshotRepository);
+        verifyNoInteractions(taxCalculationRepository);
+        verifyNoInteractions(paymentTermsMasterRepository);
+
+        // correctionRequired becomes false once the CORRECTED entry exists - eligible for resubmission.
+        assertThat(response.isCorrectionRequired()).isFalse();
+        assertThat(response.getLastCorrectedAt()).isNotNull();
+
+        // CORRECTED history entry recorded; the prior REJECTED entry is preserved, not overwritten.
+        assertThat(savedHistory).hasSize(2);
+        assertThat(savedHistory.get(0).getAction()).isEqualTo(InvoiceApprovalAction.REJECTED);
+        InvoiceApprovalHistory history = savedHistory.get(1);
+        assertThat(history.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.CORRECTED);
+        assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getComment()).isEqualTo("Non-financial invoice correction completed.");
+    }
+
+    // NON-FINANCIAL CORRECTION CASE — Invoice not found.
+    @Test
+    void correctNonFinancialFields_invoiceNotFound_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
+
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("New Client")
+                .projectName("New Project")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Invoice could not be found.");
+
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // NON-FINANCIAL CORRECTION CASE 13/14/15 — Only REJECTED invoices can be corrected.
+    @Test
+    void correctNonFinancialFields_generatedInvoice_throwsValidationException() {
+        assertNonFinancialCorrectionRejectedForStatus(InvoiceStatus.GENERATED);
+    }
+
+    @Test
+    void correctNonFinancialFields_pendingApprovalInvoice_throwsValidationException() {
+        assertNonFinancialCorrectionRejectedForStatus(InvoiceStatus.PENDING_APPROVAL);
+    }
+
+    @Test
+    void correctNonFinancialFields_approvedInvoice_throwsValidationException() {
+        assertNonFinancialCorrectionRejectedForStatus(InvoiceStatus.APPROVED);
+    }
+
+    private void assertNonFinancialCorrectionRejectedForStatus(InvoiceStatus currentStatus) {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(currentStatus);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("New Client")
+                .projectName("New Project")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Only rejected invoices can be corrected.");
+
+        assertThat(invoice.getStatus()).isEqualTo(currentStatus);
+        assertThat(invoice.getClientName()).isEqualTo("Account Management");
+        assertThat(invoice.getProjectName()).isEqualTo("Website Redesign");
+        verify(invoiceRepository, never()).save(any());
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // NON-FINANCIAL CORRECTION CASE 19 — A REJECTED invoice already corrected since its
+    // latest rejection (correctionRequired already false) cannot be corrected again until
+    // a new rejection occurs. Mirrors the same cycle-aware guard used by submitForApproval.
+    @Test
+    void correctNonFinancialFields_alreadyCorrectedSinceLatestRejection_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        LocalDateTime rejectedAt = LocalDateTime.of(2026, 9, 9, 10, 0);
+        LocalDateTime correctedAt = LocalDateTime.of(2026, 9, 9, 11, 0);
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenReturn(List.of(
+                        historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.REJECTED, rejectedAt),
+                        historyEntry(invoiceId, InvoiceStatus.REJECTED, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.CORRECTED, correctedAt)
+                ));
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("New Client")
+                .projectName("New Project")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Invoice has already been corrected since its latest rejection. Wait for a new rejection before correcting again.");
+
+        assertThat(invoice.getClientName()).isEqualTo("Account Management");
+        assertThat(invoice.getProjectName()).isEqualTo("Website Redesign");
+        verify(invoiceRepository, never()).save(any());
+        verify(invoiceApprovalHistoryRepository, never()).save(any());
+    }
+
+    // NON-FINANCIAL CORRECTION CASE 16 — Null/blank clientName is rejected.
+    @Test
+    void correctNonFinancialFields_nullClientName_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName(null)
+                .projectName("Valid Project")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Client name is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    @Test
+    void correctNonFinancialFields_blankClientName_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("")
+                .projectName("Valid Project")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Client name is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // NON-FINANCIAL CORRECTION CASE 18 — Whitespace-only clientName is rejected.
+    @Test
+    void correctNonFinancialFields_whitespaceOnlyClientName_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("   ")
+                .projectName("Valid Project")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Client name is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // NON-FINANCIAL CORRECTION CASE 17 — Null/blank projectName is rejected.
+    @Test
+    void correctNonFinancialFields_nullProjectName_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("Valid Client")
+                .projectName(null)
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Project name is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    @Test
+    void correctNonFinancialFields_blankProjectName_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("Valid Client")
+                .projectName("")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Project name is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // NON-FINANCIAL CORRECTION CASE 18 — Whitespace-only projectName is rejected.
+    @Test
+    void correctNonFinancialFields_whitespaceOnlyProjectName_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("Valid Client")
+                .projectName("   ")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Project name is required.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // NON-FINANCIAL CORRECTION CASE 9 — clientName exceeding the 255-character column length
+    // is rejected as a 400 business error, not a 500 persistence failure.
+    @Test
+    void correctNonFinancialFields_clientNameTooLong_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("A".repeat(256))
+                .projectName("Valid Project")
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Client name must not exceed 255 characters.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    @Test
+    void correctNonFinancialFields_projectNameTooLong_throwsValidationException() {
+        UUID invoiceId = UUID.randomUUID();
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("Valid Client")
+                .projectName("A".repeat(256))
+                .build();
+
+        assertThatThrownBy(() -> invoiceService.correctNonFinancialFields(invoiceId, request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Project name must not exceed 255 characters.");
+
+        verifyNoInteractions(invoiceRepository);
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    // NON-FINANCIAL CORRECTION CASE 11/12 — FULL CYCLE: a REJECTED invoice is corrected
+    // (non-financial only) and then successfully resubmitted, recording the existing
+    // SUBMITTED history entry - proving the two correction paths (Phase 2B financial refresh
+    // and Phase 2C non-financial correction) both satisfy the same resubmission gate.
+    @Test
+    void correctNonFinancialFields_rejectedInvoice_canBeResubmittedAfterCorrection() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Stale Client Name", "Stale Project Name");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        List<InvoiceApprovalHistory> savedHistory = new ArrayList<>(
+                List.of(historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                        InvoiceApprovalAction.REJECTED, LocalDateTime.of(2026, 9, 9, 10, 0)))
+        );
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(invoiceApprovalHistoryRepository.save(any(InvoiceApprovalHistory.class)))
+                .thenAnswer(inv -> {
+                    InvoiceApprovalHistory saved = inv.getArgument(0);
+                    savedHistory.add(saved);
+                    return saved;
+                });
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenAnswer(inv -> new ArrayList<>(savedHistory));
+
+        InvoiceNonFinancialCorrectionRequestDto request = InvoiceNonFinancialCorrectionRequestDto.builder()
+                .clientName("Corrected Client Name")
+                .projectName("Corrected Project Name")
+                .build();
+
+        InvoiceResponseDto corrected = invoiceService.correctNonFinancialFields(invoiceId, request);
+        assertThat(corrected.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(corrected.isCorrectionRequired()).isFalse();
+
+        // Not auto-resubmitted - still REJECTED until submitForApproval is explicitly called.
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
+
+        InvoiceResponseDto resubmitted = invoiceService.submitForApproval(invoiceId);
+
+        assertThat(resubmitted.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        // Business identity and the corrected names survive resubmission.
+        assertThat(resubmitted.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(resubmitted.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+        assertThat(resubmitted.getClientName()).isEqualTo("Corrected Client Name");
+        assertThat(resubmitted.getProjectName()).isEqualTo("Corrected Project Name");
+
+        // SUBMITTED history entry recorded for the resubmission, with the correction-resubmission comment.
+        InvoiceApprovalHistory submittedEntry = savedHistory.get(savedHistory.size() - 1);
+        assertThat(submittedEntry.getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
+        assertThat(submittedEntry.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
+        assertThat(submittedEntry.getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+        assertThat(submittedEntry.getComment()).isEqualTo("Invoice resubmitted for approval after correction.");
+
+        // Full history preserved: REJECTED, CORRECTED, SUBMITTED - nothing lost or overwritten.
+        assertThat(savedHistory).extracting(InvoiceApprovalHistory::getAction)
+                .containsExactly(
+                        InvoiceApprovalAction.REJECTED,
+                        InvoiceApprovalAction.CORRECTED,
+                        InvoiceApprovalAction.SUBMITTED
+                );
     }
 }

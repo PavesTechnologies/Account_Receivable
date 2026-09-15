@@ -9,11 +9,32 @@
 -- components are copied as-is from billing_snapshot_item and
 -- tax_calculation_component respectively.
 --
--- Invoice status lifecycle (Phase 1 implements GENERATED -> PENDING_APPROVAL
--- -> APPROVED only; REJECTED is provisioned in the enum/model but not yet
--- reachable):
+-- Invoice status lifecycle (Phase 2 adds the REJECTED / resubmission cycle):
 --   GENERATED -> PENDING_APPROVAL -> APPROVED
---                                 -> REJECTED (future)
+--                                 -> REJECTED -> (correction) -> PENDING_APPROVAL -> APPROVED
+--
+-- Phase 2B adds a correction-refresh operation for a REJECTED invoice
+-- (POST /{invoiceId}/refresh-after-correction): it re-copies subtotal,
+-- total_tax_amount, grand_total, billing_period_*, currency_code,
+-- payment_term_code, due_date, invoice_item, and invoice_tax_component from
+-- the invoice's already-corrected, authoritative billing_snapshot /
+-- tax_calculation. invoice_id, invoice_number, and status (REJECTED) are
+-- never touched by it - no new invoice_number is generated and no row is
+-- added to this table. Resubmission (submit-for-approval) from REJECTED is
+-- only permitted once a CORRECTED history entry (see below) exists after
+-- the latest REJECTED entry for that invoice.
+--
+-- Phase 2C adds a non-financial correction operation for a REJECTED invoice
+-- (PATCH /{invoiceId}/non-financial-correction): it updates only
+-- client_name and project_name on the existing invoice row (both columns
+-- already exist - no schema change). invoice_id, invoice_number, status,
+-- and every financial column/relationship (subtotal, total_tax_amount,
+-- grand_total, invoice_item, invoice_tax_component, billing_snapshot_id,
+-- tax_calculation_id, billing period, currency, payment term, due date) are
+-- never touched by it. Like Phase 2B's refresh-after-correction, it records
+-- a CORRECTED (REJECTED -> REJECTED) history entry (distinguished only by
+-- its comment) so the same correctionRequired derivation and
+-- submit-for-approval gate apply to both correction paths.
 --
 -- NOTE: This project has no Flyway/Liquibase migration runner; schema is
 -- managed via `spring.jpa.hibernate.ddl-auto=update` (see application.properties).
@@ -88,13 +109,17 @@ CREATE TABLE IF NOT EXISTS invoice_tax_component (
     CONSTRAINT fk_invoice_tax_component_invoice FOREIGN KEY (invoice_id) REFERENCES invoice (invoice_id)
 );
 
--- Audit trail of Invoice status transitions (submit, approve - later
--- reject). No foreign key to invoice (invoice_id is a plain reference,
--- validated only at the application layer) - this table only records
--- history, it does not own or cascade with invoice, matching the
--- software_billing_history convention. comment stays nullable here even
--- though the future REJECTED action will require it - that requirement is
--- enforced at the service layer, not the schema.
+-- Audit trail of Invoice status transitions (submit, approve, reject,
+-- resubmit-after-rejection) plus CORRECTED, a REJECTED -> REJECTED entry
+-- recorded when a rejected invoice's financial snapshot is refreshed from
+-- corrected billing/tax data (status does not change). No foreign key to
+-- invoice (invoice_id is a plain reference, validated only at the
+-- application layer) - this table only records history, it does not own or
+-- cascade with invoice, matching the software_billing_history convention.
+-- comment stays nullable here even though REJECTED requires a non-blank
+-- value - that requirement is enforced at the service layer, not the
+-- schema. action/previous_status/new_status stay VARCHAR(20) - "CORRECTED"
+-- (9 chars) fits without any column-length change.
 CREATE TABLE IF NOT EXISTS invoice_approval_history (
     invoice_approval_history_id     CHAR(36)      NOT NULL,
     invoice_id                      CHAR(36)      NOT NULL,
