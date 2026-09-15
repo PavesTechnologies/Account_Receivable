@@ -59,4 +59,19 @@ public class InvoiceApprovalWorkspaceResponseDto {
     private InvoiceApprovalAction lastAction;
 
     private LocalDateTime lastActionAt;
+
+    /**
+     * {@code true} only when {@code status == REJECTED} and no correction
+     * refresh has occurred since the latest rejection. Always {@code false}
+     * for every other status. Derived from the already bulk-fetched
+     * {@code InvoiceApprovalHistory} - no extra per-invoice query.
+     */
+    private boolean correctionRequired;
+
+    /**
+     * Timestamp of the most recent {@code CORRECTED} approval-history entry,
+     * or {@code null} if this invoice has never been refreshed after a
+     * rejection.
+     */
+    private LocalDateTime lastCorrectedAt;
 }

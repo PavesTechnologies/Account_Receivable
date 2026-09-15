@@ -65,4 +65,20 @@ public class InvoiceResponseDto {
     private BigDecimal grandTotal;
 
     private LocalDateTime generatedAt;
+
+    /**
+     * {@code true} only when {@code status == REJECTED} and no correction
+     * refresh has occurred since the latest rejection - i.e. the invoice is
+     * not yet safe to resubmit. Always {@code false} for every other
+     * status. Derived from {@code InvoiceApprovalHistory}, never stored.
+     */
+    private boolean correctionRequired;
+
+    /**
+     * Timestamp of the most recent {@code CORRECTED} approval-history entry
+     * for this invoice, or {@code null} if it has never been refreshed
+     * after a rejection. Derived from {@code InvoiceApprovalHistory}, never
+     * stored on the invoice itself.
+     */
+    private LocalDateTime lastCorrectedAt;
 }

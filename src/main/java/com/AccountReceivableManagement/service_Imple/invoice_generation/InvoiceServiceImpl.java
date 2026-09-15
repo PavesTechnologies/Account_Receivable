@@ -4,6 +4,8 @@ import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalHis
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalSummaryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalWorkspaceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceItemResponseDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceNonFinancialCorrectionRequestDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceRejectionRequestDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceSummaryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceTaxComponentResponseDto;
@@ -20,6 +22,7 @@ import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculationComp
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceApprovalAction;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
+import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceApprovalHistoryRepository;
@@ -68,6 +71,37 @@ public class InvoiceServiceImpl implements InvoiceService {
      * used for {@code BillingSnapshot.createdBy}.
      */
     private static final String SYSTEM_ACTION_BY = "SYSTEM";
+
+    /**
+     * Recorded as the {@code SUBMITTED} history comment only when a
+     * previously {@code REJECTED} invoice is resubmitted, so the audit
+     * trail distinguishes a correction resubmission from the original
+     * {@code GENERATED -> PENDING_APPROVAL} submission (which keeps its
+     * existing {@code null} comment).
+     */
+    private static final String RESUBMISSION_COMMENT =
+            "Invoice resubmitted for approval after correction.";
+
+    /**
+     * Recorded as the {@code CORRECTED} history comment by
+     * {@link #correctNonFinancialFields(UUID, InvoiceNonFinancialCorrectionRequestDto)},
+     * distinct from the fixed comment {@link #refreshAfterCorrection(UUID)}
+     * records, so the audit trail can tell a non-financial correction apart
+     * from a financial (billing/tax) refresh even though both share the same
+     * {@code InvoiceApprovalAction.CORRECTED} action and satisfy the same
+     * {@code correctionRequired} check.
+     */
+    private static final String NON_FINANCIAL_CORRECTION_COMMENT =
+            "Non-financial invoice correction completed.";
+
+    /**
+     * Matches {@code Invoice.clientName}/{@code Invoice.projectName}'s
+     * {@code length = 255} column definition - kept here as an explicit
+     * service-layer guard since this project has no
+     * {@code MethodArgumentNotValidException} handler wired to return 400
+     * for a persistence-time value-too-long failure.
+     */
+    private static final int CLIENT_OR_PROJECT_NAME_MAX_LENGTH = 255;
 
     private final InvoiceRepository invoiceRepository;
 
@@ -137,7 +171,10 @@ public class InvoiceServiceImpl implements InvoiceService {
          * don't add up, invoice generation fails loudly instead of
          * silently "correcting" or recalculating anything.
          */
-        validateTaxCalculationConsistency(taxCalculation);
+        validateTaxCalculationConsistency(
+                taxCalculation,
+                "Tax calculation totals are inconsistent for this billing snapshot. Invoice cannot be generated."
+        );
 
         BillingConfigurationResponseDto configuration =
                 billingConfigurationService
@@ -339,16 +376,28 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 )
                         );
 
-        if (invoice.getStatus()
-                != InvoiceStatus.GENERATED) {
+        InvoiceStatus previousStatus = invoice.getStatus();
+
+        if (previousStatus != InvoiceStatus.GENERATED
+                && previousStatus != InvoiceStatus.REJECTED) {
 
             throw new GlobalExceptionHandler
                     .ValidationException(
-                    "Only invoices with status GENERATED can be submitted for approval."
+                    "Only invoices with status GENERATED or REJECTED can be submitted for approval."
             );
         }
 
-        InvoiceStatus previousStatus = invoice.getStatus();
+        if (previousStatus == InvoiceStatus.REJECTED
+                && resolveCorrectionState(
+                        invoiceId,
+                        InvoiceStatus.REJECTED
+                ).correctionRequired()) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Invoice must be refreshed after correction before resubmission."
+            );
+        }
 
         invoice.setStatus(InvoiceStatus.PENDING_APPROVAL);
 
@@ -359,10 +408,355 @@ public class InvoiceServiceImpl implements InvoiceService {
                 previousStatus,
                 InvoiceStatus.PENDING_APPROVAL,
                 InvoiceApprovalAction.SUBMITTED,
-                null
+                previousStatus == InvoiceStatus.REJECTED
+                        ? RESUBMISSION_COMMENT
+                        : null
         );
 
         return mapToResponse(saved);
+    }
+
+    @Override
+    public InvoiceResponseDto rejectInvoice(
+            UUID invoiceId,
+            InvoiceRejectionRequestDto request
+    ) {
+
+        if (request.getReason() == null
+                || request.getReason().isBlank()) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Rejection reason is required."
+            );
+        }
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Invoice could not be found."
+                                )
+                        );
+
+        if (invoice.getStatus()
+                != InvoiceStatus.PENDING_APPROVAL) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Only invoices pending approval can be rejected."
+            );
+        }
+
+        InvoiceStatus previousStatus = invoice.getStatus();
+
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        Invoice saved = invoiceRepository.save(invoice);
+
+        recordHistory(
+                saved.getInvoiceId(),
+                previousStatus,
+                InvoiceStatus.REJECTED,
+                InvoiceApprovalAction.REJECTED,
+                request.getReason()
+        );
+
+        return mapToResponse(saved);
+    }
+
+    @Override
+    public InvoiceResponseDto refreshAfterCorrection(
+            UUID invoiceId
+    ) {
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Invoice could not be found."
+                                )
+                        );
+
+        if (invoice.getStatus()
+                != InvoiceStatus.REJECTED) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Only rejected invoices can be refreshed after correction."
+            );
+        }
+
+        BillingSnapshot snapshot =
+                billingSnapshotRepository
+                        .findById(invoice.getBillingSnapshotId())
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Billing snapshot could not be found."
+                                )
+                        );
+
+        if (snapshot.getStatus() != BillingSnapshotStatus.TAX_COMPLETED
+                && snapshot.getStatus() != BillingSnapshotStatus.INVOICED) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Invoice cannot be refreshed because this billing snapshot has not completed tax calculation."
+            );
+        }
+
+        TaxCalculation taxCalculation =
+                taxCalculationRepository
+                        .findByBillingSnapshotId(
+                                invoice.getBillingSnapshotId()
+                        )
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "No tax calculation has been completed for this billing snapshot. Invoice cannot be refreshed."
+                                )
+                        );
+
+        if (taxCalculation.getStatus()
+                != TaxCalculationStatus.CALCULATED) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Invoice cannot be refreshed because tax calculation has not completed successfully."
+            );
+        }
+
+        validateTaxCalculationConsistency(
+                taxCalculation,
+                "Tax calculation totals are inconsistent for this billing snapshot. Invoice cannot be refreshed."
+        );
+
+        refreshInvoiceFromAuthoritativeData(invoice, snapshot, taxCalculation);
+
+        Invoice saved = invoiceRepository.save(invoice);
+
+        recordHistory(
+                saved.getInvoiceId(),
+                InvoiceStatus.REJECTED,
+                InvoiceStatus.REJECTED,
+                InvoiceApprovalAction.CORRECTED,
+                "Invoice refreshed from corrected billing/tax data."
+        );
+
+        return mapToResponse(saved);
+    }
+
+    /**
+     * Re-copies every financial field, line item, and tax component onto
+     * the existing, already-persisted Invoice from its authoritative
+     * BillingSnapshot/TaxCalculation - the same copy-as-is population used
+     * by {@link #generateInvoice(UUID)}, applied in place instead of to a
+     * newly built Invoice. {@code invoiceId}, {@code invoiceNumber}, and
+     * {@code status} are never touched here.
+     */
+    private void refreshInvoiceFromAuthoritativeData(
+            Invoice invoice,
+            BillingSnapshot snapshot,
+            TaxCalculation taxCalculation
+    ) {
+
+        invoice.setBillingSnapshotNumber(
+                snapshot.getSnapshotNumber()
+        );
+        invoice.setTaxCalculationId(
+                taxCalculation.getTaxCalculationId()
+        );
+        invoice.setBillingPeriodStart(
+                snapshot.getBillingPeriodStart()
+        );
+        invoice.setBillingPeriodEnd(
+                snapshot.getBillingPeriodEnd()
+        );
+        invoice.setCurrencyCode(snapshot.getCurrencyCode());
+        invoice.setPaymentTermCode(
+                snapshot.getPaymentTermCode()
+        );
+        invoice.setSubtotal(
+                taxCalculation.getTaxableAmount()
+        );
+        invoice.setTotalTaxAmount(
+                taxCalculation.getTotalTaxAmount()
+        );
+        invoice.setGrandTotal(
+                taxCalculation.getGrandTotal()
+        );
+        invoice.setDueDate(
+                resolveDueDate(
+                        snapshot,
+                        invoice.getInvoiceDate()
+                )
+        );
+
+        invoice.getItems().clear();
+
+        for (
+                BillingSnapshotItem snapshotItem
+                : snapshot.getItems()
+        ) {
+
+            invoice.getItems().add(
+                    InvoiceItem.builder()
+                            .invoice(invoice)
+                            .itemType(
+                                    snapshotItem.getItemType()
+                            )
+                            .itemName(
+                                    snapshotItem.getItemName()
+                            )
+                            .sourceReferenceId(
+                                    snapshotItem
+                                            .getSourceReferenceId()
+                            )
+                            .quantity(
+                                    snapshotItem.getQuantity()
+                            )
+                            .rate(snapshotItem.getRate())
+                            .amount(snapshotItem.getAmount())
+                            .workDate(
+                                    snapshotItem.getWorkDate()
+                            )
+                            .role(snapshotItem.getRole())
+                            .build()
+            );
+        }
+
+        invoice.getTaxComponents().clear();
+
+        for (
+                TaxCalculationComponent taxComponent
+                : taxCalculation.getComponents()
+        ) {
+
+            invoice.getTaxComponents().add(
+                    InvoiceTaxComponent.builder()
+                            .invoice(invoice)
+                            .taxTypeId(
+                                    taxComponent.getTaxTypeId()
+                            )
+                            .taxTypeCode(
+                                    taxComponent.getTaxTypeCode()
+                            )
+                            .taxTypeName(
+                                    taxComponent.getTaxTypeName()
+                            )
+                            .appliedRate(
+                                    taxComponent.getAppliedRate()
+                            )
+                            .taxAmount(
+                                    taxComponent.getTaxAmount()
+                            )
+                            .applicabilityType(
+                                    taxComponent
+                                            .getApplicabilityType()
+                            )
+                            .build()
+            );
+        }
+    }
+
+    @Override
+    public InvoiceResponseDto correctNonFinancialFields(
+            UUID invoiceId,
+            InvoiceNonFinancialCorrectionRequestDto request
+    ) {
+
+        String clientName = validateAndTrimName(
+                request.getClientName(),
+                "Client name is required.",
+                "Client name must not exceed "
+                        + CLIENT_OR_PROJECT_NAME_MAX_LENGTH
+                        + " characters."
+        );
+
+        String projectName = validateAndTrimName(
+                request.getProjectName(),
+                "Project name is required.",
+                "Project name must not exceed "
+                        + CLIENT_OR_PROJECT_NAME_MAX_LENGTH
+                        + " characters."
+        );
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Invoice could not be found."
+                                )
+                        );
+
+        if (invoice.getStatus()
+                != InvoiceStatus.REJECTED) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Only rejected invoices can be corrected."
+            );
+        }
+
+        if (!resolveCorrectionState(
+                invoiceId,
+                InvoiceStatus.REJECTED
+        ).correctionRequired()) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Invoice has already been corrected since its latest rejection. Wait for a new rejection before correcting again."
+            );
+        }
+
+        invoice.setClientName(clientName);
+        invoice.setProjectName(projectName);
+
+        Invoice saved = invoiceRepository.save(invoice);
+
+        recordHistory(
+                saved.getInvoiceId(),
+                InvoiceStatus.REJECTED,
+                InvoiceStatus.REJECTED,
+                InvoiceApprovalAction.CORRECTED,
+                NON_FINANCIAL_CORRECTION_COMMENT
+        );
+
+        return mapToResponse(saved);
+    }
+
+    /**
+     * Shared blank/length guard for {@code clientName}/{@code projectName}
+     * in {@link #correctNonFinancialFields(UUID, InvoiceNonFinancialCorrectionRequestDto)} -
+     * mirrors the manual validation style already used by
+     * {@link #rejectInvoice(UUID, InvoiceRejectionRequestDto)} rather than
+     * relying on {@code @Valid} binding.
+     */
+    private String validateAndTrimName(
+            String value,
+            String blankMessage,
+            String tooLongMessage
+    ) {
+
+        if (value == null || value.isBlank()) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(blankMessage);
+        }
+
+        String trimmed = value.trim();
+
+        if (trimmed.length() > CLIENT_OR_PROJECT_NAME_MAX_LENGTH) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(tooLongMessage);
+        }
+
+        return trimmed;
     }
 
     @Override
@@ -481,11 +875,13 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     /**
      * Defensive guard only - does not recompute anything. Fails invoice
-     * generation if the persisted TaxCalculation's own totals are internally
-     * inconsistent, rather than silently correcting them.
+     * generation (or, reused, invoice correction-refresh) if the persisted
+     * TaxCalculation's own totals are internally inconsistent, rather than
+     * silently correcting them.
      */
     private void validateTaxCalculationConsistency(
-            TaxCalculation taxCalculation
+            TaxCalculation taxCalculation,
+            String inconsistencyMessage
     ) {
 
         BigDecimal expectedGrandTotal =
@@ -498,7 +894,7 @@ public class InvoiceServiceImpl implements InvoiceService {
 
             throw new GlobalExceptionHandler
                     .ValidationException(
-                    "Tax calculation totals are inconsistent for this billing snapshot. Invoice cannot be generated."
+                    inconsistencyMessage
             );
         }
     }
@@ -593,6 +989,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                         )
                         .toList();
 
+        CorrectionState correctionState =
+                resolveCorrectionState(
+                        invoice.getInvoiceId(),
+                        invoice.getStatus()
+                );
+
         return InvoiceResponseDto.builder()
                 .invoiceId(invoice.getInvoiceId())
                 .invoiceNumber(invoice.getInvoiceNumber())
@@ -629,6 +1031,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .totalTaxAmount(invoice.getTotalTaxAmount())
                 .grandTotal(invoice.getGrandTotal())
                 .generatedAt(invoice.getGeneratedAt())
+                .correctionRequired(
+                        correctionState.correctionRequired()
+                )
+                .lastCorrectedAt(
+                        correctionState.lastCorrectedAt()
+                )
                 .build();
     }
 
@@ -785,6 +1193,11 @@ public class InvoiceServiceImpl implements InvoiceService {
             latestAction = entry;
         }
 
+        CorrectionState correctionState =
+                invoice.getStatus() == InvoiceStatus.REJECTED
+                        ? computeCorrectionState(history)
+                        : new CorrectionState(false, null);
+
         return InvoiceApprovalWorkspaceResponseDto.builder()
                 .invoiceId(invoice.getInvoiceId())
                 .invoiceNumber(invoice.getInvoiceNumber())
@@ -827,6 +1240,91 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 ? latestAction.getActionAt()
                                 : null
                 )
+                .correctionRequired(
+                        correctionState.correctionRequired()
+                )
+                .lastCorrectedAt(
+                        correctionState.lastCorrectedAt()
+                )
                 .build();
+    }
+
+    /**
+     * {@code correctionRequired} is {@code true} only when the invoice is
+     * currently {@code REJECTED} and no {@code CORRECTED} history entry has
+     * been recorded since the latest {@code REJECTED} entry - i.e. a prior
+     * correction from an earlier rejection cycle does not satisfy a newer
+     * rejection (see {@link #submitForApproval(UUID)}). Fetches history
+     * itself - only called for a {@code REJECTED} invoice, so this is a
+     * single extra query on an already-infrequent path, never inside a bulk
+     * listing.
+     */
+    private CorrectionState resolveCorrectionState(
+            UUID invoiceId,
+            InvoiceStatus status
+    ) {
+
+        if (status != InvoiceStatus.REJECTED) {
+            return new CorrectionState(false, null);
+        }
+
+        return computeCorrectionState(
+                invoiceApprovalHistoryRepository
+                        .findByInvoiceIdOrderByActionAtAsc(invoiceId)
+        );
+    }
+
+    /**
+     * Pure computation over an already-fetched, ascending-by-actionAt
+     * history list - used both by {@link #resolveCorrectionState(UUID,
+     * InvoiceStatus)} (single-invoice paths) and by
+     * {@link #mapToWorkspaceSummary(Invoice, List)} (which already
+     * bulk-fetches history for every returned invoice, so no extra query is
+     * incurred there).
+     */
+    private CorrectionState computeCorrectionState(
+            List<InvoiceApprovalHistory> historyAscendingByActionAt
+    ) {
+
+        LocalDateTime latestRejectionAt = null;
+        LocalDateTime latestCorrectionAt = null;
+
+        for (
+                InvoiceApprovalHistory entry
+                : historyAscendingByActionAt
+        ) {
+
+            if (entry.getAction()
+                    == InvoiceApprovalAction.REJECTED) {
+                latestRejectionAt = entry.getActionAt();
+            } else if (entry.getAction()
+                    == InvoiceApprovalAction.CORRECTED) {
+                latestCorrectionAt = entry.getActionAt();
+            }
+        }
+
+        boolean correctionRequired =
+                latestRejectionAt != null
+                        && (latestCorrectionAt == null
+                        || latestCorrectionAt.isBefore(
+                                latestRejectionAt
+                        ));
+
+        return new CorrectionState(
+                correctionRequired,
+                latestCorrectionAt
+        );
+    }
+
+    /**
+     * {@code lastCorrectedAt} is the most recent {@code CORRECTED} entry's
+     * {@code actionAt} regardless of cycle - purely informational - while
+     * {@code correctionRequired} is the authoritative, cycle-aware
+     * readiness flag actually enforced by {@link #submitForApproval(UUID)}.
+     */
+    private record CorrectionState(
+            boolean correctionRequired,
+            LocalDateTime lastCorrectedAt
+    ) {
     }
 }
