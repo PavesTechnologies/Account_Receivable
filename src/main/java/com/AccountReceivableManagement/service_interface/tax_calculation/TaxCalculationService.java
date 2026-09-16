@@ -13,5 +13,14 @@ public interface TaxCalculationService {
      */
     TaxCalculationResponseDto calculateTax(UUID billingSnapshotId);
 
+    /**
+     * Calculates tax for the given billing schedule (Fixed Price or Recurring)
+     * and persists the result. The schedule must be in {@code TAX_PENDING}
+     * status; on success the schedule transitions to {@code TAX_CALCULATED}.
+     */
+    TaxCalculationResponseDto calculateTaxForSchedule(UUID billingScheduleId);
+
     TaxCalculationResponseDto getTaxCalculationBySnapshotId(UUID billingSnapshotId);
+
+    TaxCalculationResponseDto getTaxCalculationByScheduleId(UUID billingScheduleId);
 }

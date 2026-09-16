@@ -53,10 +53,15 @@ public class TaxCalculation {
 
     @Column(
             name = "billing_snapshot_id",
-            nullable = false,
             unique = true
     )
     private UUID billingSnapshotId;
+
+    @Column(
+            name = "billing_schedule_id",
+            unique = true
+    )
+    private UUID billingScheduleId;
 
     @Column(
             name = "tax_region_id",

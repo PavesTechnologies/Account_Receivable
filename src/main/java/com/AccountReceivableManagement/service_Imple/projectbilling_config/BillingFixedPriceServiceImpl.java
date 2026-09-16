@@ -13,6 +13,7 @@ import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigu
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingFixedPriceRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingFixedPriceService;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,16 +24,18 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @Service
-@Transactional
 @AllArgsConstructor
 public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
     private final BillingFixedPriceRepository billingFixedPriceRepository;
     private final BillingConfigurationRepository billingConfigurationRepository;
+    private final BillingOccurrenceServiceImpl billingOccurrenceService;
 //    private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingConfigurationChangeTrackingService changeTrackingService;
 
     @Override
+    @Transactional
     public BillingFixedPriceResponseDto create(
             UUID billingConfigurationId,
             BillingFixedPriceRequestDto request) {
@@ -45,6 +48,30 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                                 ));
 
         validateBillingConfiguration(configuration);
+
+        // Validate that Billing Configuration has Billing Frequency set
+        if (configuration.getBillingFrequency() == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Frequency must be set on the Billing Configuration before creating Fixed Price configuration. " +
+                    "Please update the Billing Configuration with the selected Billing Frequency first."
+            );
+        }
+
+        // Validate frequency eligibility for the date range
+        LocalDate effectiveFrom = request.getEffectiveFrom() != null 
+                ? request.getEffectiveFrom() 
+                : configuration.getEffectiveFrom();
+        LocalDate effectiveTo = request.getEffectiveTo() != null 
+                ? request.getEffectiveTo() 
+                : configuration.getEffectiveTo();
+
+        if (!isFrequencyEligible(configuration.getBillingFrequency(), effectiveFrom, effectiveTo)) {
+            String frequencyName = configuration.getBillingFrequency().getBillingFrequencyName();
+            throw new GlobalExceptionHandler.ValidationException(
+                    String.format("%s billing frequency is not valid for the selected effective period because the contract does not contain a complete billing cycle.",
+                            frequencyName)
+            );
+        }
 
         if (billingFixedPriceRepository
                 .existsByBillingConfigurationAndIsActiveTrue(configuration)) {
@@ -98,10 +125,15 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
         configuration.setUpdatedAt(LocalDateTime.now());
         billingConfigurationRepository.save(configuration);
 
+        // Generate billing occurrences for Fixed Price
+        // This is mandatory - if it fails, the entire transaction should roll back
+        billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigurationId);
+
         return mapToResponse(saved);
     }
 
     @Override
+    @Transactional
     public BillingFixedPriceResponseDto update(
             UUID fixedPriceConfigurationId,
             BillingFixedPriceRequestDto request) {
@@ -120,6 +152,22 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
         validateBillingConfiguration(configuration);
 
         validateRequest(request);
+
+        // Validate frequency eligibility for the date range
+        LocalDate effectiveFrom = request.getEffectiveFrom() != null 
+                ? request.getEffectiveFrom() 
+                : configuration.getEffectiveFrom();
+        LocalDate effectiveTo = request.getEffectiveTo() != null 
+                ? request.getEffectiveTo() 
+                : configuration.getEffectiveTo();
+
+        if (!isFrequencyEligible(configuration.getBillingFrequency(), effectiveFrom, effectiveTo)) {
+            String frequencyName = configuration.getBillingFrequency().getBillingFrequencyName();
+            throw new GlobalExceptionHandler.ValidationException(
+                    String.format("%s billing frequency is not valid for the selected effective period because the contract does not contain a complete billing cycle.",
+                            frequencyName)
+            );
+        }
 
 //        // Capture previous state for audit before any changes
 //        BillingFixedPriceConfiguration previousFixedPrice = cloneFixedPriceConfiguration(fixedPrice);
@@ -164,9 +212,14 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
         
         // Handle approval state transition for the parent configuration
         handleApprovalStateTransition(configuration);
-        
+
         configuration.setUpdatedAt(LocalDateTime.now());
         billingConfigurationRepository.save(configuration);
+
+        // Reconcile billing occurrences on update
+        // This is mandatory - if it fails, the entire transaction should roll back
+        billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
+                configuration.getBillingConfigurationId());
 
 //        // Create audit record if transitioning from APPROVED
 //        if (previousConfiguration.getApprovalStatus() == ApprovalStatus.APPROVED &&
@@ -221,6 +274,7 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
     }
 
     @Override
+    @Transactional
     public void delete(UUID fixedPriceConfigurationId) {
 
         BillingFixedPriceConfiguration fixedPrice =
@@ -320,6 +374,17 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
         BigDecimal contractValue =
                 fixedPrice.getContractValue();
 
+        // Validate contract value is not null and is positive
+        if (contractValue == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Contract Value is required.");
+        }
+
+        if (contractValue.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Contract Value must be greater than zero.");
+        }
+
         BigDecimal retentionPercentage =
                 fixedPrice.getRetentionPercentage();
 
@@ -380,6 +445,50 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
         return value == null
                 ? BigDecimal.ZERO
                 : value;
+    }
+
+    /**
+     * Checks if a billing frequency is eligible for the given date range.
+     * A frequency is eligible if at least one complete billing cycle fits within the range.
+     * 
+     * @param frequency The billing frequency to check
+     * @param effectiveFrom The start date of the billing period
+     * @param effectiveTo The end date of the billing period
+     * @return true if the frequency is eligible, false otherwise
+     */
+    private boolean isFrequencyEligible(com.AccountReceivableManagement.entity.projectbilling_config.BillingFrequencyMaster frequency, 
+                                         LocalDate effectiveFrom, LocalDate effectiveTo) {
+        if (frequency == null || effectiveFrom == null || effectiveTo == null) {
+            return false;
+        }
+
+        String frequencyName = frequency.getBillingFrequencyName() != null 
+                ? frequency.getBillingFrequencyName().trim().toLowerCase() 
+                : "";
+
+        // One-Time is always eligible as long as dates are valid
+        if (frequencyName.equals("one-time")) {
+            return true;
+        }
+
+        com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit unit = frequency.getDurationUnit();
+        Integer durationValue = frequency.getDurationValue();
+
+        if (unit == null || durationValue == null || durationValue <= 0) {
+            return false;
+        }
+
+        // Calculate the end of the first complete cycle
+        LocalDate cycleEnd;
+        switch (unit) {
+            case DAYS -> cycleEnd = effectiveFrom.plusDays(durationValue - 1);
+            case MONTHS -> cycleEnd = effectiveFrom.plusMonths(durationValue).minusDays(1);
+            case YEARS -> cycleEnd = effectiveFrom.plusYears(durationValue).minusDays(1);
+            default -> cycleEnd = effectiveFrom;
+        }
+
+        // At least one complete cycle exists if cycleEnd <= effectiveTo
+        return !cycleEnd.isAfter(effectiveTo);
     }
 
     /**

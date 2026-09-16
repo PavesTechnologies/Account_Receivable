@@ -21,6 +21,8 @@ public class TaxCalculationResponseDto {
 
     private UUID billingSnapshotId;
 
+    private UUID billingScheduleId;
+
     private String snapshotNumber;
 
     private String projectName;

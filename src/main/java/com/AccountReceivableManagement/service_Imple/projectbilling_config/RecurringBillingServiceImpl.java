@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfi
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingFrequencyMaster;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.*;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
@@ -29,7 +30,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@Transactional
 @RequiredArgsConstructor
 public class RecurringBillingServiceImpl implements RecurringBillingService {
 
@@ -47,6 +47,16 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
 
     private final BillingPeriodCalculatorService
             billingPeriodCalculatorService;
+
+    private final BillingOccurrenceServiceImpl billingOccurrenceService;
+
+    private void validateConfigurationApproved(BillingConfiguration configuration) {
+        if (configuration.getApprovalStatus() != ApprovalStatus.APPROVED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Configuration must be APPROVED to generate Billing Schedules. Current status: " +
+                    configuration.getApprovalStatus());
+        }
+    }
 
 
     @Override
@@ -294,7 +304,13 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                 saved);
 
         /*
-         * 13. Return response
+         * 13. Generate billing occurrences using the new service
+         * This is mandatory - if it fails, the entire transaction should roll back
+         */
+        billingOccurrenceService.generateOccurrencesForRecurring(billingConfigurationId);
+
+        /*
+         * 14. Return response
          */
         return mapToResponse(saved);
     }
@@ -492,6 +508,11 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         generateBillingSchedule(
                 configuration,
                 saved);
+
+        // Reconcile billing occurrences on update
+        // This is mandatory - if it fails, the entire transaction should roll back
+        billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
+                configuration.getBillingConfigurationId());
 
         return mapToResponse(saved);
     }
@@ -722,6 +743,7 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
     }
 
     @Override
+    @Transactional
     public void delete(UUID recurringConfigurationId) {
 
         BillingRecurringConfiguration recurring =
@@ -797,6 +819,8 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             BillingConfiguration configuration,
             BillingRecurringConfiguration recurring) {
 
+        validateConfigurationApproved(configuration);
+
         LocalDate startDate = recurring.getRecurringStartDate();
 
         if (startDate == null) {
@@ -853,10 +877,12 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                             .periodNumber(periodDto.getPeriodNumber())
                             .periodStartDate(periodDto.getPeriodStartDate())
                             .periodEndDate(periodDto.getPeriodEndDate())
+                            .billingDate(periodDto.getPeriodEndDate())
                             .billingAmount(periodDto.getBillingAmount())
                             .scheduleType(BillingScheduleType.PRIMARY)
                             .isPartialPeriod(periodDto.getIsPartialPeriod())
-                            .periodStatus(BillingPeriodStatus.PENDING)
+                            .periodStatus(BillingPeriodStatus.SCHEDULED)
+                            .taxStatus(BillingPeriodStatus.PENDING)
                             .isInvoiced(false)
                             .isActive(true)
                             .createdAt(LocalDateTime.now())

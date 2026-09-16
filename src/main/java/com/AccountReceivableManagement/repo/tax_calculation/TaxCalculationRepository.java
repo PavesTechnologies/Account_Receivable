@@ -14,4 +14,11 @@ public interface TaxCalculationRepository extends JpaRepository<TaxCalculation, 
     findByBillingSnapshotId(UUID billingSnapshotId);
 
     boolean existsByBillingSnapshotId(UUID billingSnapshotId);
+
+    Optional<TaxCalculation>
+    findByBillingScheduleId(UUID billingScheduleId);
+
+    boolean existsByBillingScheduleId(UUID billingScheduleId);
+
+    void deleteByBillingScheduleId(UUID billingScheduleId);
 }
