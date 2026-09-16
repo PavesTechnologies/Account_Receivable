@@ -56,5 +56,6 @@ public class BillingAcquisitionValidator {
         }
 
         return ValidationResultDto.success(acquisitionResult);
+    
     }
 }
