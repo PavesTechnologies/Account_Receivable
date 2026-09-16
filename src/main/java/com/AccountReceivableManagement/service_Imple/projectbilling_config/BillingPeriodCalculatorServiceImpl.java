@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfi
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingFrequencyMaster;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingScheduleType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit;
@@ -37,6 +38,14 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
     private final BillingScheduleRepository billingScheduleRepository;
     private final BillingConfigurationRepository billingConfigurationRepository;
     private final BillingRecurringConfigurationRepository recurringConfigurationRepository;
+
+    private void validateConfigurationApproved(BillingConfiguration configuration) {
+        if (configuration.getApprovalStatus() != ApprovalStatus.APPROVED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Configuration must be APPROVED to modify Billing Schedules. Current status: " +
+                    configuration.getApprovalStatus());
+        }
+    }
 
     @Override
     public BillingScheduleCalculationResponseDto calculateBillingSchedule(
@@ -306,6 +315,8 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
                 .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                         "Billing Configuration not found."));
 
+        validateConfigurationApproved(configuration);
+
         BillingRecurringConfiguration recurring =
                 recurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(configuration)
                         .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
@@ -385,6 +396,8 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
         BillingConfiguration configuration = billingConfigurationRepository.findById(billingConfigurationId)
                 .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                         "Billing Configuration not found."));
+
+        validateConfigurationApproved(configuration);
 
         BillingRecurringConfiguration recurring =
                 recurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(configuration)

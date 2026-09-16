@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.*;
 import com.AccountReceivableManagement.entity_enums.client.RecordStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
@@ -81,12 +82,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Payment Term not found."));
 
-        BillingFrequencyMaster billingFrequency =
-                billingFrequencyRepository.findById(
-                                request.getBillingFrequencyId())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException(
-                                        "Billing Frequency not found."));
+        BillingFrequencyMaster billingFrequency = null;
+        if (request.getBillingFrequencyId() != null) {
+            billingFrequency =
+                    billingFrequencyRepository.findById(
+                                    request.getBillingFrequencyId())
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Billing Frequency not found."));
+        }
 
         TaxRegionMaster taxRegion =
                 taxRegionRepository.findById(
@@ -175,7 +179,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setBillingType(billingType);
         configuration.setCurrency(currency);
         configuration.setPaymentTerm(paymentTerm);
-        configuration.setBillingFrequency(billingFrequency);
+        if (billingFrequency != null) {
+            configuration.setBillingFrequency(billingFrequency);
+        }
         configuration.setTaxRegion(taxRegion);
 
         configuration.setExpenseBillingEligible(
@@ -1011,12 +1017,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Payment Term not found."));
 
-        BillingFrequencyMaster billingFrequency =
-                billingFrequencyRepository.findById(
-                                request.getBillingFrequencyId())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException(
-                                        "Billing Frequency not found."));
+        BillingFrequencyMaster billingFrequency = null;
+        if (request.getBillingFrequencyId() != null) {
+            billingFrequency =
+                    billingFrequencyRepository.findById(
+                                    request.getBillingFrequencyId())
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Billing Frequency not found."));
+        }
 
         TaxRegionMaster taxRegion =
                 taxRegionRepository.findById(
@@ -1064,7 +1073,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setBillingType(billingType);
         configuration.setCurrency(currency);
         configuration.setPaymentTerm(paymentTerm);
-        configuration.setBillingFrequency(billingFrequency);
+        if (billingFrequency != null) {
+            configuration.setBillingFrequency(billingFrequency);
+        }
         configuration.setTaxRegion(taxRegion);
 
         configuration.setExpenseBillingEligible(
@@ -1237,6 +1248,31 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         billingConfigurationRepository.save(
                 configuration);
+
+        /*
+         * Deactivate future/unprocessed billing occurrences.
+         * SCHEDULED and TAX_PENDING occurrences are set to inactive
+         * so they no longer appear in Tax Calculation queues.
+         * TAX_CALCULATED and INVOICED occurrences are preserved for audit/history.
+         * 
+         * This handles both:
+         * - Occurrences directly linked to BillingConfiguration (Fixed Price, Milestone, T&M)
+         * - Occurrences linked through RecurringConfiguration (Recurring/Subscription)
+         */
+        List<BillingSchedule> occurrencesToDeactivate = billingScheduleRepository
+                .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration)
+                .stream()
+                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED 
+                        || s.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING)
+                .toList();
+
+        for (BillingSchedule schedule : occurrencesToDeactivate) {
+            schedule.setIsActive(false);
+            billingScheduleRepository.save(schedule);
+        }
+
+        log.info("Deactivated {} billing occurrences for configuration {}", 
+                occurrencesToDeactivate.size(), billingConfigurationId);
     }
 
     @Transactional

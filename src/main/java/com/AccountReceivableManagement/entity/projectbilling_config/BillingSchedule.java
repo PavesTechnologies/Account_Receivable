@@ -11,7 +11,27 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "billing_schedule")
+@Table(
+        name = "billing_schedule",
+        uniqueConstraints = {
+                @UniqueConstraint(
+                        name = "uk_billing_schedule_period",
+                        columnNames = {
+                                "billing_configuration_id",
+                                "period_start_date",
+                                "period_end_date"
+                        }
+                ),
+                @UniqueConstraint(
+                        name = "uk_billing_schedule_recurring_period",
+                        columnNames = {
+                                "subscription_configuration_id",
+                                "period_start_date",
+                                "period_end_date"
+                        }
+                )
+        }
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -48,6 +68,9 @@ public class BillingSchedule {
     @Column(name = "period_end_date", nullable = false)
     private LocalDate periodEndDate;
 
+    @Column(name = "billing_date", nullable = false)
+    private LocalDate billingDate;
+
     @Column(name = "billing_amount", nullable = false, precision = 18, scale = 2)
     private BigDecimal billingAmount;
 
@@ -62,6 +85,11 @@ public class BillingSchedule {
     @Enumerated(EnumType.STRING)
     @Column(name = "period_status", nullable = false)
     private BillingPeriodStatus periodStatus;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "tax_status", nullable = false)
+    @Builder.Default
+    private BillingPeriodStatus taxStatus = BillingPeriodStatus.PENDING;
 
     @Column(name = "is_invoiced", nullable = false)
     @Builder.Default
