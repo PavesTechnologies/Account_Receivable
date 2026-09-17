@@ -1336,8 +1336,10 @@ class InvoiceServiceImplTest {
                 .applicabilityType(TaxApplicabilityType.ALL)
                 .build());
 
+        // Realistic pre-refresh state: the financial-correction flow has just
+        // rebuilt the snapshot (READY_FOR_TAX) and recalculated tax
+        // (TAX_COMPLETED) immediately before calling refreshAfterCorrection.
         BillingSnapshot snapshot = taxCompletedSnapshot();
-        snapshot.setStatus(BillingSnapshotStatus.INVOICED); // realistic post-generation state
         TaxCalculation taxCalculation = completedTaxCalculation();
 
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
@@ -1347,6 +1349,12 @@ class InvoiceServiceImplTest {
         when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
 
         InvoiceResponseDto response = invoiceService.refreshAfterCorrection(invoiceId);
+
+        // The BillingSnapshot lifecycle is restored to INVOICED now that the
+        // corrected invoice is refreshed and persisted - it must not be left
+        // stranded at TAX_COMPLETED while an active invoice exists.
+        assertThat(snapshot.getStatus()).isEqualTo(BillingSnapshotStatus.INVOICED);
+        verify(billingSnapshotRepository, times(1)).save(snapshot);
 
         // Status stays REJECTED - correction alone never advances the workflow.
         assertThat(response.getStatus()).isEqualTo(InvoiceStatus.REJECTED);
@@ -1730,6 +1738,12 @@ class InvoiceServiceImplTest {
         // Business identity preserved across every correction/resubmission cycle.
         assertThat(invoice.getInvoiceId()).isEqualTo(invoiceId);
         assertThat(invoice.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+
+        // The BillingSnapshot lifecycle must land back on INVOICED after each
+        // correction cycle, never stranded at TAX_COMPLETED while the invoice
+        // is active (approved, in this case).
+        assertThat(snapshot.getStatus()).isEqualTo(BillingSnapshotStatus.INVOICED);
+        verify(billingSnapshotRepository, times(2)).save(snapshot);
     }
 
     // WORKSPACE CASE — correctionRequired reflects history: true when REJECTED with no
@@ -1805,6 +1819,78 @@ class InvoiceServiceImplTest {
         assertThat(response).hasSize(1);
         assertThat(response.get(0).isCorrectionRequired()).isFalse();
         assertThat(response.get(0).getLastCorrectedAt()).isNull();
+    }
+
+    // =====================================================================
+    // isCorrectionRequired — shared derivation reused by Phase 2B's
+    // financial-correction/reacquisition orchestrator (and already by
+    // submitForApproval/correctNonFinancialFields internally).
+    // =====================================================================
+
+    @Test
+    void isCorrectionRequired_rejectedInvoiceNoCorrectionSinceRejection_returnsTrue() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenReturn(List.of(
+                        historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.REJECTED, LocalDateTime.of(2026, 9, 9, 10, 0))
+                ));
+
+        assertThat(invoiceService.isCorrectionRequired(invoiceId)).isTrue();
+    }
+
+    @Test
+    void isCorrectionRequired_rejectedInvoiceAlreadyCorrectedSinceRejection_returnsFalse() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceApprovalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoiceId))
+                .thenReturn(List.of(
+                        historyEntry(invoiceId, InvoiceStatus.PENDING_APPROVAL, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.REJECTED, LocalDateTime.of(2026, 9, 9, 10, 0)),
+                        historyEntry(invoiceId, InvoiceStatus.REJECTED, InvoiceStatus.REJECTED,
+                                InvoiceApprovalAction.CORRECTED, LocalDateTime.of(2026, 9, 9, 11, 0))
+                ));
+
+        assertThat(invoiceService.isCorrectionRequired(invoiceId)).isFalse();
+    }
+
+    @Test
+    void isCorrectionRequired_nonRejectedInvoice_returnsFalseWithoutQueryingHistory() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.GENERATED);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        assertThat(invoiceService.isCorrectionRequired(invoiceId)).isFalse();
+
+        verifyNoInteractions(invoiceApprovalHistoryRepository);
+    }
+
+    @Test
+    void isCorrectionRequired_invoiceNotFound_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> invoiceService.isCorrectionRequired(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Invoice could not be found.");
     }
 
     // =====================================================================

@@ -11,6 +11,7 @@ import com.AccountReceivableManagement.builder.billing_data_acquisition.BillingS
 import com.AccountReceivableManagement.builder.billing_data_acquisition.BillingSnapshotBuilderContext;
 import com.AccountReceivableManagement.dependency.billing_data_acquisition.ProjectMasterDataService;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
+import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshotItem;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.integration.billing_data_acquisition.BillingConfigurationIntegration;
@@ -21,6 +22,7 @@ import com.AccountReceivableManagement.strategy.billing_data_acquisition.Billing
 import com.AccountReceivableManagement.validator.billing_data_acquisition.BillingAcquisitionValidator;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -176,6 +178,83 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
 
         BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(snapshot, configuration);
         return ApiResponse.success("Billing Snapshot retrieved successfully.", responseDto);
+    }
+
+    /**
+     * Phase 2B financial correction - see the interface Javadoc. Re-fetches
+     * authoritative source data for the snapshot's own, already-known
+     * {@code billingConfigurationId} and billing period, validates it with
+     * the same {@link BillingAcquisitionValidator} used at first-time
+     * creation, and only then mutates the existing, already-persisted
+     * {@code BillingSnapshot} - never a new one. Validation failure leaves
+     * the snapshot completely untouched (no field is set before validation
+     * succeeds).
+     */
+    @Override
+    @Transactional
+    public BillingSnapshot rebuildBillingSnapshot(UUID billingSnapshotId) {
+
+        BillingSnapshot snapshot = billingSnapshotRepository.findById(billingSnapshotId)
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
+                        "Billing snapshot could not be found."));
+
+        BillingConfigurationResponseDto configuration =
+                billingConfigurationIntegration.getApprovedBillingConfigurationById(
+                        snapshot.getBillingConfigurationId());
+
+        if (configuration == null || !configuration.isApproved()) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Approved Billing Configuration not found.");
+        }
+
+        BillingAcquisitionStrategy strategy = resolveStrategy(configuration.getBillingType());
+        if (strategy == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing type " + configuration.getBillingType() + " is not yet supported.");
+        }
+
+        // Re-derived from the snapshot's own, already-frozen identity - never a
+        // project+period search, per the correction workflow's exact-snapshot contract.
+        BillingSnapshotCreateRequestDto request = BillingSnapshotCreateRequestDto.builder()
+                .projectId(snapshot.getProjectId())
+                .billingConfigurationId(snapshot.getBillingConfigurationId())
+                .billingPeriodStart(snapshot.getBillingPeriodStart())
+                .billingPeriodEnd(snapshot.getBillingPeriodEnd())
+                .build();
+
+        // The real TMS call happens here, for Time & Material - reusing the
+        // existing strategy exactly as first-time acquisition does.
+        BillingAcquisitionResultDto acquisitionResult = strategy.acquire(configuration, request);
+
+        ValidationResultDto validationResult = billingAcquisitionValidator.validate(acquisitionResult);
+        if (!validationResult.isSuccess()) {
+            // Nothing on the snapshot has been touched yet - fail closed.
+            throw new GlobalExceptionHandler.ValidationException(validationResult.getValidationMessage());
+        }
+
+        List<TimesheetDto> timesheets = validationResult.getAcquisitionResult().getTimesheets();
+        BillingAmountSummary amounts = calculateAmounts(timesheets);
+
+        List<BillingSnapshotItem> rebuiltItems = billingSnapshotBuilder.buildItems(timesheets);
+        rebuiltItems.forEach(item -> item.setBillingSnapshot(snapshot));
+
+        // Replace items in place - the managed collection's orphanRemoval mapping
+        // deletes what's cleared and inserts what's added, same pattern already
+        // used by InvoiceServiceImpl.refreshInvoiceFromAuthoritativeData().
+        snapshot.getItems().clear();
+        snapshot.getItems().addAll(rebuiltItems);
+
+        snapshot.setSubtotal(amounts.getSubtotal());
+        snapshot.setExpenseAmount(amounts.getExpenseAmount());
+        snapshot.setTotalAmount(amounts.getTotalAmount());
+
+        // Only for the correction workflow - lets the existing, unmodified
+        // TaxCalculationService.calculateTax(UUID) run again for this snapshot.
+        snapshot.setStatus(BillingSnapshotStatus.READY_FOR_TAX);
+        snapshot.setUpdatedBy("SYSTEM");
+        snapshot.setUpdatedDate(LocalDateTime.now());
+
+        return billingSnapshotRepository.save(snapshot);
     }
 
     /**

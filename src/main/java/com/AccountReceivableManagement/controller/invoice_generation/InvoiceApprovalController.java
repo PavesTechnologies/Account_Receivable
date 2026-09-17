@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalWor
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceNonFinancialCorrectionRequestDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceRejectionRequestDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
+import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceFinancialCorrectionService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -32,6 +33,8 @@ import java.util.UUID;
 public class InvoiceApprovalController {
 
     private final InvoiceService invoiceService;
+
+    private final InvoiceFinancialCorrectionService invoiceFinancialCorrectionService;
 
     @PostMapping("/{invoiceId}/submit-for-approval")
     public ResponseEntity<
@@ -149,6 +152,44 @@ public class InvoiceApprovalController {
                                         invoiceId,
                                         request
                                 )
+                        )
+                        .build()
+        );
+    }
+
+    /**
+     * Phase 2B financial correction - the "first mile" ahead of
+     * {@link #refreshAfterCorrection(UUID)}. Re-acquires authoritative
+     * source data (TMS, for Time &amp; Material), rebuilds the invoice's
+     * existing BillingSnapshot in place, recalculates its TaxCalculation,
+     * then calls the existing {@code refreshAfterCorrection(UUID)} to
+     * propagate the corrected figures onto the invoice. No request body:
+     * every financial value originates from re-acquired authoritative
+     * source data, never from the caller. The invoice stays
+     * {@code REJECTED} - the caller must still explicitly resubmit via
+     * {@link #submitForApproval(UUID)}. Separate from, and does not modify,
+     * Phase 2C's {@link #correctNonFinancialFields(UUID,
+     * InvoiceNonFinancialCorrectionRequestDto)}.
+     */
+    @PostMapping("/{invoiceId}/financial-correction/reacquire")
+    public ResponseEntity<
+            ApiResponse<InvoiceResponseDto>
+            > reacquireForFinancialCorrection(
+            @PathVariable UUID invoiceId
+    ) {
+
+        return ResponseEntity.ok(
+                ApiResponse
+                        .<InvoiceResponseDto>builder()
+                        .success(true)
+                        .message(
+                                "Invoice financial correction completed successfully."
+                        )
+                        .data(
+                                invoiceFinancialCorrectionService
+                                        .reacquireForFinancialCorrection(
+                                                invoiceId
+                                        )
                         )
                         .build()
         );

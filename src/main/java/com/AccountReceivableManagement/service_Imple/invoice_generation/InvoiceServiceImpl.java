@@ -536,6 +536,10 @@ public class InvoiceServiceImpl implements InvoiceService {
 
         refreshInvoiceFromAuthoritativeData(invoice, snapshot, taxCalculation);
 
+        snapshot.setStatus(BillingSnapshotStatus.INVOICED);
+
+        billingSnapshotRepository.save(snapshot);
+
         Invoice saved = invoiceRepository.save(invoice);
 
         recordHistory(
@@ -757,6 +761,27 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
 
         return trimmed;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isCorrectionRequired(
+            UUID invoiceId
+    ) {
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Invoice could not be found."
+                                )
+                        );
+
+        return resolveCorrectionState(
+                invoiceId,
+                invoice.getStatus()
+        ).correctionRequired();
     }
 
     @Override

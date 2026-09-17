@@ -92,6 +92,19 @@ public interface InvoiceService {
             InvoiceNonFinancialCorrectionRequestDto request
     );
 
+    /**
+     * {@code true} only when {@code invoiceId}'s current status is
+     * {@code REJECTED} and no {@code CORRECTED} approval-history entry has
+     * been recorded since its latest {@code REJECTED} entry - the same
+     * derivation {@link #submitForApproval(UUID)} and
+     * {@link #correctNonFinancialFields(UUID, InvoiceNonFinancialCorrectionRequestDto)}
+     * already enforce. Exposed so other correction-workflow orchestrators
+     * (e.g. Phase 2B financial-correction/reacquisition) can apply the same
+     * "already corrected since the latest rejection" guard without
+     * duplicating the history-based computation.
+     */
+    boolean isCorrectionRequired(UUID invoiceId);
+
     List<InvoiceApprovalHistoryResponseDto> getApprovalHistory(UUID invoiceId);
 
     /**

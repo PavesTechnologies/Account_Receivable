@@ -18,9 +18,16 @@ import java.util.List;
 @Component
 public class BillingSnapshotBuilder {
 
-    public BillingSnapshot build(BillingSnapshotBuilderContext context) {
-        List<TimesheetDto> timesheets = context.getAcquisitionResult().getTimesheets();
-
+    /**
+     * Maps acquired timesheets into unattached {@link BillingSnapshotItem}s -
+     * the same field mapping {@link #build(BillingSnapshotBuilderContext)}
+     * uses for first-time creation, extracted so a snapshot-rebuild path
+     * (Phase 2B financial correction) can reuse it verbatim against an
+     * already-persisted {@link BillingSnapshot} without going through this
+     * class's first-time-creation context. Callers own wiring
+     * {@code item.setBillingSnapshot(...)} themselves.
+     */
+    public List<BillingSnapshotItem> buildItems(List<TimesheetDto> timesheets) {
         List<BillingSnapshotItem> items = new ArrayList<>();
         for (TimesheetDto timesheet : timesheets) {
             items.add(BillingSnapshotItem.builder()
@@ -35,6 +42,13 @@ public class BillingSnapshotBuilder {
                     .role(timesheet.getRole())
                     .build());
         }
+        return items;
+    }
+
+    public BillingSnapshot build(BillingSnapshotBuilderContext context) {
+        List<TimesheetDto> timesheets = context.getAcquisitionResult().getTimesheets();
+
+        List<BillingSnapshotItem> items = buildItems(timesheets);
 
         BillingSnapshot snapshot = BillingSnapshot.builder()
                 .snapshotNumber(context.getSnapshotNumber())

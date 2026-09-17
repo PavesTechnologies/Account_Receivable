@@ -13,9 +13,8 @@ import java.util.UUID;
 
 /**
  * Response DTO for the Billing Data Acquisition overview table.
- * Phase 1: read-only view of ACTIVE billing configurations.
- * Status is fixed as "READY" and lastInvoice is null until
- * Phase 2 introduces the Billing Acquisition Record.
+ * Read-only view of ACTIVE billing configurations, with acquisition-level
+ * status and lastInvoice resolved from the matching Billing Acquisition Record.
  */
 @Getter
 @Setter
@@ -49,14 +48,20 @@ public class BillingDataAcquisitionResponseDto {
     private String currency;
 
     /**
-     * Start of the billing period (effectiveFrom).
+     * Start date of the billing period the user selected on Acquire Snapshot
+     * for the latest acquisition of this configuration. Null when the
+     * configuration has never been acquired. Never derived from the project
+     * or Billing Configuration's own validity/effective dates.
      * Serialized as ISO date string "YYYY-MM-DD".
      */
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
     private LocalDate billingPeriodStart;
 
     /**
-     * End of the billing period (effectiveTo).
+     * End date of the billing period the user selected on Acquire Snapshot
+     * for the latest acquisition of this configuration. Null when the
+     * configuration has never been acquired. Never derived from the project
+     * or Billing Configuration's own validity/effective dates.
      * Serialized as ISO date string "YYYY-MM-DD".
      */
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
@@ -69,14 +74,14 @@ public class BillingDataAcquisitionResponseDto {
     private String generationMode;
 
     /**
-     * Phase 1 fixed value: always "READY".
-     * Will be replaced by the acquisition lifecycle in Phase 2.
+     * Acquisition-level status ({@link com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingAcquisitionStatus}
+     * name), resolved from the matching Billing Acquisition Record.
+     * Defaults to "NOT_ACQUIRED" when no matching record exists yet.
      */
     private String status;
 
     /**
-     * Phase 1 fixed value: always null.
-     * Will be populated from the Billing Acquisition Record in Phase 2.
+     * Final invoice identifier from the matching Billing Acquisition Record, if any.
      * Included explicitly as null in JSON (not omitted) so the frontend
      * can rely on its presence.
      */
