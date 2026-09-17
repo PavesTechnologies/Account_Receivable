@@ -51,6 +51,9 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
 
     private void validateConfigurationApproved(BillingConfiguration configuration) {
+        log.warn("validateConfigurationApproved() called. Billing Configuration ID: {}, Current status: {}", 
+                configuration.getBillingConfigurationId(), configuration.getApprovalStatus());
+        
         if (configuration.getApprovalStatus() != ApprovalStatus.APPROVED) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Billing Configuration must be APPROVED to generate Billing Schedules. Current status: " +
@@ -64,6 +67,8 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
     public RecurringBillingResponseDto create(
             UUID billingConfigurationId,
             RecurringBillingRequestDto request) {
+
+        log.info("Creating recurring billing configuration for billing configuration: {}", billingConfigurationId);
 
         /*
          * 1. Get Billing Configuration
@@ -80,10 +85,12 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
          * Recurring configuration is created while
          * the parent Billing Configuration is being configured.
          */
+        log.info("Current approval status of billing configuration: {}", configuration.getApprovalStatus());
+        
         if (configuration.getApprovalStatus() != ApprovalStatus.DRAFT) {
 
             throw new GlobalExceptionHandler.ValidationException(
-                    "Recurring billing configuration can only be created while the billing configuration is in Draft.");
+                    "Recurring billing configuration can only be created while the billing configuration is in Draft. Current status: " + configuration.getApprovalStatus());
         }
 
         /*
@@ -296,21 +303,15 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         BillingRecurringConfiguration saved =
                 billingRecurringRepository.save(recurring);
 
-        /*
-         * 12. Generate Billing Schedule
-         */
-        generateBillingSchedule(
-                configuration,
-                saved);
+        log.info("Recurring billing configuration created successfully with ID: {}. Parent billing configuration status: {}. NO schedules generated - will be generated on approval.", 
+                saved.getRecurringConfigurationId(), configuration.getApprovalStatus());
 
         /*
-         * 13. Generate billing occurrences using the new service
-         * This is mandatory - if it fails, the entire transaction should roll back
-         */
-        billingOccurrenceService.generateOccurrencesForRecurring(billingConfigurationId);
-
-        /*
-         * 14. Return response
+         * 12. Return response
+         *
+         * IMPORTANT: Billing Schedule and Occurrences are NOT generated here.
+         * They will be generated when the parent Billing Configuration is APPROVED.
+         * This allows saving the recurring configuration while the parent is in DRAFT status.
          */
         return mapToResponse(saved);
     }
@@ -320,6 +321,8 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
     public RecurringBillingResponseDto update(
             UUID recurringConfigurationId,
             RecurringBillingRequestDto request) {
+
+        log.info("Updating recurring billing configuration with ID: {}", recurringConfigurationId);
 
         BillingRecurringConfiguration recurring =
                 billingRecurringRepository.findById(recurringConfigurationId)
@@ -334,6 +337,9 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             throw new GlobalExceptionHandler.ValidationException(
                     "Billing Configuration is not associated with this recurring configuration.");
         }
+
+        log.info("Parent billing configuration ID: {}, Current approval status: {}", 
+                configuration.getBillingConfigurationId(), configuration.getApprovalStatus());
 
         /*
          * Do NOT require the Billing Configuration to be APPROVED/ACTIVE here.
@@ -472,47 +478,66 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                 billingRecurringRepository.save(recurring);
 
         // ---------------------------------------------------------
-        // INVALIDATE OLD SCHEDULES
+        // GENERATE SCHEDULES AND OCCURRENCES (ONLY IF APPROVED)
         // ---------------------------------------------------------
 
-        List<BillingSchedule> existingSchedules =
-                billingScheduleRepository
-                        .findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
-                                saved);
+        /*
+         * Only generate/regenerate schedules and occurrences when the
+         * parent Billing Configuration is APPROVED.
+         *
+         * DRAFT/PENDING_APPROVAL/REJECTED:
+         *   - Save configuration changes only
+         *   - DO NOT generate schedules/occurrences
+         *
+         * APPROVED:
+         *   - Invalidate old schedules
+         *   - Generate new schedules
+         *   - Reconcile occurrences
+         */
+        log.info("Checking if schedule generation should occur. Parent approval status: {}", configuration.getApprovalStatus());
+        
+        if (configuration.getApprovalStatus() == ApprovalStatus.APPROVED) {
 
-        if (existingSchedules != null && !existingSchedules.isEmpty()) {
+            log.info("Configuration is APPROVED. Generating/regenerating billing schedules for recurring configuration: {}", saved.getRecurringConfigurationId());
 
-            LocalDateTime now = LocalDateTime.now();
+            // Invalidate old schedules
+            List<BillingSchedule> existingSchedules =
+                    billingScheduleRepository
+                            .findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
+                                    saved);
 
-            for (BillingSchedule schedule : existingSchedules) {
+            if (existingSchedules != null && !existingSchedules.isEmpty()) {
 
-                /*
-                 * Don't modify an already invoiced schedule.
-                 * It represents historical billing data.
-                 */
-                if (Boolean.TRUE.equals(schedule.getIsInvoiced())) {
-                    continue;
+                LocalDateTime now = LocalDateTime.now();
+
+                for (BillingSchedule schedule : existingSchedules) {
+
+                    /*
+                     * Don't modify an already invoiced schedule.
+                     * It represents historical billing data.
+                     */
+                    if (Boolean.TRUE.equals(schedule.getIsInvoiced())) {
+                        continue;
+                    }
+
+                    schedule.setIsActive(false);
+                    schedule.setUpdatedAt(now);
                 }
 
-                schedule.setIsActive(false);
-                schedule.setUpdatedAt(now);
+                billingScheduleRepository.saveAll(existingSchedules);
             }
 
-            billingScheduleRepository.saveAll(existingSchedules);
+            // Generate new schedule
+            generateBillingSchedule(
+                    configuration,
+                    saved);
+
+            // Reconcile billing occurrences on update
+            billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
+                    configuration.getBillingConfigurationId());
+        } else {
+            log.info("Configuration is NOT APPROVED (status: {}). Skipping schedule generation. Configuration saved successfully.", configuration.getApprovalStatus());
         }
-
-        // ---------------------------------------------------------
-        // GENERATE NEW SCHEDULE
-        // ---------------------------------------------------------
-
-        generateBillingSchedule(
-                configuration,
-                saved);
-
-        // Reconcile billing occurrences on update
-        // This is mandatory - if it fails, the entire transaction should roll back
-        billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
-                configuration.getBillingConfigurationId());
 
         return mapToResponse(saved);
     }
@@ -815,10 +840,13 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                 .build();
     }
 
-    private void generateBillingSchedule(
+    public void generateBillingSchedule(
             BillingConfiguration configuration,
             BillingRecurringConfiguration recurring) {
 
+        log.warn("generateBillingSchedule() called for recurring configuration: {}. Parent billing configuration ID: {}. Parent approval status: {}", 
+                recurring.getRecurringConfigurationId(), configuration.getBillingConfigurationId(), configuration.getApprovalStatus());
+        
         validateConfigurationApproved(configuration);
 
         LocalDate startDate = recurring.getRecurringStartDate();
@@ -857,6 +885,22 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         if (frequency == null) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Billing Frequency is required for recurring billing.");
+        }
+
+        /*
+         * Check if schedules already exist for this recurring configuration.
+         * If they do, skip generation to avoid duplicates.
+         */
+        List<BillingSchedule> existingSchedules =
+                billingScheduleRepository
+                        .findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
+                                recurring);
+
+        if (existingSchedules != null && !existingSchedules.isEmpty()) {
+            log.info(
+                    "Billing schedules already exist for recurring configuration {}. Skipping generation.",
+                    recurring.getRecurringConfigurationId());
+            return;
         }
 
         List<BillingPeriodDto> periods =

@@ -25,6 +25,7 @@
 
         private String projectName;
 
+        private String primaryLocation;
 
 
         private UUID billingTypeId;

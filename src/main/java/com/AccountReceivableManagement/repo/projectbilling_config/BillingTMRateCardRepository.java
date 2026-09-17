@@ -39,4 +39,6 @@ public interface BillingTMRateCardRepository extends JpaRepository<BillingTMRate
 
     long countByBillingConfigurationAndIsActiveTrue(
             BillingConfiguration billingConfiguration);
+
+    void deleteByBillingConfiguration(BillingConfiguration billingConfiguration);
 }
