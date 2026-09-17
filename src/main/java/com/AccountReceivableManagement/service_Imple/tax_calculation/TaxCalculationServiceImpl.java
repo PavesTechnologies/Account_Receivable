@@ -11,11 +11,13 @@ import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfigura
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculationComponent;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxApplicabilityType;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository;
@@ -65,7 +67,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
     private final TaxRegionMasterRepository taxRegionMasterRepository;
 
-    private final BillingConfigurationService billingConfigurationService;
+    private final BillingConfigurationRepository billingConfigurationRepository;
+
+//    private final BillingConfigurationService billingConfigurationService;
 
     @Override
     public TaxCalculationResponseDto calculateTax(
@@ -280,13 +284,17 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         billingSnapshotRepository.save(snapshot);
 
-        BillingConfigurationResponseDto
-                snapshotConfiguration =
-                billingConfigurationService
-                        .getBillingConfiguration(
-                                snapshot
-                                        .getBillingConfigurationId()
-                        );
+        BillingConfiguration snapshotBillingConfiguration =
+                billingConfigurationRepository.findById(
+                        snapshot.getBillingConfigurationId()
+                ).orElseThrow(() ->
+                        new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Billing configuration could not be found."
+                        )
+                );
+
+        BillingConfigurationResponseDto snapshotConfiguration =
+                mapBillingConfigurationToResponse(snapshotBillingConfiguration);
 
         return mapToResponse(
                 saved,
@@ -493,11 +501,17 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
         schedule.setTaxStatus(BillingPeriodStatus.TAX_CALCULATED);
         billingScheduleRepository.save(schedule);
 
+        BillingConfiguration billingConfiguration =
+                billingConfigurationRepository.findById(
+                        configuration.getBillingConfigurationId()
+                ).orElseThrow(() ->
+                        new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Billing configuration could not be found."
+                        )
+                );
+
         BillingConfigurationResponseDto configurationDto =
-                billingConfigurationService
-                        .getBillingConfiguration(
-                                configuration.getBillingConfigurationId()
-                        );
+                mapBillingConfigurationToResponse(billingConfiguration);
 
         return mapToResponseForSchedule(
                 saved,
@@ -536,13 +550,17 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                                 )
                         );
 
-        BillingConfigurationResponseDto
-                configuration =
-                billingConfigurationService
-                        .getBillingConfiguration(
-                                snapshot
-                                        .getBillingConfigurationId()
-                        );
+        BillingConfiguration billingConfiguration =
+                billingConfigurationRepository.findById(
+                        snapshot.getBillingConfigurationId()
+                ).orElseThrow(() ->
+                        new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Billing configuration could not be found."
+                        )
+                );
+
+        BillingConfigurationResponseDto configuration =
+                mapBillingConfigurationToResponse(billingConfiguration);
 
         return mapToResponse(
                 calculation,
@@ -893,6 +911,152 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                 .build();
     }
 
+    private BillingConfigurationResponseDto mapBillingConfigurationToResponse(
+            BillingConfiguration configuration) {
+
+        if (configuration == null) {
+            throw new GlobalExceptionHandler.ResourceNotFoundException(
+                    "Billing configuration could not be found."
+            );
+        }
+
+        return BillingConfigurationResponseDto.builder()
+
+                .billingConfigurationId(
+                        configuration.getBillingConfigurationId()
+                )
+
+                .clientId(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getClientId()
+                                : null
+                )
+
+                .clientName(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getClientName()
+                                : null
+                )
+
+                .projectId(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getPmsProjectId()
+                                : null
+                )
+
+                .projectName(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getProjectName()
+                                : null
+                )
+
+                .billingTypeId(
+                        configuration.getBillingType() != null
+                                ? configuration.getBillingType().getBillingTypeId()
+                                : null
+                )
+
+                .billingTypeName(
+                        configuration.getBillingType() != null
+                                ? configuration.getBillingType().getBillingTypeName()
+                                : null
+                )
+
+                .currencyId(
+                        configuration.getCurrency() != null
+                                ? configuration.getCurrency().getCurrencyId()
+                                : null
+                )
+
+                .currencyCode(
+                        configuration.getCurrency() != null
+                                ? configuration.getCurrency().getCurrencyCode()
+                                : null
+                )
+
+                .paymentTermId(
+                        configuration.getPaymentTerm() != null
+                                ? configuration.getPaymentTerm().getPaymentTermId()
+                                : null
+                )
+
+                .paymentTermName(
+                        configuration.getPaymentTerm() != null
+                                ? configuration.getPaymentTerm().getPaymentTermName()
+                                : null
+                )
+
+                .billingFrequencyId(
+                        configuration.getBillingFrequency() != null
+                                ? configuration.getBillingFrequency().getBillingFrequencyId()
+                                : null
+                )
+
+                .billingFrequencyName(
+                        configuration.getBillingFrequency() != null
+                                ? configuration.getBillingFrequency().getBillingFrequencyName()
+                                : null
+                )
+
+                .taxRegionId(
+                        configuration.getTaxRegion() != null
+                                ? configuration.getTaxRegion().getTaxRegionId()
+                                : null
+                )
+
+                .taxRegionName(
+                        configuration.getTaxRegion() != null
+                                ? configuration.getTaxRegion().getTaxRegionName()
+                                : null
+                )
+
+                .taxRegionCode(
+                        configuration.getTaxRegion() != null
+                                ? configuration.getTaxRegion().getTaxRegionCode()
+                                : null
+                )
+
+                .expenseBillingEligible(
+                        configuration.getExpenseBillingEligible()
+                )
+
+//                .status(
+//                        configuration.getBillingStatus()
+//                )
+
+                .effectiveFrom(
+                        configuration.getEffectiveFrom()
+                )
+
+                .effectiveTo(
+                        configuration.getEffectiveTo()
+                )
+
+//                .isActive(
+//                        configuration.getBillingStatus()
+//                                == BillingConfigurationStatus.ACTIVE
+//
+//                )
+
+                .rejectionReason(
+                        configuration.getRejectionReason()
+                )
+
+                .pricingModel(
+                        configuration.getPricingModel()
+                )
+
+                .invoiceGenerationType(
+                        configuration.getInvoiceGenerationType()
+                )
+
+                .hourlyRate(
+                        configuration.getHourlyRate()
+                )
+
+                .build();
+    }
+
     @Override
     @Transactional(readOnly = true)
     public TaxCalculationResponseDto getTaxCalculationByScheduleId(
@@ -917,12 +1081,18 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                                 )
                         );
 
+        BillingConfiguration billingConfiguration =
+                billingConfigurationRepository.findById(
+                        schedule.getBillingConfiguration()
+                                .getBillingConfigurationId()
+                ).orElseThrow(() ->
+                        new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Billing configuration could not be found."
+                        )
+                );
+
         BillingConfigurationResponseDto configuration =
-                billingConfigurationService
-                        .getBillingConfiguration(
-                                schedule.getBillingConfiguration()
-                                        .getBillingConfigurationId()
-                        );
+                mapBillingConfigurationToResponse(billingConfiguration);
 
         return mapToResponseForSchedule(
                 calculation,

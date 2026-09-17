@@ -228,4 +228,17 @@ public class BillingConfigurationController {
         );
     }
 
+    @GetMapping("/available-projects")
+    public ResponseEntity<ApiResponse<List<ProjectResponseDto>>> getAvailableProjectsForNewConfiguration(
+            @RequestParam UUID clientId) {
+
+        return ResponseEntity.ok(
+                ApiResponse.<List<ProjectResponseDto>>builder()
+                        .success(true)
+                        .message("Available projects for new billing configuration fetched successfully.")
+                        .data(billingConfigurationService.getAvailableProjectsForNewConfiguration(clientId))
+                        .build()
+        );
+    }
+
 }

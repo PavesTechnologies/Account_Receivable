@@ -45,4 +45,6 @@ public interface BillingConfigurationService {
 
     List<BillingConfigurationResponseDto> getPendingApprovals();
 
+    List<ProjectResponseDto> getAvailableProjectsForNewConfiguration(UUID clientId);
+
 }
