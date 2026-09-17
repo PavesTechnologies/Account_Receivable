@@ -33,7 +33,6 @@ public class BillingConfigurationRequestDto {
     @NotNull(message = "Payment Term is required.")
     private UUID paymentTermId;
 
-    @NotNull(message = "Billing Frequency is required.")
     private UUID billingFrequencyId;
 
     @NotNull(message = "Tax Region is required.")

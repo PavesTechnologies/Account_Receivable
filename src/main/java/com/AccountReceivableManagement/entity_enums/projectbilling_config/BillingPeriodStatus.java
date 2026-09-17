@@ -4,6 +4,8 @@ public enum BillingPeriodStatus {
 
     PENDING,
     SCHEDULED,
+    TAX_PENDING,
+    TAX_CALCULATED,
     INVOICED,
     CANCELLED
 }

@@ -24,5 +24,7 @@ public class ProjectResponseDto {
 
     private String projectBudgetCurrency;
 
+    private String primaryLocation;
+
 //    private Long projectManager;
 }

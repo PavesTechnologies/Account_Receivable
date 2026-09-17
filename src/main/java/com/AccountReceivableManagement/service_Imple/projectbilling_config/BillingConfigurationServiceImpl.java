@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.*;
 import com.AccountReceivableManagement.entity_enums.client.RecordStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
@@ -47,6 +48,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final ProjectMasterReferenceRepository projectMasterReferenceRepository;
     private final BillingScheduleRepository billingScheduleRepository;
     private final com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository billingSnapshotRepository;
+    private final BillingOccurrenceServiceImpl billingOccurrenceService;
+    private final ProjectEligibilityRepository projectEligibilityRepository;
 
     // =========================================================
     // CREATE BILLING CONFIGURATION
@@ -81,12 +84,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Payment Term not found."));
 
-        BillingFrequencyMaster billingFrequency =
-                billingFrequencyRepository.findById(
-                                request.getBillingFrequencyId())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException(
-                                        "Billing Frequency not found."));
+        BillingFrequencyMaster billingFrequency = null;
+        if (request.getBillingFrequencyId() != null) {
+            billingFrequency =
+                    billingFrequencyRepository.findById(
+                                    request.getBillingFrequencyId())
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Billing Frequency not found."));
+        }
 
         TaxRegionMaster taxRegion =
                 taxRegionRepository.findById(
@@ -175,7 +181,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setBillingType(billingType);
         configuration.setCurrency(currency);
         configuration.setPaymentTerm(paymentTerm);
-        configuration.setBillingFrequency(billingFrequency);
+        if (billingFrequency != null) {
+            configuration.setBillingFrequency(billingFrequency);
+        }
         configuration.setTaxRegion(taxRegion);
 
         configuration.setExpenseBillingEligible(
@@ -317,6 +325,43 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 billingConfigurationRepository.save(
                         configuration);
 
+        /*
+         * Generate Billing Schedules and Occurrences for RECURRING billing
+         * after approval.
+         *
+         * This is done here because:
+         * 1. Schedules/Occurrences require APPROVED status
+         * 2. Configuration must be saved first to have the APPROVED status
+         * 3. This ensures the approval gate is respected
+         */
+        if (saved.getBillingType() != null &&
+                saved.getBillingType().getBillingTypeName() != null) {
+
+            String billingTypeName = saved.getBillingType()
+                    .getBillingTypeName()
+                    .trim();
+
+            if (billingTypeName.equalsIgnoreCase("Subscription") ||
+                    billingTypeName.equalsIgnoreCase("Recurring")) {
+
+                /*
+                 * Generate billing occurrences (which includes schedule generation)
+                 * This is the single source of truth for schedule/occurrence generation
+                 */
+                try {
+                    billingOccurrenceService.generateOccurrencesForRecurring(
+                            saved.getBillingConfigurationId());
+                } catch (Exception e) {
+                    log.error(
+                            "Failed to generate billing occurrences for configuration {}: {}",
+                            saved.getBillingConfigurationId(),
+                            e.getMessage(),
+                            e);
+                    // Don't fail the approval - log and continue
+                }
+            }
+        }
+
         return mapToResponse(saved);
     }
 
@@ -400,10 +445,16 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 ? configuration.getProject().getPmsProjectId()
                                 : null)
 
+                .primaryLocation(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getPrimaryLocation()
+                                : null)
+
                 .projectName(
                         configuration.getProject() != null
                                 ? configuration.getProject().getProjectName()
                                 : null)
+
 
                 .projectBudget(
                         configuration.getProject() != null
@@ -799,6 +850,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         List<ProjectMasterReference> allProjects =
                 projectRepository.findByClientIdOrderByProjectNameAsc(clientId);
 
+        log.info("Available projects - clientId: {}, total projects: {}",
+                clientId,
+                allProjects.size());
+
+        for (ProjectMasterReference project : allProjects) {
+            log.info(
+                    "Project ID: {}, Name: {}, Primary Location: {}",
+                    project.getPmsProjectId(),
+                    project.getProjectName(),
+                    project.getPrimaryLocation()
+            );
+        }
+
         // Get projects that already have an APPROVED and ACTIVE
         // billing configuration.
         List<Long> configuredProjectIds =
@@ -860,6 +924,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                             .projectBudgetCurrency(
                                     project.getProjectBudgetCurrency()
                             )
+                            .primaryLocation(
+                                    project.getPrimaryLocation())
                             .build();
                 })
                 .toList();
@@ -1011,12 +1077,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Payment Term not found."));
 
-        BillingFrequencyMaster billingFrequency =
-                billingFrequencyRepository.findById(
-                                request.getBillingFrequencyId())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException(
-                                        "Billing Frequency not found."));
+        BillingFrequencyMaster billingFrequency = null;
+        if (request.getBillingFrequencyId() != null) {
+            billingFrequency =
+                    billingFrequencyRepository.findById(
+                                    request.getBillingFrequencyId())
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Billing Frequency not found."));
+        }
 
         TaxRegionMaster taxRegion =
                 taxRegionRepository.findById(
@@ -1064,7 +1133,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setBillingType(billingType);
         configuration.setCurrency(currency);
         configuration.setPaymentTerm(paymentTerm);
-        configuration.setBillingFrequency(billingFrequency);
+        if (billingFrequency != null) {
+            configuration.setBillingFrequency(billingFrequency);
+        }
         configuration.setTaxRegion(taxRegion);
 
         configuration.setExpenseBillingEligible(
@@ -1237,6 +1308,31 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         billingConfigurationRepository.save(
                 configuration);
+
+        /*
+         * Deactivate future/unprocessed billing occurrences.
+         * SCHEDULED and TAX_PENDING occurrences are set to inactive
+         * so they no longer appear in Tax Calculation queues.
+         * TAX_CALCULATED and INVOICED occurrences are preserved for audit/history.
+         * 
+         * This handles both:
+         * - Occurrences directly linked to BillingConfiguration (Fixed Price, Milestone, T&M)
+         * - Occurrences linked through RecurringConfiguration (Recurring/Subscription)
+         */
+        List<BillingSchedule> occurrencesToDeactivate = billingScheduleRepository
+                .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration)
+                .stream()
+                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED 
+                        || s.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING)
+                .toList();
+
+        for (BillingSchedule schedule : occurrencesToDeactivate) {
+            schedule.setIsActive(false);
+            billingScheduleRepository.save(schedule);
+        }
+
+        log.info("Deactivated {} billing occurrences for configuration {}", 
+                occurrencesToDeactivate.size(), billingConfigurationId);
     }
 
     @Transactional
@@ -1270,6 +1366,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 .deleteByBillingConfiguration(configuration);
 
         billingScheduleRepository
+                .deleteByBillingConfiguration(configuration);
+
+        billingTMRateCardRepository
                 .deleteByBillingConfiguration(configuration);
 
         // Finally delete parent
@@ -1800,9 +1899,21 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         /*
          * Billing period has ended.
          */
+        /*
+         * Project duration has ended.
+         */
+        if (configuration.getProject() != null
+                && configuration.getProject().getEndDate() != null
+                && today.isAfter(configuration.getProject().getEndDate())) {
+
+            return BillingConfigurationStatus.EXPIRED;
+        }
+
+        /*
+         * Billing period has ended.
+         */
         if (configuration.getEffectiveTo() != null
-                && today.isAfter(
-                configuration.getEffectiveTo())) {
+                && today.isAfter(configuration.getEffectiveTo())) {
 
             return BillingConfigurationStatus.EXPIRED;
         }
@@ -1821,6 +1932,62 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 .findByApprovalStatus(ApprovalStatus.PENDING_APPROVAL)
                 .stream()
                 .map(this::mapToResponse)
+                .toList();
+    }
+
+
+    // =========================================================
+    // GET AVAILABLE PROJECTS FOR NEW CONFIGURATION
+    // =========================================================
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ProjectResponseDto> getAvailableProjectsForNewConfiguration(UUID clientId) {
+
+        LocalDate today = LocalDate.now();
+
+        // Get all projects for the client
+        List<ProjectMasterReference> allProjects =
+                projectRepository.findByClientIdOrderByProjectNameAsc(clientId);
+
+        // Get projects that already have an existing configuration
+        List<Long> ineligibleProjectIds =
+                projectEligibilityRepository.findIneligibleProjectIdsByClientId(clientId);
+
+        return allProjects
+                .stream()
+
+                // Do not show projects whose current duration has ended
+                .filter(project ->
+                        project.getEndDate() == null
+                                || !today.isAfter(project.getEndDate())
+                )
+
+                // Apply existing billing configuration eligibility rules
+                .filter(project ->
+                        !ineligibleProjectIds.contains(project.getPmsProjectId())
+                )
+
+                .map(project ->
+                        ProjectResponseDto.builder()
+                                .projectId(project.getPmsProjectId())
+                                .projectName(project.getProjectName())
+                                .projectCode(String.valueOf(project.getPmsProjectId()))
+                                .projectDuration(
+                                        calculateProjectDuration(
+                                                project.getStartDate(),
+                                                project.getEndDate()
+                                        )
+                                )
+                                .projectBudget(project.getProjectBudget())
+                                .projectBudgetCurrency(
+                                        project.getProjectBudgetCurrency()
+                                )
+                                .primaryLocation(
+                                        project.getPrimaryLocation()
+                                )
+                                .build()
+                )
                 .toList();
     }
 

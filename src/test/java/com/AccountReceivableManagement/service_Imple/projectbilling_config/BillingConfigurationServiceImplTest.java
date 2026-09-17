@@ -41,6 +41,8 @@ class BillingConfigurationServiceImplTest {
     @Mock private ProjectMasterReferenceRepository projectMasterReferenceRepository;
     @Mock private BillingScheduleRepository billingScheduleRepository;
     @Mock private BillingSnapshotRepository billingSnapshotRepository;
+    @Mock private BillingOccurrenceServiceImpl billingOccurrenceService;
+    @Mock private ProjectEligibilityRepository projectEligibilityRepository;
 
     private BillingConfigurationServiceImpl service;
 
@@ -63,7 +65,9 @@ class BillingConfigurationServiceImplTest {
                 billingRecurringConfigurationRepository,
                 projectMasterReferenceRepository,
                 billingScheduleRepository,
-                billingSnapshotRepository);
+                billingSnapshotRepository,
+                billingOccurrenceService,
+                projectEligibilityRepository);
 
         configurationId = UUID.randomUUID();
         draftConfiguration = BillingConfiguration.builder()

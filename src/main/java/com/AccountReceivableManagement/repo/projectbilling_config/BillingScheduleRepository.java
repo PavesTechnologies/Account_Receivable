@@ -8,6 +8,7 @@ import com.AccountReceivableManagement.entity_enums.projectbilling_config.Billin
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -57,5 +58,48 @@ public interface BillingScheduleRepository extends JpaRepository<BillingSchedule
 
     void deleteByRecurringConfiguration(BillingRecurringConfiguration recurringConfiguration);
 
+    List<BillingSchedule> findByTaxStatusAndIsActiveTrue(BillingPeriodStatus taxStatus);
+
+    List<BillingSchedule> findByPeriodStatusAndIsActiveTrue(BillingPeriodStatus periodStatus);
+
+    List<BillingSchedule> findByPeriodStatusAndTaxStatusAndIsActiveTrue(
+            BillingPeriodStatus periodStatus,
+            BillingPeriodStatus taxStatus);
+
+    List<BillingSchedule> findByBillingConfigurationAndTaxStatusAndIsActiveTrue(
+            BillingConfiguration billingConfiguration,
+            BillingPeriodStatus taxStatus);
+
+    List<BillingSchedule> findByRecurringConfigurationAndTaxStatusAndIsActiveTrue(
+            BillingRecurringConfiguration recurringConfiguration,
+            BillingPeriodStatus taxStatus);
+
+    List<BillingSchedule> findByBillingDateBeforeAndTaxStatusAndIsActiveTrue(
+            LocalDate billingDate,
+            BillingPeriodStatus taxStatus);
+
+    List<BillingSchedule> findByBillingDateLessThanEqualAndTaxStatusAndIsActiveTrue(
+            LocalDate billingDate,
+            BillingPeriodStatus taxStatus);
+
+    List<BillingSchedule> findByBillingConfigurationAndPeriodStatusAndTaxStatusAndIsActiveTrue(
+            BillingConfiguration billingConfiguration,
+            BillingPeriodStatus periodStatus,
+            BillingPeriodStatus taxStatus);
+
+    List<BillingSchedule> findByRecurringConfigurationAndPeriodStatusAndTaxStatusAndIsActiveTrue(
+            BillingRecurringConfiguration recurringConfiguration,
+            BillingPeriodStatus periodStatus,
+            BillingPeriodStatus taxStatus);
+
+    boolean existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
+            BillingConfiguration billingConfiguration,
+            LocalDate periodStartDate,
+            LocalDate periodEndDate);
+
+    boolean existsByRecurringConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
+            BillingRecurringConfiguration recurringConfiguration,
+            LocalDate periodStartDate,
+            LocalDate periodEndDate);
 
 }
