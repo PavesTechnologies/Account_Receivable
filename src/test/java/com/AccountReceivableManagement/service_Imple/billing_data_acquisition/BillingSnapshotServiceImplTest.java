@@ -33,6 +33,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,6 +41,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -393,5 +395,204 @@ class BillingSnapshotServiceImplTest {
         assertThat(response.isSuccess()).isTrue();
         assertThat(response.getData().getTimesheets()).isNotNull();
         assertThat(response.getData().getTimesheets()).isEmpty();
+    }
+
+    // =========================================================
+    // G. rebuildBillingSnapshot — Phase 2B financial correction
+    // =========================================================
+
+    private BillingSnapshot mutableExistingSnapshot() {
+        BillingSnapshotItem staleItem = BillingSnapshotItem.builder()
+                .billingSnapshotItemId(UUID.randomUUID())
+                .itemType(BillingItemType.TIME_ENTRY)
+                .itemName("Jane Doe")
+                .sourceReferenceId("TMS-001")
+                .quantity(BigDecimal.valueOf(11))
+                .rate(BigDecimal.valueOf(800))
+                .amount(BigDecimal.valueOf(8800))
+                .workDate(LocalDate.of(2026, 8, 10))
+                .approvalStatus("APPROVED")
+                .role("Developer")
+                .build();
+
+        // A genuinely mutable items list - rebuildBillingSnapshot() clears and
+        // repopulates it in place, which List.of(...) (used by the shared
+        // existingSnapshot fixture) would reject with UnsupportedOperationException.
+        List<BillingSnapshotItem> items = new ArrayList<>(List.of(staleItem));
+
+        return BillingSnapshot.builder()
+                .id(snapshotId)
+                .snapshotNumber("BS-20260805120000")
+                .billingConfigurationId(orphanedConfigurationId)
+                .clientId(UUID.randomUUID())
+                .projectId(PROJECT_ID)
+                .billingPeriodStart(PERIOD_START)
+                .billingPeriodEnd(PERIOD_END)
+                .status(BillingSnapshotStatus.INVOICED)
+                .subtotal(BigDecimal.valueOf(8800))
+                .expenseAmount(BigDecimal.ZERO)
+                .totalAmount(BigDecimal.valueOf(8800))
+                .items(items)
+                .build();
+    }
+
+    private BillingConfigurationResponseDto approvedTimeAndMaterialConfiguration(UUID configurationId) {
+        return BillingConfigurationResponseDto.builder()
+                .billingConfigurationId(configurationId)
+                .billingType(BillingType.TIME_AND_MATERIAL)
+                .billingTypeName("Timesheet Based")
+                .currencyCode("USD")
+                .taxRegionCode("DOM")
+                .approved(true)
+                .build();
+    }
+
+    @Test
+    void rebuildBillingSnapshot_snapshotNotFound_throwsResourceNotFoundException() {
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.rebuildBillingSnapshot(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("Billing snapshot could not be found.");
+
+        verify(billingSnapshotRepository, never()).save(any());
+    }
+
+    @Test
+    void rebuildBillingSnapshot_configurationNotApproved_throwsValidationExceptionAndLeavesSnapshotUntouched() {
+        BillingSnapshot snapshot = mutableExistingSnapshot();
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+
+        BillingConfigurationResponseDto notApproved = approvedTimeAndMaterialConfiguration(orphanedConfigurationId);
+        notApproved.setApproved(false);
+        when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
+                .thenReturn(notApproved);
+
+        assertThatThrownBy(() -> service.rebuildBillingSnapshot(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Approved Billing Configuration not found.");
+
+        assertThat(snapshot.getStatus()).isEqualTo(BillingSnapshotStatus.INVOICED);
+        assertThat(snapshot.getItems()).hasSize(1);
+        verify(billingSnapshotRepository, never()).save(any());
+        // The strategy is resolved by billing type but never invoked - the
+        // approval check fails before any source-system acquisition begins.
+        verify(timeAndMaterialStrategy, never()).acquire(any(), any());
+    }
+
+    @Test
+    void rebuildBillingSnapshot_unsupportedBillingType_throwsValidationException() {
+        BillingSnapshot snapshot = mutableExistingSnapshot();
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+
+        BillingConfigurationResponseDto fixedPriceConfig = BillingConfigurationResponseDto.builder()
+                .billingConfigurationId(orphanedConfigurationId)
+                .billingType(BillingType.FIXED_PRICE)
+                .approved(true)
+                .build();
+        when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
+                .thenReturn(fixedPriceConfig);
+
+        assertThatThrownBy(() -> service.rebuildBillingSnapshot(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("is not yet supported");
+
+        verify(billingSnapshotRepository, never()).save(any());
+    }
+
+    @Test
+    void rebuildBillingSnapshot_acquiredDataFailsValidation_leavesSnapshotCompletelyUntouched() {
+        BillingSnapshot snapshot = mutableExistingSnapshot();
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+
+        BillingConfigurationResponseDto configuration = approvedTimeAndMaterialConfiguration(orphanedConfigurationId);
+        when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
+                .thenReturn(configuration);
+
+        // Re-acquisition genuinely returns nothing this time (e.g. TMS has no
+        // approved timesheets left for the period) - must fail validation,
+        // not silently persist an empty/zero snapshot.
+        when(timeAndMaterialStrategy.acquire(eq(configuration), any(BillingSnapshotCreateRequestDto.class)))
+                .thenReturn(BillingAcquisitionResultDto.builder()
+                        .billingConfigurationId(orphanedConfigurationId)
+                        .timesheets(List.of())
+                        .build());
+
+        assertThatThrownBy(() -> service.rebuildBillingSnapshot(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("No timesheets were acquired for the requested billing period.");
+
+        // Nothing on the pre-existing snapshot was touched by the failed attempt.
+        assertThat(snapshot.getStatus()).isEqualTo(BillingSnapshotStatus.INVOICED);
+        assertThat(snapshot.getItems()).hasSize(1);
+        assertThat(snapshot.getItems().get(0).getQuantity()).isEqualByComparingTo("11");
+        assertThat(snapshot.getTotalAmount()).isEqualByComparingTo("8800");
+        verify(billingSnapshotRepository, never()).save(any());
+    }
+
+    @Test
+    void rebuildBillingSnapshot_correctedTmsData_replacesItemsRecalculatesTotalsAndSetsReadyForTax() {
+        BillingSnapshot snapshot = mutableExistingSnapshot();
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+
+        BillingConfigurationResponseDto configuration = approvedTimeAndMaterialConfiguration(orphanedConfigurationId);
+        when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
+                .thenReturn(configuration);
+
+        // Corrected TMS data: hours 11 -> 8, same rate, same worked example as the
+        // Phase 2B audit (Old: 11 x 800 = 8,800. New: 8 x 800 = 6,400.).
+        TimesheetDto correctedTimesheet = TimesheetDto.builder()
+                .resourceId(1L)
+                .resourceName("Jane Doe")
+                .sourceReferenceId("TMS-001")
+                .workDate(LocalDate.of(2026, 8, 10))
+                .hours(BigDecimal.valueOf(8))
+                .hourlyRate(BigDecimal.valueOf(800))
+                .role("Developer")
+                .approvalStatus("APPROVED")
+                .approved(true)
+                .billable(true)
+                .build();
+        when(timeAndMaterialStrategy.acquire(eq(configuration), any(BillingSnapshotCreateRequestDto.class)))
+                .thenReturn(BillingAcquisitionResultDto.builder()
+                        .billingConfigurationId(orphanedConfigurationId)
+                        .timesheets(List.of(correctedTimesheet))
+                        .build());
+
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        BillingSnapshot result = service.rebuildBillingSnapshot(snapshotId);
+
+        // Same row - never a new BillingSnapshot.
+        assertThat(result).isSameAs(snapshot);
+        assertThat(result.getId()).isEqualTo(snapshotId);
+
+        // Old item fully replaced by the corrected one.
+        assertThat(result.getItems()).hasSize(1);
+        assertThat(result.getItems().get(0).getQuantity()).isEqualByComparingTo("8");
+        assertThat(result.getItems().get(0).getRate()).isEqualByComparingTo("800");
+        assertThat(result.getItems().get(0).getAmount()).isEqualByComparingTo("6400");
+        assertThat(result.getItems().get(0).getItemName()).isEqualTo("Jane Doe");
+        assertThat(result.getItems().get(0).getBillingSnapshot()).isSameAs(result);
+        assertThat(result.getItems()).noneMatch(item -> "TMS-001-stale".equals(item.getSourceReferenceId()));
+
+        // Snapshot totals recalculated from the corrected items.
+        assertThat(result.getSubtotal()).isEqualByComparingTo("6400");
+        assertThat(result.getTotalAmount()).isEqualByComparingTo("6400");
+        assertThat(result.getExpenseAmount()).isEqualByComparingTo("0");
+
+        // Status reset only for the correction workflow - never touched by
+        // normal acquisition (createBillingSnapshot never calls this method).
+        assertThat(result.getStatus()).isEqualTo(BillingSnapshotStatus.READY_FOR_TAX);
+
+        // Identity and unrelated fields (billing period, currency, tax region,
+        // client/project) are never touched by the rebuild.
+        assertThat(result.getSnapshotNumber()).isEqualTo("BS-20260805120000");
+        assertThat(result.getBillingConfigurationId()).isEqualTo(orphanedConfigurationId);
+        assertThat(result.getBillingPeriodStart()).isEqualTo(PERIOD_START);
+        assertThat(result.getBillingPeriodEnd()).isEqualTo(PERIOD_END);
+
+        verify(billingSnapshotRepository).save(snapshot);
     }
 }

@@ -13,19 +13,23 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Phase 2 implementation: fetches active billing configurations
- * and matches the billing acquisition execution record for each configuration's billing period.
+ * Fetches active billing configurations and matches the most recent billing
+ * acquisition execution record for each configuration.
  *
- * Status logic:
+ * Status logic (BillingAcquisitionStatus, acquisition-level only — does not
+ * reflect downstream BillingSnapshot/tax/invoice lifecycle status):
  *   - For each active BillingConfiguration:
- *     - find the BillingAcquisition record that matches the configured billing period
- *     - if a matching record exists: status = acquisition.status, lastInvoice = acquisition.finalInvoiceId
- *     - if no matching record exists: status = WAITING_FOR_SOURCE_DATA, lastInvoice = null
+ *     - find the latest BillingAcquisition record for that configuration
+ *     - if a record exists: status = acquisition.status, lastInvoice = acquisition.finalInvoiceId,
+ *       and billingPeriodStart/End = the actual dates the user selected on Acquire Snapshot
+ *       (never the Billing Configuration's own effectiveFrom/effectiveTo validity window)
+ *     - if no record exists: status = NOT_ACQUIRED, lastInvoice = null, billing period = null
  */
 @Service
 @Transactional(readOnly = true)
@@ -69,30 +73,24 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
                 ? bc.getInvoiceGenerationType().name()
                 : null;
 
-        // Match the BillingAcquisition record that matches the configured billing period
-        Optional<BillingAcquisition> acquisitionOpt = Optional.empty();
-        if (bc.getEffectiveFrom() != null && bc.getEffectiveTo() != null) {
-            acquisitionOpt = billingAcquisitionRepository
-                    .findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
-                            bc.getBillingConfigurationId(),
-                            bc.getEffectiveFrom(),
-                            bc.getEffectiveTo()
-                    );
-        }
-
-        // Fallback to latest record for this configuration if period dates are missing
-        if (acquisitionOpt.isEmpty()) {
-            acquisitionOpt = billingAcquisitionRepository
-                    .findFirstByBillingConfiguration_BillingConfigurationIdOrderByCreatedAtDesc(bc.getBillingConfigurationId());
-        }
+        // Resolve the most recent BillingAcquisition execution record for this
+        // configuration. Its billingPeriodStart/End are the dates the user
+        // actually selected on Acquire Snapshot — never the Billing
+        // Configuration's own effectiveFrom/effectiveTo validity window.
+        Optional<BillingAcquisition> acquisitionOpt = billingAcquisitionRepository
+                .findFirstByBillingConfiguration_BillingConfigurationIdOrderByCreatedAtDesc(bc.getBillingConfigurationId());
 
         String status = BillingAcquisitionStatus.NOT_ACQUIRED.name();
         String lastInvoice = null;
+        LocalDate billingPeriodStart = null;
+        LocalDate billingPeriodEnd = null;
 
         if (acquisitionOpt.isPresent()) {
             BillingAcquisition acquisition = acquisitionOpt.get();
             status = acquisition.getStatus() != null ? acquisition.getStatus().name() : BillingAcquisitionStatus.NOT_ACQUIRED.name();
             lastInvoice = acquisition.getFinalInvoiceId();
+            billingPeriodStart = acquisition.getBillingPeriodStart();
+            billingPeriodEnd = acquisition.getBillingPeriodEnd();
         }
 
         return BillingDataAcquisitionResponseDto.builder()
@@ -104,8 +102,8 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
                 .billingType(bc.getBillingType().getBillingTypeName())
                 .frequency(bc.getBillingFrequency().getBillingFrequencyName())
                 .currency(bc.getCurrency() != null ? bc.getCurrency().getCurrencyCode() : "INR")
-                .billingPeriodStart(bc.getEffectiveFrom())
-                .billingPeriodEnd(bc.getEffectiveTo())
+                .billingPeriodStart(billingPeriodStart)
+                .billingPeriodEnd(billingPeriodEnd)
                 .generationMode(generationMode)
                 .status(status)
                 .lastInvoice(lastInvoice)

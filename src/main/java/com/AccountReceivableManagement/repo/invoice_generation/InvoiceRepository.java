@@ -2,8 +2,11 @@ package com.AccountReceivableManagement.repo.invoice_generation;
 
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -50,4 +53,16 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID> {
                     + "ORDER BY i.generatedAt DESC"
     )
     List<Invoice> findAllInApprovalWorkflowOrderByGeneratedAtDesc();
+
+    /**
+     * Row-level {@code SELECT ... FOR UPDATE} lock, held for the rest of the
+     * caller's transaction - no schema change. Used by financial-correction
+     * (Phase 2B reacquisition) so two concurrent correction requests for the
+     * same invoice serialize instead of racing to rebuild the same
+     * BillingSnapshot; the second request blocks here until the first
+     * commits, then correctly observes {@code correctionRequired == false}.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT i FROM Invoice i WHERE i.invoiceId = :invoiceId")
+    Optional<Invoice> findByIdForUpdate(@Param("invoiceId") UUID invoiceId);
 }
