@@ -16,22 +16,27 @@ import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceApprovalHistory;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceItem;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceTaxComponent;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity.projectbilling_config.PaymentTermsMaster;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculationComponent;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingItemType;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceApprovalAction;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceApprovalHistoryRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,7 +61,7 @@ import java.util.stream.Collectors;
  * new {@link BillingSnapshot}, no call back into the tax engine.
  */
 @Service
-@RequiredArgsConstructor
+@RequiredArgsConstructor(onConstructor_ = @Autowired)
 @Transactional
 public class InvoiceServiceImpl implements InvoiceService {
 
@@ -114,6 +119,25 @@ public class InvoiceServiceImpl implements InvoiceService {
     private final BillingConfigurationService billingConfigurationService;
 
     private final PaymentTermsMasterRepository paymentTermsMasterRepository;
+
+        private final BillingScheduleRepository billingScheduleRepository;
+
+        public InvoiceServiceImpl(
+                        InvoiceRepository invoiceRepository,
+                        InvoiceApprovalHistoryRepository invoiceApprovalHistoryRepository,
+                        BillingSnapshotRepository billingSnapshotRepository,
+                        TaxCalculationRepository taxCalculationRepository,
+                        BillingConfigurationService billingConfigurationService,
+                        PaymentTermsMasterRepository paymentTermsMasterRepository
+        ) {
+                this.invoiceRepository = invoiceRepository;
+                this.invoiceApprovalHistoryRepository = invoiceApprovalHistoryRepository;
+                this.billingSnapshotRepository = billingSnapshotRepository;
+                this.taxCalculationRepository = taxCalculationRepository;
+                this.billingConfigurationService = billingConfigurationService;
+                this.paymentTermsMasterRepository = paymentTermsMasterRepository;
+                this.billingScheduleRepository = null;
+        }
 
     @Override
     public InvoiceResponseDto generateInvoice(
@@ -316,6 +340,132 @@ public class InvoiceServiceImpl implements InvoiceService {
         );
 
         billingSnapshotRepository.save(snapshot);
+
+        return mapToResponse(saved);
+    }
+
+    @Override
+    public InvoiceResponseDto generateInvoiceForSchedule(UUID billingScheduleId) {
+
+        BillingSchedule schedule =
+                billingScheduleRepository.findByIdForUpdate(billingScheduleId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "Billing occurrence could not be found."
+                                ));
+
+        if (!Boolean.TRUE.equals(schedule.getIsActive())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice cannot be generated because this billing occurrence is inactive."
+            );
+        }
+
+        if (schedule.getPeriodStatus() != BillingPeriodStatus.TAX_CALCULATED
+                || schedule.getTaxStatus() != BillingPeriodStatus.TAX_CALCULATED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice cannot be generated because this billing occurrence has not completed tax calculation."
+            );
+        }
+
+        if (Boolean.TRUE.equals(schedule.getIsInvoiced())) {
+            throw new GlobalExceptionHandler.DuplicateResourceException(
+                    "An invoice has already been generated for this billing occurrence."
+            );
+        }
+
+        TaxCalculation taxCalculation =
+                taxCalculationRepository.findByBillingScheduleId(billingScheduleId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "No tax calculation has been completed for this billing occurrence. Invoice cannot be generated."
+                                ));
+
+        if (taxCalculation.getStatus() != TaxCalculationStatus.CALCULATED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice cannot be generated because the tax calculation has not completed successfully."
+            );
+        }
+
+        if (invoiceRepository.existsByBillingScheduleId(billingScheduleId)) {
+            throw new GlobalExceptionHandler.DuplicateResourceException(
+                    "An invoice has already been generated for this billing occurrence."
+            );
+        }
+
+        validateTaxCalculationConsistency(
+                taxCalculation,
+                "Tax calculation totals are inconsistent for this billing occurrence. Invoice cannot be generated."
+        );
+
+        BillingConfigurationResponseDto configuration =
+                billingConfigurationService.getBillingConfiguration(
+                        schedule.getBillingConfiguration().getBillingConfigurationId()
+                );
+
+        LocalDate invoiceDate = LocalDate.now();
+        BigDecimal billingAmount = schedule.getBillingAmount();
+
+        Invoice invoice =
+                Invoice.builder()
+                        .invoiceNumber(generateInvoiceNumber())
+                        .billingScheduleId(schedule.getBillingScheduleId())
+                        .taxCalculationId(taxCalculation.getTaxCalculationId())
+                        .clientId(configuration.getClientId())
+                        .clientName(configuration.getClientName())
+                        .projectId(configuration.getProjectId())
+                        .projectName(configuration.getProjectName())
+                        .billingPeriodStart(schedule.getPeriodStartDate())
+                        .billingPeriodEnd(schedule.getPeriodEndDate())
+                        .currencyCode(configuration.getCurrencyCode())
+                        .paymentTermCode(configuration.getPaymentTermCode())
+                        .subtotal(taxCalculation.getTaxableAmount())
+                        .totalTaxAmount(taxCalculation.getTotalTaxAmount())
+                        .grandTotal(taxCalculation.getGrandTotal())
+                        .invoiceDate(invoiceDate)
+                        .dueDate(resolveDueDate(configuration.getPaymentTermId(), invoiceDate))
+                        .generatedAt(LocalDateTime.now())
+                        .status(InvoiceStatus.GENERATED)
+                        .build();
+
+        invoice.getItems().add(
+                InvoiceItem.builder()
+                        .invoice(invoice)
+                        .itemType(BillingItemType.FIXED_PRICE)
+                        .itemName("Fixed Price - Period " + schedule.getPeriodNumber())
+                        .sourceReferenceId(schedule.getBillingScheduleId().toString())
+                        .quantity(BigDecimal.ONE)
+                        .rate(billingAmount)
+                        .amount(billingAmount)
+                        .build()
+        );
+
+        for (TaxCalculationComponent taxComponent : taxCalculation.getComponents()) {
+            invoice.getTaxComponents().add(
+                    InvoiceTaxComponent.builder()
+                            .invoice(invoice)
+                            .taxTypeId(taxComponent.getTaxTypeId())
+                            .taxTypeCode(taxComponent.getTaxTypeCode())
+                            .taxTypeName(taxComponent.getTaxTypeName())
+                            .appliedRate(taxComponent.getAppliedRate())
+                            .taxAmount(taxComponent.getTaxAmount())
+                            .applicabilityType(taxComponent.getApplicabilityType())
+                            .build()
+            );
+        }
+
+        Invoice saved;
+        try {
+            saved = invoiceRepository.save(invoice);
+        } catch (DataIntegrityViolationException ex) {
+            throw new GlobalExceptionHandler.DuplicateResourceException(
+                    "An invoice has already been generated for this billing occurrence."
+            );
+        }
+
+        schedule.setIsInvoiced(true);
+        schedule.setInvoiceDate(invoiceDate);
+        schedule.setPeriodStatus(BillingPeriodStatus.INVOICED);
+        billingScheduleRepository.save(schedule);
 
         return mapToResponse(saved);
     }
@@ -951,6 +1101,22 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .orElse(null);
     }
 
+        private LocalDate resolveDueDate(
+                        UUID paymentTermId,
+                        LocalDate invoiceDate
+        ) {
+
+        if (paymentTermId == null) {
+            return null;
+        }
+
+        return paymentTermsMasterRepository
+                .findById(paymentTermId)
+                .map(PaymentTermsMaster::getPaymentDays)
+                .map(invoiceDate::plusDays)
+                .orElse(null);
+    }
+
     private InvoiceResponseDto mapToResponse(
             Invoice invoice
     ) {
@@ -1027,6 +1193,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .billingSnapshotId(
                         invoice.getBillingSnapshotId()
                 )
+                .billingScheduleId(invoice.getBillingScheduleId())
                 .billingSnapshotNumber(
                         invoice.getBillingSnapshotNumber()
                 )

@@ -13,6 +13,7 @@ import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.*;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
+import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingPeriodCalculatorService;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler.ResourceNotFoundException;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler.ValidationException;
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -50,6 +52,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository billingSnapshotRepository;
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
     private final ProjectEligibilityRepository projectEligibilityRepository;
+    private final BillingPeriodCalculatorService billingPeriodCalculatorService;
 
     // =========================================================
     // CREATE BILLING CONFIGURATION
@@ -2006,6 +2009,125 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 .build()
                 )
                 .toList();
+    }
+
+    // =========================================================
+    // BILLING SCHEDULE PREVIEW (read-only, no persistence)
+    // =========================================================
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<BillingPeriodDto> previewSchedule(BillingSchedulePreviewRequest request) {
+
+        BillingConfiguration configuration = null;
+        if (request.getBillingConfigurationId() != null) {
+            configuration = billingConfigurationRepository
+                    .findById(request.getBillingConfigurationId())
+                    .orElseThrow(() ->
+                            new ResourceNotFoundException(
+                                    "Billing Configuration not found."));
+        }
+
+        String billingType = request.getBillingType() != null
+                ? request.getBillingType()
+                : (configuration != null && configuration.getBillingType() != null
+                        ? configuration.getBillingType().getBillingTypeName()
+                        : null);
+
+        if (billingType == null || billingType.isBlank()) {
+            throw new ValidationException(
+                    "Billing Type is required for schedule preview.");
+        }
+
+        String normalizedBillingType =
+                billingType.trim().toUpperCase().replace(" ", "_").replace("-", "_");
+
+        if (!normalizedBillingType.equals("FIXED_PRICE")
+                && !normalizedBillingType.equals("RECURRING")) {
+            throw new ValidationException(
+                    "Billing Schedule Preview is supported only for Fixed Price and Recurring billing types.");
+        }
+
+        UUID billingFrequencyId = request.getBillingFrequencyId() != null
+                ? request.getBillingFrequencyId()
+                : (configuration != null && configuration.getBillingFrequency() != null
+                        ? configuration.getBillingFrequency().getBillingFrequencyId()
+                        : null);
+
+        if (billingFrequencyId == null) {
+            throw new ValidationException(
+                    "Billing Frequency is required for schedule preview.");
+        }
+
+        BillingFrequencyMaster billingFrequency = billingFrequencyRepository
+                .findById(billingFrequencyId)
+                .orElseThrow(() ->
+                        new ResourceNotFoundException(
+                                "Billing Frequency not found."));
+
+        if (!Boolean.TRUE.equals(billingFrequency.getIsActive())) {
+            throw new ValidationException(
+                    "Selected Billing Frequency is inactive.");
+        }
+
+        LocalDate effectiveFrom = request.getEffectiveFrom() != null
+                ? request.getEffectiveFrom()
+                : (configuration != null ? configuration.getEffectiveFrom() : null);
+
+        LocalDate effectiveTo = request.getEffectiveTo() != null
+                ? request.getEffectiveTo()
+                : (configuration != null ? configuration.getEffectiveTo() : null);
+
+        if (effectiveFrom == null) {
+            throw new ValidationException(
+                    "Effective From date is required for schedule preview.");
+        }
+
+        if (effectiveTo == null) {
+            throw new ValidationException(
+                    "Effective To date is required for schedule preview.");
+        }
+
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            throw new ValidationException(
+                    "Effective From date cannot be after Effective To date.");
+        }
+
+        BigDecimal contractValue = request.getContractValue() != null
+                ? request.getContractValue()
+                : (configuration != null ? configuration.getContractValue() : null);
+
+        if (contractValue == null) {
+            throw new ValidationException(
+                    "Contract value is required for schedule preview.");
+        }
+
+        if (contractValue.compareTo(BigDecimal.ZERO) < 0) {
+            throw new ValidationException(
+                    "Contract value cannot be negative.");
+        }
+
+        /*
+         * One-Time is a single period spanning the full effective range,
+         * mirroring BillingOccurrenceServiceImpl#generateOneTimeFixedPriceOccurrence
+         * rather than the frequency's own durationValue/durationUnit.
+         */
+        if ("One-Time".equalsIgnoreCase(billingFrequency.getBillingFrequencyName())) {
+            return List.of(BillingPeriodDto.builder()
+                    .periodNumber(1)
+                    .periodStartDate(effectiveFrom)
+                    .periodEndDate(effectiveTo)
+                    .billingAmount(contractValue.setScale(2, RoundingMode.HALF_EVEN))
+                    .isPartialPeriod(false)
+                    .build());
+        }
+
+        return billingPeriodCalculatorService.calculatePeriodsWithAmount(
+                effectiveFrom,
+                effectiveTo,
+                billingFrequency.getDurationValue(),
+                billingFrequency.getDurationUnit().toString(),
+                contractValue);
     }
 
 }

@@ -1,6 +1,8 @@
 package com.AccountReceivableManagement.controller.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingOccurrenceResponseDto;
+import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.dto.tax_calculation.TaxCalculationResponseDto;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
@@ -12,6 +14,7 @@ import com.AccountReceivableManagement.repo.projectbilling_config.BillingRecurri
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
+import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.tax_calculation.TaxCalculationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -33,6 +36,7 @@ public class BillingOccurrenceController {
     private final TaxCalculationRepository taxCalculationRepository;
     private final BillingConfigurationService billingConfigurationService;
     private final TaxCalculationService taxCalculationService;
+        private final InvoiceService invoiceService;
 
     @GetMapping("/{occurrenceId}")
     public ResponseEntity<BillingOccurrenceResponseDto> getOccurrence(
@@ -159,6 +163,18 @@ public class BillingOccurrenceController {
 
         return ResponseEntity.ok(taxCalculationService.calculateTaxForSchedule(occurrenceId));
     }
+
+        @PostMapping("/{occurrenceId}/invoice")
+        public ResponseEntity<ApiResponse<InvoiceResponseDto>> generateInvoice(
+                        @PathVariable UUID occurrenceId) {
+
+                return ResponseEntity.status(201).body(
+                                ApiResponse.<InvoiceResponseDto>builder()
+                                                .success(true)
+                                                .message("Invoice generated successfully.")
+                                                .data(invoiceService.generateInvoiceForSchedule(occurrenceId))
+                                                .build());
+        }
 
     private BillingOccurrenceResponseDto mapToResponse(BillingSchedule schedule) {
         BillingOccurrenceResponseDto.BillingOccurrenceResponseDtoBuilder builder = BillingOccurrenceResponseDto.builder()

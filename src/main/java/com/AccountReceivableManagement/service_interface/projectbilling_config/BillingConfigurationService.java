@@ -47,4 +47,6 @@ public interface BillingConfigurationService {
 
     List<ProjectResponseDto> getAvailableProjectsForNewConfiguration(UUID clientId);
 
+    List<BillingPeriodDto> previewSchedule(BillingSchedulePreviewRequest request);
+
 }
