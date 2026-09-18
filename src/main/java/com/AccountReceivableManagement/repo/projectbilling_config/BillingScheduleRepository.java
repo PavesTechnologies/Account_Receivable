@@ -6,6 +6,10 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecur
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingScheduleType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
@@ -15,6 +19,10 @@ import java.util.UUID;
 
 @Repository
 public interface BillingScheduleRepository extends JpaRepository<BillingSchedule, UUID> {
+
+        @Lock(LockModeType.PESSIMISTIC_WRITE)
+        @Query("SELECT s FROM BillingSchedule s WHERE s.billingScheduleId = :billingScheduleId")
+        Optional<BillingSchedule> findByIdForUpdate(@Param("billingScheduleId") UUID billingScheduleId);
 
     List<BillingSchedule> findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
             BillingConfiguration billingConfiguration);

@@ -49,6 +49,21 @@ public class BillingConfigurationController {
                 .build());
     }
 
+    @PostMapping("/preview-schedule")
+    public ResponseEntity<ApiResponse<List<BillingPeriodDto>>> previewSchedule(
+            @Valid @RequestBody BillingSchedulePreviewRequest request) {
+
+        List<BillingPeriodDto> response =
+                billingConfigurationService.previewSchedule(request);
+
+        return ResponseEntity.ok(
+                ApiResponse.<List<BillingPeriodDto>>builder()
+                        .success(true)
+                        .message("Billing schedule preview generated successfully.")
+                        .data(response)
+                        .build());
+    }
+
     @GetMapping("/project/{projectId}")
     public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> getApprovedByProjectId(
             @PathVariable Long projectId) {

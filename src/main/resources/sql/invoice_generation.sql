@@ -47,7 +47,8 @@
 CREATE TABLE IF NOT EXISTS invoice (
     invoice_id                   CHAR(36)      NOT NULL,
     invoice_number                VARCHAR(30)  NOT NULL,
-    billing_snapshot_id           CHAR(36)     NOT NULL,
+    billing_snapshot_id           CHAR(36)     NULL,
+    billing_schedule_id           CHAR(36)     NULL,
     -- Human-readable BillingSnapshot.snapshot_number, frozen at generation
     -- time through the billing_snapshot_id relationship (never fabricated).
     billing_snapshot_number       VARCHAR(30)      NULL,
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS invoice (
     updated_at                     DATETIME         NULL,
     PRIMARY KEY (invoice_id),
     CONSTRAINT uk_invoice_billing_snapshot UNIQUE (billing_snapshot_id),
+    CONSTRAINT uk_invoice_billing_schedule UNIQUE (billing_schedule_id),
     CONSTRAINT uk_invoice_number UNIQUE (invoice_number)
 );
 

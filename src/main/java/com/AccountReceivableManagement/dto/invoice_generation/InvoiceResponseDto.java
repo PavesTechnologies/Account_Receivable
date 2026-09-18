@@ -24,6 +24,8 @@ public class InvoiceResponseDto {
 
     private UUID billingSnapshotId;
 
+    private UUID billingScheduleId;
+
     private String billingSnapshotNumber;
 
     private UUID taxCalculationId;

@@ -30,6 +30,10 @@ import java.util.UUID;
                         columnNames = {"billing_snapshot_id"}
                 ),
                 @UniqueConstraint(
+                        name = "uk_invoice_billing_schedule",
+                        columnNames = {"billing_schedule_id"}
+                ),
+                @UniqueConstraint(
                         name = "uk_invoice_number",
                         columnNames = {"invoice_number"}
                 )
@@ -63,10 +67,12 @@ public class Invoice {
 
     @Column(
             name = "billing_snapshot_id",
-            nullable = false,
             unique = true
     )
     private UUID billingSnapshotId;
+
+    @Column(name = "billing_schedule_id", unique = true)
+    private UUID billingScheduleId;
 
     /**
      * Human-readable {@code BillingSnapshot.snapshotNumber}, frozen onto the

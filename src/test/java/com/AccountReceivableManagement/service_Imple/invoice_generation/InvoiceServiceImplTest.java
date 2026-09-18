@@ -15,6 +15,10 @@ import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceApprovalHistory;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceItem;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceTaxComponent;
+import com.AccountReceivableManagement.entity.client_entity.Client;
+import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity.projectbilling_config.PaymentTermsMaster;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculationComponent;
@@ -22,12 +26,14 @@ import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.Bil
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceApprovalAction;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxApplicabilityType;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceApprovalHistoryRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
@@ -73,6 +79,9 @@ class InvoiceServiceImplTest {
 
     @Mock
     private PaymentTermsMasterRepository paymentTermsMasterRepository;
+
+        @Mock
+        private BillingScheduleRepository billingScheduleRepository;
 
     @InjectMocks
     private InvoiceServiceImpl invoiceService;
@@ -180,6 +189,143 @@ class InvoiceServiceImplTest {
                 .paymentDays(30)
                 .isActive(true)
                 .build();
+    }
+
+    private BillingSchedule taxCalculatedSchedule() {
+        UUID scheduleId = UUID.randomUUID();
+        BillingConfiguration billingConfiguration = BillingConfiguration.builder()
+                .billingConfigurationId(UUID.randomUUID())
+                .client(Client.builder().clientId(clientId).build())
+                .project(ProjectMasterReference.builder().pmsProjectId(23L).build())
+                .build();
+
+        return BillingSchedule.builder()
+                .billingScheduleId(scheduleId)
+                .billingConfiguration(billingConfiguration)
+                .periodNumber(2)
+                .periodStartDate(LocalDate.of(2026, 7, 1))
+                .periodEndDate(LocalDate.of(2026, 7, 31))
+                .billingDate(LocalDate.of(2026, 7, 31))
+                .billingAmount(new BigDecimal("2500.00"))
+                .periodStatus(BillingPeriodStatus.TAX_CALCULATED)
+                .taxStatus(BillingPeriodStatus.TAX_CALCULATED)
+                .isInvoiced(false)
+                .isActive(true)
+                .build();
+    }
+
+    private TaxCalculation completedScheduleTaxCalculation(UUID scheduleId) {
+        TaxCalculation calculation = completedTaxCalculation();
+        calculation.setBillingSnapshotId(null);
+        calculation.setBillingScheduleId(scheduleId);
+        calculation.setTaxableAmount(new BigDecimal("2500.00"));
+        calculation.setTotalTaxAmount(new BigDecimal("450.00"));
+        calculation.setGrandTotal(new BigDecimal("2950.00"));
+        calculation.getComponents().get(0).setTaxAmount(new BigDecimal("225.00"));
+        calculation.getComponents().get(1).setTaxAmount(new BigDecimal("225.00"));
+        return calculation;
+    }
+
+    @Test
+    void generateInvoiceForSchedule_taxCalculatedOccurrence_createsFixedPriceInvoice() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(schedule));
+        when(taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(BillingConfigurationResponseDto.builder()
+                        .clientId(clientId)
+                        .clientName("Account Management")
+                        .projectId(23L)
+                        .projectName("Website Redesign")
+                        .currencyCode("USD")
+                        .paymentTermId(paymentTermId)
+                        .paymentTermCode("NET_30")
+                        .build());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingScheduleRepository.save(any(BillingSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId());
+
+        assertThat(response.getBillingSnapshotId()).isNull();
+        assertThat(response.getBillingScheduleId()).isEqualTo(schedule.getBillingScheduleId());
+        assertThat(response.getClientId()).isEqualTo(clientId);
+        assertThat(response.getProjectId()).isEqualTo(23L);
+        assertThat(response.getBillingPeriodStart()).isEqualTo(schedule.getPeriodStartDate());
+        assertThat(response.getBillingPeriodEnd()).isEqualTo(schedule.getPeriodEndDate());
+        assertThat(response.getSubtotal()).isEqualByComparingTo("2500.00");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("450.00");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo("2950.00");
+        assertThat(response.getItems()).singleElement().satisfies(item -> {
+            assertThat(item.getItemType()).isEqualTo(BillingItemType.FIXED_PRICE);
+            assertThat(item.getQuantity()).isEqualByComparingTo("1");
+            assertThat(item.getRate()).isEqualByComparingTo("2500.00");
+            assertThat(item.getAmount()).isEqualByComparingTo("2500.00");
+            assertThat(item.getSourceReferenceId()).isEqualTo(schedule.getBillingScheduleId().toString());
+        });
+        assertThat(response.getTaxComponents()).hasSize(2);
+        assertThat(schedule.getIsInvoiced()).isTrue();
+        assertThat(schedule.getPeriodStatus()).isEqualTo(BillingPeriodStatus.INVOICED);
+        assertThat(schedule.getInvoiceDate()).isEqualTo(response.getInvoiceDate());
+    }
+
+    @Test
+    void generateInvoiceForSchedule_alreadyInvoicedOccurrence_rejectsDuplicate() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        schedule.setIsInvoiced(true);
+
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(schedule));
+
+        assertThatThrownBy(() -> invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId()))
+                .isInstanceOf(GlobalExceptionHandler.DuplicateResourceException.class);
+        verifyNoInteractions(invoiceRepository);
+    }
+
+    @Test
+    void generateInvoiceForSchedule_withoutCompletedTax_rejectsGeneration() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        schedule.setPeriodStatus(BillingPeriodStatus.TAX_PENDING);
+
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(schedule));
+
+        assertThatThrownBy(() -> invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId()))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class);
+        verifyNoInteractions(taxCalculationRepository, invoiceRepository);
+    }
+
+    @Test
+    void generateInvoiceForSchedule_generatedInvoice_canBeSubmittedForApproval() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId())).thenReturn(Optional.of(schedule));
+        when(taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId())).thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingScheduleId(schedule.getBillingScheduleId())).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(BillingConfigurationResponseDto.builder()
+                .clientId(clientId).clientName("Account Management").projectId(23L).projectName("Website Redesign")
+                .currencyCode("USD").build());
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingScheduleRepository.save(any(BillingSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto generated = invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId());
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = Invoice.builder().invoiceId(invoiceId).billingScheduleId(schedule.getBillingScheduleId())
+                .status(InvoiceStatus.GENERATED).items(new ArrayList<>()).taxComponents(new ArrayList<>()).build();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.save(invoice)).thenReturn(invoice);
+
+        InvoiceResponseDto submitted = invoiceService.submitForApproval(invoiceId);
+
+        assertThat(generated.getStatus()).isEqualTo(InvoiceStatus.GENERATED);
+        assertThat(submitted.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
     }
 
     // CASE 1/2/3/4/5/6/7/8/9/10 — Happy path: full invoice generation from the verified example.

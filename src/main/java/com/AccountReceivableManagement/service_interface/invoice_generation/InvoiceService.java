@@ -22,6 +22,8 @@ public interface InvoiceService {
      */
     InvoiceResponseDto generateInvoice(UUID billingSnapshotId);
 
+    InvoiceResponseDto generateInvoiceForSchedule(UUID billingScheduleId);
+
     InvoiceResponseDto getInvoiceByBillingSnapshotId(UUID billingSnapshotId);
 
     /**

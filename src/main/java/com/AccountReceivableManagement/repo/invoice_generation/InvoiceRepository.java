@@ -21,6 +21,10 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID> {
 
     boolean existsByBillingSnapshotId(UUID billingSnapshotId);
 
+    Optional<Invoice> findByBillingScheduleId(UUID billingScheduleId);
+
+    boolean existsByBillingScheduleId(UUID billingScheduleId);
+
     Optional<Invoice>
     findByInvoiceNumber(String invoiceNumber);
 
