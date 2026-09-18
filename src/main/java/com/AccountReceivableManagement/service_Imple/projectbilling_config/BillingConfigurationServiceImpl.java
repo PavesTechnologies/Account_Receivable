@@ -341,19 +341,36 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                     .getBillingTypeName()
                     .trim();
 
-            if (billingTypeName.equalsIgnoreCase("Subscription") ||
+            if (billingTypeName.equalsIgnoreCase("Fixed Price")) {
+                try {
+                    billingOccurrenceService.generateOccurrencesForFixedPrice(
+                            saved.getBillingConfigurationId());
+
+                    log.info(
+                            "Fixed Price billing occurrences generated successfully for configuration {}",
+                            saved.getBillingConfigurationId());
+
+                } catch (Exception e) {
+                    log.error(
+                            "Failed to generate Fixed Price billing occurrences for configuration {}",
+                            saved.getBillingConfigurationId(),
+                            e);
+
+                    throw new ValidationException(
+                            "Billing Configuration approved, but Billing Schedule generation failed: "
+                                    + e.getMessage());
+                }
+
+            } else if (billingTypeName.equalsIgnoreCase("Subscription") ||
                     billingTypeName.equalsIgnoreCase("Recurring")) {
 
-                /*
-                 * Generate billing occurrences (which includes schedule generation)
-                 * This is the single source of truth for schedule/occurrence generation
-                 */
                 try {
                     billingOccurrenceService.generateOccurrencesForRecurring(
                             saved.getBillingConfigurationId());
+
                 } catch (Exception e) {
                     log.error(
-                            "Failed to generate billing occurrences for configuration {}: {}",
+                            "Failed to generate Recurring billing occurrences for configuration {}: {}",
                             saved.getBillingConfigurationId(),
                             e.getMessage(),
                             e);

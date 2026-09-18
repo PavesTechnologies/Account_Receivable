@@ -242,19 +242,9 @@ public class BillingOccurrenceServiceImpl {
                 ? frequency.getBillingFrequencyName().trim().toLowerCase() 
                 : "";
 
-        // One-Time frequency allows same-day periods
-        // Recurring frequencies require positive period (at least one day)
-        if (!frequencyName.equals("one-time")) {
-            if (effectiveFrom.isAfter(effectiveTo) || effectiveFrom.isEqual(effectiveTo)) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Recurring Fixed Price billing requires a positive period. Effective From must be before Effective To.");
-            }
-        } else {
-            // For One-Time, only reject if end date is before start date
-            if (effectiveFrom.isAfter(effectiveTo)) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Effective From cannot be after Effective To.");
-            }
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Effective From cannot be after Effective To.");
         }
 
         List<BillingSchedule> existingSchedules = billingScheduleRepository
@@ -290,8 +280,25 @@ public class BillingOccurrenceServiceImpl {
                 existingSchedules.size() + 1
         );
 
+// Add this check here
+        if (newSchedules.isEmpty()) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "No billing schedule was generated for Fixed Price configuration "
+                            + configuration.getBillingConfigurationId()
+                            + ". Please verify Effective From, Effective To and Billing Frequency."
+            );
+        }
+
         try {
             billingScheduleRepository.saveAll(newSchedules);
+
+            log.info(
+                    "Generated {} occurrences for Fixed Price configuration {} from {} to {}",
+                    newSchedules.size(),
+                    configuration.getBillingConfigurationId(),
+                    generationStartDate,
+                    effectiveTo
+            );
             log.info("Generated {} occurrences for Fixed Price configuration {} from {} to {}",
                     newSchedules.size(), configuration.getBillingConfigurationId(), generationStartDate, effectiveTo);
         } catch (DataIntegrityViolationException e) {
