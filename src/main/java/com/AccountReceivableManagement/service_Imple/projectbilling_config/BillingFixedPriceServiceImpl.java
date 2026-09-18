@@ -127,7 +127,7 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
         // Generate billing occurrences for Fixed Price
         // This is mandatory - if it fails, the entire transaction should roll back
-        billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigurationId);
+//        billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigurationId);
 
         return mapToResponse(saved);
     }
@@ -218,8 +218,11 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
         // Reconcile billing occurrences on update
         // This is mandatory - if it fails, the entire transaction should roll back
-        billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
-                configuration.getBillingConfigurationId());
+        // Reconcile billing occurrences only for APPROVED configurations
+        if (configuration.getApprovalStatus() == ApprovalStatus.APPROVED) {
+            billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
+                    configuration.getBillingConfigurationId());
+        }
 
 //        // Create audit record if transitioning from APPROVED
 //        if (previousConfiguration.getApprovalStatus() == ApprovalStatus.APPROVED &&
