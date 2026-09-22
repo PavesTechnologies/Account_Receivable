@@ -52,6 +52,12 @@ public class InvoiceResponseDto {
 
     private String paymentTermCode;
 
+    private String paymentTermName;
+
+    private String email;
+
+    private String phone;
+
     private LocalDate invoiceDate;
 
     private LocalDate dueDate;

@@ -1,0 +1,225 @@
+package com.AccountReceivableManagement.service_Imple.invoice_generation;
+
+import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceDeliveryResponseDto;
+import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
+import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceDelivery;
+import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus;
+import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
+import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDeliveryRepository;
+import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
+import com.AccountReceivableManagement.service_Imple.email.EmailDeliveryException;
+import com.AccountReceivableManagement.service_interface.company_profile.CompanyProfileService;
+import com.AccountReceivableManagement.service_interface.email.EmailService;
+import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDeliveryService;
+import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDocumentService;
+import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Orchestrates one "Send to Client" attempt:
+ * Approved Invoice -> validate recipient -> generate PDF -> create PENDING
+ * delivery row -> send through Gmail SMTP -> persist SENT/FAILED.
+ * Never marks {@link Invoice#getStatus()} as sent - delivery state lives
+ * entirely on {@link InvoiceDelivery}, a separate audit trail, matching
+ * the same standalone-history convention already used by
+ * {@code InvoiceApprovalHistory}.
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
+
+    private final InvoiceRepository invoiceRepository;
+
+    private final InvoiceDeliveryRepository invoiceDeliveryRepository;
+
+    private final InvoiceService invoiceService;
+
+    private final CompanyProfileService companyProfileService;
+
+    private final InvoiceDocumentService invoiceDocumentService;
+
+    private final EmailService emailService;
+
+    @Override
+    public InvoiceDeliveryResponseDto sendInvoice(UUID invoiceId) {
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Invoice could not be found."
+                        ));
+
+        validateInvoiceReadyForDelivery(invoice);
+
+        // Company profile lookup reuses CompanyProfileService.getActive(),
+        // which already throws ResourceNotFoundException("No active
+        // company profile has been configured.") when none exists - the
+        // same "clear configuration error" this workflow requires.
+        CompanyProfileResponseDto companyProfile = companyProfileService.getActive();
+
+        InvoiceDelivery delivery =
+                InvoiceDelivery.builder()
+                        .invoiceId(invoice.getInvoiceId())
+                        .recipientEmail(invoice.getEmail())
+                        .status(InvoiceDeliveryStatus.PENDING)
+                        .retryCount(0)
+                        .build();
+
+        delivery = invoiceDeliveryRepository.save(delivery);
+
+        InvoiceResponseDto invoiceResponse = invoiceService.getInvoiceById(invoiceId);
+
+        byte[] pdfBytes;
+        try {
+            pdfBytes = invoiceDocumentService.generateInvoicePdf(invoiceResponse, companyProfile);
+        } catch (PdfGenerationException ex) {
+            return markFailed(delivery, "PDF generation failed: " + ex.getMessage());
+        }
+
+        String subject = buildSubject(invoiceResponse, companyProfile);
+        String body = buildBody(invoiceResponse, companyProfile);
+        String attachmentFilename = "invoice-" + invoiceResponse.getInvoiceNumber() + ".pdf";
+
+        String messageId;
+        try {
+            messageId = emailService.sendEmailWithAttachment(
+                    invoice.getEmail(),
+                    subject,
+                    body,
+                    pdfBytes,
+                    attachmentFilename,
+                    "application/pdf"
+            );
+        } catch (EmailDeliveryException ex) {
+            return markFailed(delivery, ex.getMessage());
+        }
+
+        delivery.setStatus(InvoiceDeliveryStatus.SENT);
+        delivery.setSentAt(LocalDateTime.now());
+        delivery.setProviderMessageId(messageId);
+
+        InvoiceDelivery saved = invoiceDeliveryRepository.save(delivery);
+
+        return mapToResponse(saved, invoiceResponse.getInvoiceNumber());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<InvoiceDeliveryResponseDto> getDeliveryHistory(UUID invoiceId) {
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
+                                "Invoice could not be found."
+                        ));
+
+        return invoiceDeliveryRepository
+                .findByInvoiceIdOrderByCreatedAtDesc(invoiceId)
+                .stream()
+                .map(delivery -> mapToResponse(delivery, invoice.getInvoiceNumber()))
+                .toList();
+    }
+
+    private void validateInvoiceReadyForDelivery(Invoice invoice) {
+
+        if (invoice.getStatus() != InvoiceStatus.APPROVED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice must be approved before it can be sent to the client."
+            );
+        }
+
+        if (invoice.getInvoiceNumber() == null || invoice.getInvoiceNumber().isBlank()
+                || invoice.getInvoiceDate() == null
+                || invoice.getSubtotal() == null
+                || invoice.getTotalTaxAmount() == null
+                || invoice.getGrandTotal() == null) {
+
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice does not have valid invoice data required for delivery."
+            );
+        }
+
+        if (invoice.getEmail() == null || invoice.getEmail().isBlank()) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Client email is not configured for this invoice."
+            );
+        }
+    }
+
+    /**
+     * Persists the FAILED outcome and returns it to the caller - never
+     * rethrows, so the API always reports what actually happened instead
+     * of surfacing a generic 500 that would hide the delivery record.
+     */
+    private InvoiceDeliveryResponseDto markFailed(InvoiceDelivery delivery, String reason) {
+
+        delivery.setStatus(InvoiceDeliveryStatus.FAILED);
+        delivery.setFailedAt(LocalDateTime.now());
+        delivery.setFailureReason(reason);
+
+        InvoiceDelivery saved = invoiceDeliveryRepository.save(delivery);
+
+        log.warn("Invoice delivery {} failed: {}", delivery.getInvoiceDeliveryId(), reason);
+
+        Invoice invoice = invoiceRepository.findById(delivery.getInvoiceId()).orElse(null);
+
+        return mapToResponse(saved, invoice != null ? invoice.getInvoiceNumber() : null);
+    }
+
+    private String buildSubject(InvoiceResponseDto invoice, CompanyProfileResponseDto companyProfile) {
+        return "Invoice " + invoice.getInvoiceNumber() + " - " + companyProfile.getLegalName();
+    }
+
+    private String buildBody(InvoiceResponseDto invoice, CompanyProfileResponseDto companyProfile) {
+
+        String clientGreeting =
+                invoice.getClientName() != null && !invoice.getClientName().isBlank()
+                        ? invoice.getClientName()
+                        : "Customer";
+
+        String amount =
+                (invoice.getCurrencyCode() != null ? invoice.getCurrencyCode() + " " : "")
+                        + invoice.getGrandTotal();
+
+        StringBuilder body = new StringBuilder();
+        body.append("Dear ").append(clientGreeting).append(",\n\n");
+        body.append("Please find attached invoice ").append(invoice.getInvoiceNumber())
+                .append(" for ").append(amount).append(".\n\n");
+        body.append("Invoice date: ").append(invoice.getInvoiceDate()).append("\n");
+        if (invoice.getDueDate() != null) {
+            body.append("Due date: ").append(invoice.getDueDate()).append("\n");
+        }
+        body.append("\nThe invoice document is attached to this email as a PDF.\n\n");
+        body.append("Regards,\n");
+        body.append(companyProfile.getLegalName());
+
+        return body.toString();
+    }
+
+    private InvoiceDeliveryResponseDto mapToResponse(InvoiceDelivery delivery, String invoiceNumber) {
+
+        return InvoiceDeliveryResponseDto.builder()
+                .deliveryId(delivery.getInvoiceDeliveryId())
+                .invoiceId(delivery.getInvoiceId())
+                .invoiceNumber(invoiceNumber)
+                .recipientEmail(delivery.getRecipientEmail())
+                .deliveryStatus(delivery.getStatus())
+                .sentAt(delivery.getSentAt())
+                .failedAt(delivery.getFailedAt())
+                .failureReason(delivery.getFailureReason())
+                .createdAt(delivery.getCreatedAt())
+                .build();
+    }
+}

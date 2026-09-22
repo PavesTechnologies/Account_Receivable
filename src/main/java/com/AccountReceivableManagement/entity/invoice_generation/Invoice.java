@@ -138,6 +138,29 @@ public class Invoice {
     @Column(name = "payment_term_code", length = 100)
     private String paymentTermCode;
 
+    /**
+     * Friendly {@code PaymentTermsMaster.paymentTermName} (e.g. "Net 30"),
+     * frozen alongside {@code paymentTermCode} (which historically holds
+     * the stringified {@code paymentDays} figure, e.g. "30") so a Preview
+     * screen can show a readable label without a live master-data lookup.
+     */
+    @Column(name = "payment_term_name", length = 100)
+    private String paymentTermName;
+
+    /**
+     * Frozen copy of {@code Client.email}, populated only when the source
+     * field itself is populated - never guessed.
+     */
+    @Column(name = "email", length = 255)
+    private String email;
+
+    /**
+     * Frozen copy of {@code Client.phone}, populated only when the source
+     * field itself is populated - never guessed.
+     */
+    @Column(name = "phone", length = 30)
+    private String phone;
+
     @Column(
             name = "subtotal",
             nullable = false,

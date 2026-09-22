@@ -236,6 +236,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .paymentTermCode(
                                 snapshot.getPaymentTermCode()
                         )
+                        .paymentTermName(
+                                snapshot.getPaymentTermName()
+                        )
                         .subtotal(
                                 taxCalculation.getTaxableAmount()
                         )
@@ -283,6 +286,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                                     snapshotItem.getWorkDate()
                             )
                             .role(snapshotItem.getRole())
+                            .resourceName(
+                                    snapshotItem.getResourceName()
+                            )
                             .build();
 
             invoice.getItems().add(invoiceItem);
@@ -418,6 +424,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .billingPeriodEnd(schedule.getPeriodEndDate())
                         .currencyCode(configuration.getCurrencyCode())
                         .paymentTermCode(configuration.getPaymentTermCode())
+                        .paymentTermName(configuration.getPaymentTermName())
                         .subtotal(taxCalculation.getTaxableAmount())
                         .totalTaxAmount(taxCalculation.getTotalTaxAmount())
                         .grandTotal(taxCalculation.getGrandTotal())
@@ -495,6 +502,22 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 new GlobalExceptionHandler
                                         .ResourceNotFoundException(
                                         "No invoice has been generated for this billing snapshot."
+                                )
+                        );
+
+        return mapToResponse(invoice);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public InvoiceResponseDto getInvoiceById(UUID invoiceId) {
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Invoice could not be found."
                                 )
                         );
 
@@ -733,6 +756,10 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoice.setPaymentTermCode(
                 snapshot.getPaymentTermCode()
         );
+        invoice.setPaymentTermName(
+                snapshot.getPaymentTermName()
+        );
+
         invoice.setSubtotal(
                 taxCalculation.getTaxableAmount()
         );
@@ -778,6 +805,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                                     snapshotItem.getWorkDate()
                             )
                             .role(snapshotItem.getRole())
+                            .resourceName(
+                                    snapshotItem.getResourceName()
+                            )
                             .build()
             );
         }
@@ -1140,6 +1170,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                                         .amount(item.getAmount())
                                         .workDate(item.getWorkDate())
                                         .role(item.getRole())
+                                        .resourceName(
+                                                item.getResourceName()
+                                        )
                                         .build()
                         )
                         .toList();
@@ -1215,6 +1248,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                 )
                 .currencyCode(invoice.getCurrencyCode())
                 .paymentTermCode(invoice.getPaymentTermCode())
+                .paymentTermName(invoice.getPaymentTermName())
+                .email(invoice.getEmail())
+                .phone(invoice.getPhone())
                 .invoiceDate(invoice.getInvoiceDate())
                 .dueDate(invoice.getDueDate())
                 .items(items)

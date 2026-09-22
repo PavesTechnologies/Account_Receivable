@@ -40,6 +40,7 @@ public class BillingSnapshotBuilder {
                     .workDate(timesheet.getWorkDate())
                     .approvalStatus(timesheet.getApprovalStatus())
                     .role(timesheet.getRole())
+                    .resourceName(timesheet.getResourceName())
                     .build());
         }
         return items;
@@ -61,6 +62,7 @@ public class BillingSnapshotBuilder {
                 .currencyCode(context.getConfiguration().getCurrencyCode())
                 .paymentTermId(context.getConfiguration().getPaymentTermId())
                 .paymentTermCode(context.getConfiguration().getPaymentTermCode() != null ? context.getConfiguration().getPaymentTermCode() : context.getConfiguration().getPaymentTermName())
+                .paymentTermName(context.getConfiguration().getPaymentTermName())
                 .billingFrequencyId(context.getConfiguration().getBillingFrequencyId())
                 .billingFrequency(context.getConfiguration().getBillingFrequencyName())
                 .taxRegionId(context.getConfiguration().getTaxRegionId())

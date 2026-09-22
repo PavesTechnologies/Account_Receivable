@@ -404,6 +404,82 @@ class InvoiceServiceImplTest {
         verify(taxCalculationRepository, never()).save(any());
     }
 
+    // Payment term name: frozen from the snapshot's own (frozen) payment term
+    // name, alongside the pre-existing paymentTermCode (day-count) field.
+    @Test
+    void generateInvoice_paymentTermNameFrozenFromSnapshot() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setPaymentTermName("Net 30");
+        TaxCalculation taxCalculation = completedTaxCalculation();
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoice(snapshotId);
+
+        assertThat(response.getPaymentTermCode()).isEqualTo("NET_30");
+        assertThat(response.getPaymentTermName()).isEqualTo("Net 30");
+    }
+
+    // Resource name: frozen from BillingSnapshotItem.resourceName (the
+    // genuine TMS employee name) onto the corresponding InvoiceItem.
+    @Test
+    void generateInvoice_timeEntryItem_freezesResourceName() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.getItems().get(0).setResourceName("Jane Doe");
+        TaxCalculation taxCalculation = completedTaxCalculation();
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoice(snapshotId);
+
+        assertThat(response.getItems()).singleElement()
+                .extracting("resourceName")
+                .isEqualTo("Jane Doe");
+    }
+
+    // GET invoice by invoice id — new endpoint, reuses the same mapToResponse
+    // as the snapshot-based GET, so it returns the identical full contract.
+    @Test
+    void getInvoiceById_existingInvoice_returnsFullResponse() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = Invoice.builder()
+                .invoiceId(invoiceId)
+                .invoiceNumber("INV-20260908164549")
+                .status(InvoiceStatus.GENERATED)
+                .items(new ArrayList<>())
+                .taxComponents(new ArrayList<>())
+                .build();
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+
+        InvoiceResponseDto response = invoiceService.getInvoiceById(invoiceId);
+
+        assertThat(response.getInvoiceId()).isEqualTo(invoiceId);
+        assertThat(response.getInvoiceNumber()).isEqualTo("INV-20260908164549");
+        assertThat(response.getStatus()).isEqualTo(InvoiceStatus.GENERATED);
+    }
+
+    @Test
+    void getInvoiceById_missingInvoice_throwsResourceNotFoundException() {
+        UUID invoiceId = UUID.randomUUID();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> invoiceService.getInvoiceById(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class);
+    }
+
     // CASE 11 — READY_FOR_TAX snapshot cannot generate an invoice.
     @Test
     void generateInvoice_snapshotNotTaxCompleted_throwsValidationException() {
