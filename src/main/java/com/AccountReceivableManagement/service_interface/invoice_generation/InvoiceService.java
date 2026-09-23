@@ -27,6 +27,15 @@ public interface InvoiceService {
     InvoiceResponseDto getInvoiceByBillingSnapshotId(UUID billingSnapshotId);
 
     /**
+     * Fetches the same fully-populated {@link InvoiceResponseDto} (header,
+     * items, tax components, totals) as
+     * {@link #getInvoiceByBillingSnapshotId(UUID)}, keyed by the invoice's
+     * own id instead of its billing snapshot id - for callers (e.g. the
+     * approval workspace) that only hold an invoice id.
+     */
+    InvoiceResponseDto getInvoiceById(UUID invoiceId);
+
+    /**
      * Lists every already-generated invoice, most recent first, for the
      * Invoice Generation workspace. Purely read-only - generates nothing.
      */

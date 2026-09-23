@@ -56,6 +56,14 @@ public class InvoiceItem {
     @Column(name = "source_reference_id", length = 100)
     private String sourceReferenceId;
 
+    /**
+     * Frozen copy of {@code BillingSnapshotItem.resourceName} - the TMS
+     * employee display name for a TIME_ENTRY line. {@code null} for line
+     * types with no resource concept (e.g. FIXED_PRICE), never guessed.
+     */
+    @Column(name = "resource_name", length = 255)
+    private String resourceName;
+
     @Column(name = "quantity", precision = 19, scale = 2)
     private BigDecimal quantity;
 

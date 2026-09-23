@@ -74,6 +74,36 @@ public class ClientCdcMappingRegistry {
         );
 
         RMS_TO_AR.put(
+                "country_code",
+                new ColumnMapping(
+                        "country_code",
+                        "countryCode",
+                        FieldType.STRING,
+                        null
+                )
+        );
+
+        RMS_TO_AR.put(
+                "email",
+                new ColumnMapping(
+                        "email",
+                        "email",
+                        FieldType.STRING,
+                        null
+                )
+        );
+
+        RMS_TO_AR.put(
+                "phone",
+                new ColumnMapping(
+                        "phone",
+                        "phone",
+                        FieldType.STRING,
+                        null
+                )
+        );
+
+        RMS_TO_AR.put(
                 "default_timezone",
                 new ColumnMapping(
                         "default_timezone",
