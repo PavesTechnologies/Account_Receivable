@@ -134,6 +134,36 @@ public class ClientCdcMappingRegistry {
         );
 
         RMS_TO_AR.put(
+                "country_code",
+                new ColumnMapping(
+                        "country_code",
+                        "countryCode",
+                        FieldType.STRING,
+                        null
+                )
+        );
+
+        RMS_TO_AR.put(
+                "email",
+                new ColumnMapping(
+                        "email",
+                        "email",
+                        FieldType.STRING,
+                        null
+                )
+        );
+
+        RMS_TO_AR.put(
+                "phone_number",
+                new ColumnMapping(
+                        "phone_number",
+                        "phoneNumber",
+                        FieldType.STRING,
+                        null
+                )
+        );
+
+        RMS_TO_AR.put(
                 "created_at",
                 new ColumnMapping(
                         "created_at",

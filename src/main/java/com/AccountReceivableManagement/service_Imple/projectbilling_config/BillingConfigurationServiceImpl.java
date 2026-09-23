@@ -1966,33 +1966,57 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         LocalDate today = LocalDate.now();
 
+        log.info("DEBUG: Fetching available projects for clientId: {}", clientId);
+
+        // Fetch client information once to avoid N+1 queries
+        Client client = clientRepository.findById(clientId)
+                .orElseThrow(() -> new ResourceNotFoundException("Client not found."));
+
         // Get all projects for the client
         List<ProjectMasterReference> allProjects =
                 projectRepository.findByClientIdOrderByProjectNameAsc(clientId);
+
+        log.info("DEBUG: allProjects.size() = {}", allProjects.size());
+        for (ProjectMasterReference p : allProjects) {
+            log.info("DEBUG: Project - pmsProjectId: {}, projectName: {}, clientId: {}, startDate: {}, endDate: {}",
+                    p.getPmsProjectId(), p.getProjectName(), p.getClientId(), p.getStartDate(), p.getEndDate());
+        }
 
         // Get projects that already have an existing configuration
         List<Long> ineligibleProjectIds =
                 projectEligibilityRepository.findIneligibleProjectIdsByClientId(clientId);
 
-        return allProjects
-                .stream()
+        log.info("DEBUG: ineligibleProjectIds = {}", ineligibleProjectIds);
+        log.info("DEBUG: today = {}", today);
 
+        List<ProjectMasterReference> afterEndDateFilter = allProjects
+                .stream()
                 // Do not show projects whose current duration has ended
                 .filter(project ->
                         project.getEndDate() == null
                                 || !today.isAfter(project.getEndDate())
                 )
+                .toList();
 
+        log.info("DEBUG: Projects after end-date filter = {}", afterEndDateFilter.size());
+
+        List<ProjectMasterReference> afterEligibilityFilter = afterEndDateFilter
+                .stream()
                 // Apply existing billing configuration eligibility rules
                 .filter(project ->
                         !ineligibleProjectIds.contains(project.getPmsProjectId())
                 )
+                .toList();
 
+        log.info("DEBUG: Projects after eligibility filter = {}", afterEligibilityFilter.size());
+
+        return afterEligibilityFilter
+                .stream()
                 .map(project ->
                         ProjectResponseDto.builder()
                                 .projectId(project.getPmsProjectId())
                                 .projectName(project.getProjectName())
-                                .projectCode(String.valueOf(project.getPmsProjectId()))
+                                .projectCode(project.getProjectCode())
                                 .projectDuration(
                                         calculateProjectDuration(
                                                 project.getStartDate(),
@@ -2006,6 +2030,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 .primaryLocation(
                                         project.getPrimaryLocation()
                                 )
+                                .countryCode(client.getCountryCode())
+                                .email(client.getEmail())
+                                .phoneNumber(client.getPhoneNumber())
                                 .build()
                 )
                 .toList();

@@ -36,6 +36,16 @@ public class ProjectCdcMappingRegistry {
         );
 
         PMS_TO_AR.put(
+                "project_key",
+                new ColumnMapping(
+                        "project_key",
+                        "projectCode",
+                        FieldType.STRING,
+                        null
+                )
+        );
+
+        PMS_TO_AR.put(
                 "client_id",
                 new ColumnMapping(
                         "client_id",
