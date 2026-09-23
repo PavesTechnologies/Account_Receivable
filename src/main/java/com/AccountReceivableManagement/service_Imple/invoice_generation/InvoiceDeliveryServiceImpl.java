@@ -1,6 +1,5 @@
 package com.AccountReceivableManagement.service_Imple.invoice_generation;
 
-import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceDeliveryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
@@ -8,10 +7,10 @@ import com.AccountReceivableManagement.entity.invoice_generation.InvoiceDelivery
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDeliveryRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
 import com.AccountReceivableManagement.service_Imple.email.EmailDeliveryException;
-import com.AccountReceivableManagement.service_interface.company_profile.CompanyProfileService;
 import com.AccountReceivableManagement.service_interface.email.EmailService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDeliveryService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDocumentService;
@@ -42,11 +41,11 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
 
     private final InvoiceRepository invoiceRepository;
 
+    private final ClientRepository clientRepository;
+
     private final InvoiceDeliveryRepository invoiceDeliveryRepository;
 
     private final InvoiceService invoiceService;
-
-    private final CompanyProfileService companyProfileService;
 
     private final InvoiceDocumentService invoiceDocumentService;
 
@@ -61,18 +60,13 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
                                 "Invoice could not be found."
                         ));
 
-        validateInvoiceReadyForDelivery(invoice);
-
-        // Company profile lookup reuses CompanyProfileService.getActive(),
-        // which already throws ResourceNotFoundException("No active
-        // company profile has been configured.") when none exists - the
-        // same "clear configuration error" this workflow requires.
-        CompanyProfileResponseDto companyProfile = companyProfileService.getActive();
+                String recipientEmail = resolveRecipientEmail(invoice);
+                validateInvoiceReadyForDelivery(invoice, recipientEmail);
 
         InvoiceDelivery delivery =
                 InvoiceDelivery.builder()
                         .invoiceId(invoice.getInvoiceId())
-                        .recipientEmail(invoice.getEmail())
+                        .recipientEmail(recipientEmail)
                         .status(InvoiceDeliveryStatus.PENDING)
                         .retryCount(0)
                         .build();
@@ -83,19 +77,19 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
 
         byte[] pdfBytes;
         try {
-            pdfBytes = invoiceDocumentService.generateInvoicePdf(invoiceResponse, companyProfile);
+            pdfBytes = invoiceDocumentService.generateInvoicePdf(invoiceResponse);
         } catch (PdfGenerationException ex) {
             return markFailed(delivery, "PDF generation failed: " + ex.getMessage());
         }
 
-        String subject = buildSubject(invoiceResponse, companyProfile);
-        String body = buildBody(invoiceResponse, companyProfile);
+        String subject = buildSubject(invoiceResponse);
+        String body = buildBody(invoiceResponse);
         String attachmentFilename = "invoice-" + invoiceResponse.getInvoiceNumber() + ".pdf";
 
         String messageId;
         try {
             messageId = emailService.sendEmailWithAttachment(
-                    invoice.getEmail(),
+                    recipientEmail,
                     subject,
                     body,
                     pdfBytes,
@@ -132,7 +126,24 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
                 .toList();
     }
 
-    private void validateInvoiceReadyForDelivery(Invoice invoice) {
+    private String resolveRecipientEmail(Invoice invoice) {
+        if (invoice.getEmail() != null && !invoice.getEmail().isBlank()) {
+            return invoice.getEmail();
+        }
+
+        if (invoice.getClientId() == null || clientRepository == null) {
+            return null;
+        }
+
+        return clientRepository.findById(invoice.getClientId())
+                .map(client -> client.getEmail())
+                .orElse(null);
+    }
+
+    private void validateInvoiceReadyForDelivery(
+            Invoice invoice,
+            String recipientEmail
+    ) {
 
         if (invoice.getStatus() != InvoiceStatus.APPROVED) {
             throw new GlobalExceptionHandler.ValidationException(
@@ -151,7 +162,7 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
             );
         }
 
-        if (invoice.getEmail() == null || invoice.getEmail().isBlank()) {
+        if (recipientEmail == null || recipientEmail.isBlank()) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Client email is not configured for this invoice."
             );
@@ -178,11 +189,11 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
         return mapToResponse(saved, invoice != null ? invoice.getInvoiceNumber() : null);
     }
 
-    private String buildSubject(InvoiceResponseDto invoice, CompanyProfileResponseDto companyProfile) {
-        return "Invoice " + invoice.getInvoiceNumber() + " - " + companyProfile.getLegalName();
+    private String buildSubject(InvoiceResponseDto invoice) {
+        return "Invoice " + invoice.getInvoiceNumber() + " - " + invoice.getSellerLegalName();
     }
 
-    private String buildBody(InvoiceResponseDto invoice, CompanyProfileResponseDto companyProfile) {
+    private String buildBody(InvoiceResponseDto invoice) {
 
         String clientGreeting =
                 invoice.getClientName() != null && !invoice.getClientName().isBlank()
@@ -203,7 +214,7 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
         }
         body.append("\nThe invoice document is attached to this email as a PDF.\n\n");
         body.append("Regards,\n");
-        body.append(companyProfile.getLegalName());
+        body.append(invoice.getSellerLegalName());
 
         return body.toString();
     }

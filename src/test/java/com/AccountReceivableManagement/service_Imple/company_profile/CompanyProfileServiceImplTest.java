@@ -17,6 +17,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -43,7 +45,8 @@ class CompanyProfileServiceImplTest {
     }
 
     @Test
-    void create_validRequest_createsAndReturnsProfile() {
+    void create_noExistingProfile_createsAndReturnsProfile() {
+        when(companyProfileRepository.count()).thenReturn(0L);
         when(companyProfileRepository.save(any(CompanyProfile.class)))
                 .thenAnswer(invocation -> {
                     CompanyProfile saved = invocation.getArgument(0);
@@ -59,9 +62,22 @@ class CompanyProfileServiceImplTest {
         assertThat(response.getIsActive()).isTrue();
     }
 
+    // The AR system supports exactly one Company Profile - a second POST
+    // must be rejected as a business conflict, not silently create a
+    // second (active) row.
+    @Test
+    void create_profileAlreadyExists_throwsDuplicateResourceExceptionAndPersistsNothing() {
+        when(companyProfileRepository.count()).thenReturn(1L);
+
+        assertThatThrownBy(() -> companyProfileService.create(validRequest()))
+                .isInstanceOf(GlobalExceptionHandler.DuplicateResourceException.class);
+
+        verify(companyProfileRepository, never()).save(any());
+    }
+
     @Test
     void getActive_noActiveProfileConfigured_throwsResourceNotFoundException() {
-        when(companyProfileRepository.findFirstByIsActiveTrue())
+        when(companyProfileRepository.findFirstByIsActiveTrueOrderByCreatedAtAsc())
                 .thenReturn(Optional.empty());
 
         assertThatThrownBy(companyProfileService::getActive)
@@ -76,7 +92,7 @@ class CompanyProfileServiceImplTest {
                 .isActive(true)
                 .build();
 
-        when(companyProfileRepository.findFirstByIsActiveTrue())
+        when(companyProfileRepository.findFirstByIsActiveTrueOrderByCreatedAtAsc())
                 .thenReturn(Optional.of(profile));
 
         CompanyProfileResponseDto response = companyProfileService.getActive();
@@ -92,5 +108,37 @@ class CompanyProfileServiceImplTest {
 
         assertThatThrownBy(() -> companyProfileService.update(companyProfileId, validRequest()))
                 .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class);
+    }
+
+    @Test
+    void update_existingProfile_updatesAndReturnsIt() {
+        UUID companyProfileId = UUID.randomUUID();
+        CompanyProfile existing = CompanyProfile.builder()
+                .companyProfileId(companyProfileId)
+                .legalName("Old Legal Name")
+                .city("Old City")
+                .isActive(true)
+                .build();
+
+        when(companyProfileRepository.findById(companyProfileId))
+                .thenReturn(Optional.of(existing));
+        when(companyProfileRepository.save(any(CompanyProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        CompanyProfileRequestDto update = CompanyProfileRequestDto.builder()
+                .legalName("Updated Legal Name")
+                .city("Hyderabad")
+                .gstin("36AAAAA0000A1Z5")
+                .email("updated@example.com")
+                .build();
+
+        CompanyProfileResponseDto response = companyProfileService.update(companyProfileId, update);
+
+        assertThat(response.getCompanyProfileId()).isEqualTo(companyProfileId);
+        assertThat(response.getLegalName()).isEqualTo("Updated Legal Name");
+        assertThat(response.getCity()).isEqualTo("Hyderabad");
+        assertThat(response.getEmail()).isEqualTo("updated@example.com");
+        // isActive is not exposed on the request DTO - unaffected by an edit.
+        assertThat(response.getIsActive()).isTrue();
     }
 }

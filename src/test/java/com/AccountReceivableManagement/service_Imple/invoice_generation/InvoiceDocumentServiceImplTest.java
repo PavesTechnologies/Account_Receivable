@@ -1,6 +1,5 @@
 package com.AccountReceivableManagement.service_Imple.invoice_generation;
 
-import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceItemResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceTaxComponentResponseDto;
@@ -28,6 +27,15 @@ class InvoiceDocumentServiceImplTest {
                 .gstinOrTaxId("GB123456789")
                 .email("client@example.com")
                 .phone("+44 20 7946 0958")
+                .sellerLegalName("Example Global Infotech Private Limited")
+                .sellerAddressLine1("Tower B, Tech Park")
+                .sellerCity("Hyderabad")
+                .sellerState("Telangana")
+                .sellerPostalCode("500081")
+                .sellerCountry("India")
+                .sellerGstin("36AAAAA0000A1Z5")
+                .sellerEmail("billing@example.com")
+                .sellerPhone("+91 40 1234 5678")
                 .currencyCode("USD")
                 .paymentTermName("Net 30")
                 .invoiceDate(LocalDate.of(2026, 9, 8))
@@ -59,23 +67,9 @@ class InvoiceDocumentServiceImplTest {
                 .build();
     }
 
-    private CompanyProfileResponseDto companyProfile() {
-        return CompanyProfileResponseDto.builder()
-                .legalName("Example Global Infotech Private Limited")
-                .addressLine1("Tower B, Tech Park")
-                .city("Hyderabad")
-                .state("Telangana")
-                .postalCode("500081")
-                .country("India")
-                .gstin("36AAAAA0000A1Z5")
-                .email("billing@example.com")
-                .phone("+91 40 1234 5678")
-                .build();
-    }
-
     @Test
     void generateInvoicePdf_fullInvoice_producesValidPdfBytes() {
-        byte[] pdf = service.generateInvoicePdf(fullInvoice(), companyProfile());
+        byte[] pdf = service.generateInvoicePdf(fullInvoice());
 
         assertThat(pdf).isNotEmpty();
         // Every PDF file starts with this magic header - confirms a real
@@ -89,7 +83,45 @@ class InvoiceDocumentServiceImplTest {
         invoice.setItems(List.of());
         invoice.setTaxComponents(List.of());
 
-        byte[] pdf = service.generateInvoicePdf(invoice, companyProfile());
+        byte[] pdf = service.generateInvoicePdf(invoice);
+
+        assertThat(pdf).isNotEmpty();
+        assertThat(new String(pdf, 0, 5)).isEqualTo("%PDF-");
+    }
+
+    // The seller ("From") block is rendered purely from the Invoice's own
+    // seller* snapshot fields - generateInvoicePdf takes no CompanyProfile
+    // parameter at all, so a historical invoice's PDF cannot depend on
+    // whatever Company Profile happens to be active when it's re-rendered.
+    @Test
+    void generateInvoicePdf_usesInvoiceOwnSellerSnapshot_noCompanyProfileParameter() {
+        InvoiceResponseDto invoice = fullInvoice();
+
+        byte[] pdf = service.generateInvoicePdf(invoice);
+
+        assertThat(pdf).isNotEmpty();
+        assertThat(new String(pdf, 0, 5)).isEqualTo("%PDF-");
+    }
+
+    // Missing-data behavior is preserved: a blank seller snapshot (e.g. an
+    // invoice generated before this feature existed) must not fail
+    // rendering or fabricate placeholder seller text.
+    @Test
+    void generateInvoicePdf_blankSellerSnapshot_stillProducesValidPdf() {
+        InvoiceResponseDto invoice = fullInvoice();
+        invoice.setSellerLegalName(null);
+        invoice.setSellerAddressLine1(null);
+        invoice.setSellerAddressLine2(null);
+        invoice.setSellerCity(null);
+        invoice.setSellerState(null);
+        invoice.setSellerPostalCode(null);
+        invoice.setSellerCountry(null);
+        invoice.setSellerGstin(null);
+        invoice.setSellerEmail(null);
+        invoice.setSellerPhone(null);
+        invoice.setSellerLogoReference(null);
+
+        byte[] pdf = service.generateInvoicePdf(invoice);
 
         assertThat(pdf).isNotEmpty();
         assertThat(new String(pdf, 0, 5)).isEqualTo("%PDF-");

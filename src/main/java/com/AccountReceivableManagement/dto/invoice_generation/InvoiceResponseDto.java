@@ -34,6 +34,8 @@ public class InvoiceResponseDto {
 
     private String clientName;
 
+    private String countryCode;
+
     private String billingAddress;
 
     private String gstinOrTaxId;
@@ -57,6 +59,28 @@ public class InvoiceResponseDto {
     private String email;
 
     private String phone;
+
+    private String sellerLegalName;
+
+    private String sellerAddressLine1;
+
+    private String sellerAddressLine2;
+
+    private String sellerCity;
+
+    private String sellerState;
+
+    private String sellerPostalCode;
+
+    private String sellerCountry;
+
+    private String sellerGstin;
+
+    private String sellerEmail;
+
+    private String sellerPhone;
+
+    private String sellerLogoReference;
 
     private LocalDate invoiceDate;
 

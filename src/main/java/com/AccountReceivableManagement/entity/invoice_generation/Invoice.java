@@ -96,6 +96,9 @@ public class Invoice {
     @Column(name = "client_name", length = 255)
     private String clientName;
 
+        @Column(name = "country_code", length = 20)
+        private String countryCode;
+
     /**
      * Not yet available anywhere in the current data model (Client has no
      * billing address). Persisted as {@code null} until a source field is
@@ -160,6 +163,48 @@ public class Invoice {
      */
     @Column(name = "phone", length = 30)
     private String phone;
+
+    /**
+     * Point-in-time seller/issuing-company snapshot, copied from the single
+     * active {@code CompanyProfile} at generation time - the seller-side
+     * counterpart of the client fields above. Frozen the same way: never
+     * re-derived after generation, so editing the Company Profile later
+     * never changes an already-generated invoice. A completely separate
+     * concern from the client snapshot - this data never comes from
+     * Client/CDC.
+     */
+    @Column(name = "seller_legal_name", length = 255)
+    private String sellerLegalName;
+
+    @Column(name = "seller_address_line1", length = 255)
+    private String sellerAddressLine1;
+
+    @Column(name = "seller_address_line2", length = 255)
+    private String sellerAddressLine2;
+
+    @Column(name = "seller_city", length = 100)
+    private String sellerCity;
+
+    @Column(name = "seller_state", length = 100)
+    private String sellerState;
+
+    @Column(name = "seller_postal_code", length = 20)
+    private String sellerPostalCode;
+
+    @Column(name = "seller_country", length = 100)
+    private String sellerCountry;
+
+    @Column(name = "seller_gstin", length = 50)
+    private String sellerGstin;
+
+    @Column(name = "seller_email", length = 255)
+    private String sellerEmail;
+
+    @Column(name = "seller_phone", length = 30)
+    private String sellerPhone;
+
+    @Column(name = "seller_logo_reference", length = 500)
+    private String sellerLogoReference;
 
     @Column(
             name = "subtotal",

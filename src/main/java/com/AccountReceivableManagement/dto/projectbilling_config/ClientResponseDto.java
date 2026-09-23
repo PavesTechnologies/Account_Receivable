@@ -14,4 +14,10 @@ public class ClientResponseDto {
     private UUID clientId;
 
     private String clientName;
+
+    private String countryCode;
+
+    private String email;
+
+    private String phone;
 }

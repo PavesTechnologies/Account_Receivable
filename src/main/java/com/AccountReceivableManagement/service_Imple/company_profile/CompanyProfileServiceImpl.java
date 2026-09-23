@@ -22,6 +22,19 @@ public class CompanyProfileServiceImpl implements CompanyProfileService {
     @Override
     public CompanyProfileResponseDto create(CompanyProfileRequestDto request) {
 
+        /*
+         * The AR system supports exactly one Company Profile (its own
+         * seller identity) - not multi-company. A second POST is rejected
+         * outright rather than silently creating a second active row, since
+         * CompanyProfileRepository has no uniqueness constraint of its own
+         * to fall back on.
+         */
+        if (companyProfileRepository.count() > 0) {
+            throw new GlobalExceptionHandler.DuplicateResourceException(
+                    "A company profile has already been configured. Only one company profile is supported; use PUT to edit it."
+            );
+        }
+
         CompanyProfile companyProfile =
                 CompanyProfile.builder()
                         .legalName(request.getLegalName().trim())
@@ -86,7 +99,7 @@ public class CompanyProfileServiceImpl implements CompanyProfileService {
     public CompanyProfileResponseDto getActive() {
 
         CompanyProfile companyProfile =
-                companyProfileRepository.findFirstByIsActiveTrue()
+                companyProfileRepository.findFirstByIsActiveTrueOrderByCreatedAtAsc()
                         .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
                                 "No active company profile has been configured."
                         ));

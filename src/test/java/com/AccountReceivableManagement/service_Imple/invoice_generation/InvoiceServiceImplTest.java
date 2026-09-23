@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.service_Imple.invoice_generation;
 
+import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalHistoryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalSummaryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalWorkspaceResponseDto;
@@ -36,6 +37,7 @@ import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
+import com.AccountReceivableManagement.service_interface.company_profile.CompanyProfileService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -83,6 +85,9 @@ class InvoiceServiceImplTest {
         @Mock
         private BillingScheduleRepository billingScheduleRepository;
 
+        @Mock
+        private CompanyProfileService companyProfileService;
+
     @InjectMocks
     private InvoiceServiceImpl invoiceService;
 
@@ -95,6 +100,30 @@ class InvoiceServiceImplTest {
         snapshotId = UUID.randomUUID();
         clientId = UUID.randomUUID();
         paymentTermId = UUID.randomUUID();
+
+        // Default stub for every generation-path test below, which needs
+        // an active Company Profile to exist but isn't itself testing the
+        // seller-snapshot behavior. Tests that ARE testing it override this
+        // with their own when(...) stub.
+        lenient().when(companyProfileService.getActive()).thenReturn(activeCompanyProfile());
+    }
+
+    private CompanyProfileResponseDto activeCompanyProfile() {
+        return CompanyProfileResponseDto.builder()
+                .companyProfileId(UUID.randomUUID())
+                .legalName("Paves Technologies Pvt Ltd")
+                .addressLine1("Plot 12, Tech Park")
+                .addressLine2("Phase 2")
+                .city("Hyderabad")
+                .state("Telangana")
+                .postalCode("500081")
+                .country("India")
+                .gstin("36AAAAA0000A1Z5")
+                .email("billing@paves.example")
+                .phone("+91 40 1234 5678")
+                .logoReference("logos/paves.png")
+                .isActive(true)
+                .build();
     }
 
     private BillingSnapshot taxCompletedSnapshot() {
@@ -179,6 +208,10 @@ class InvoiceServiceImplTest {
         return BillingConfigurationResponseDto.builder()
                 .projectName("Website Redesign")
                 .clientName("Account Management")
+                .clientId(clientId)
+                .countryCode("+91")
+                .email("client@example.com")
+                .phone("9876543210")
                 .build();
     }
 
@@ -275,6 +308,42 @@ class InvoiceServiceImplTest {
         assertThat(schedule.getInvoiceDate()).isEqualTo(response.getInvoiceDate());
     }
 
+    // Seller snapshot (fixed-price/schedule path): copied from the active
+    // Company Profile at generation time, the same as the billing-snapshot
+    // path. Client fields (Bill To) are untouched by this - separate concern.
+    @Test
+    void generateInvoiceForSchedule_copiesActiveCompanyProfileSellerSnapshot() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(schedule));
+        when(taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(BillingConfigurationResponseDto.builder()
+                        .clientId(clientId).clientName("Account Management")
+                        .projectId(23L).projectName("Website Redesign")
+                        .currencyCode("USD").build());
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingScheduleRepository.save(any(BillingSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId());
+
+        assertThat(response.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd");
+        assertThat(response.getSellerAddressLine1()).isEqualTo("Plot 12, Tech Park");
+        assertThat(response.getSellerCity()).isEqualTo("Hyderabad");
+        assertThat(response.getSellerGstin()).isEqualTo("36AAAAA0000A1Z5");
+        assertThat(response.getSellerEmail()).isEqualTo("billing@paves.example");
+        assertThat(response.getSellerPhone()).isEqualTo("+91 40 1234 5678");
+        assertThat(response.getSellerLogoReference()).isEqualTo("logos/paves.png");
+
+        // Client/CDC-derived fields are a separate concern and unaffected.
+        assertThat(response.getClientId()).isEqualTo(clientId);
+    }
+
     @Test
     void generateInvoiceForSchedule_alreadyInvoicedOccurrence_rejectsDuplicate() {
         BillingSchedule schedule = taxCalculatedSchedule();
@@ -356,6 +425,9 @@ class InvoiceServiceImplTest {
         // Client / project information copied.
         assertThat(response.getClientId()).isEqualTo(clientId);
         assertThat(response.getClientName()).isEqualTo("Account Management");
+        assertThat(response.getCountryCode()).isEqualTo("+91");
+        assertThat(response.getEmail()).isEqualTo("client@example.com");
+        assertThat(response.getPhone()).isEqualTo("9876543210");
         assertThat(response.getProjectId()).isEqualTo(23L);
         assertThat(response.getProjectName()).isEqualTo("Website Redesign");
 
@@ -402,6 +474,116 @@ class InvoiceServiceImplTest {
 
         // No tax recalculation occurs - the tax calculation is only ever read, never saved.
         verify(taxCalculationRepository, never()).save(any());
+    }
+
+    // Seller snapshot: copied from the active Company Profile at
+    // generation time, exposed through InvoiceResponseDto under its own
+    // seller* fields - a separate concern from the Client-derived fields
+    // (clientId/clientName/billingAddress/etc.), which are untouched.
+    @Test
+    void generateInvoice_copiesActiveCompanyProfileSellerSnapshot() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        TaxCalculation taxCalculation = completedTaxCalculation();
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoice(snapshotId);
+
+        assertThat(response.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd");
+        assertThat(response.getSellerAddressLine1()).isEqualTo("Plot 12, Tech Park");
+        assertThat(response.getSellerAddressLine2()).isEqualTo("Phase 2");
+        assertThat(response.getSellerCity()).isEqualTo("Hyderabad");
+        assertThat(response.getSellerState()).isEqualTo("Telangana");
+        assertThat(response.getSellerPostalCode()).isEqualTo("500081");
+        assertThat(response.getSellerCountry()).isEqualTo("India");
+        assertThat(response.getSellerGstin()).isEqualTo("36AAAAA0000A1Z5");
+        assertThat(response.getSellerEmail()).isEqualTo("billing@paves.example");
+        assertThat(response.getSellerPhone()).isEqualTo("+91 40 1234 5678");
+        assertThat(response.getSellerLogoReference()).isEqualTo("logos/paves.png");
+
+        // Client-side fields are a separate concern, still sourced independently.
+        assertThat(response.getClientId()).isEqualTo(clientId);
+        assertThat(response.getClientName()).isEqualTo("Account Management");
+    }
+
+    // "Fail loudly rather than fabricate": if no Company Profile has been
+    // configured, generation must not produce an invoice with blank/guessed
+    // seller information - it must fail outright.
+    @Test
+    void generateInvoice_noActiveCompanyProfile_throwsResourceNotFoundExceptionAndPersistsNothing() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        TaxCalculation taxCalculation = completedTaxCalculation();
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(companyProfileService.getActive())
+                .thenThrow(new GlobalExceptionHandler.ResourceNotFoundException(
+                        "No active company profile has been configured."
+                ));
+
+        assertThatThrownBy(() -> invoiceService.generateInvoice(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class)
+                .hasMessage("No active company profile has been configured.");
+
+        verify(invoiceRepository, never()).save(any());
+        verify(billingSnapshotRepository, never()).save(any());
+    }
+
+    // Editing the Company Profile after an invoice was generated must not
+    // change that invoice's already-frozen seller snapshot - each
+    // generation call captures whatever was active *at that time* only.
+    @Test
+    void generateInvoice_companyProfileEditedAfterward_doesNotChangeExistingInvoiceSellerSnapshot() {
+        BillingSnapshot firstSnapshot = taxCompletedSnapshot();
+        TaxCalculation firstTaxCalculation = completedTaxCalculation();
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(firstSnapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(firstTaxCalculation));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto firstInvoice = invoiceService.generateInvoice(snapshotId);
+        assertThat(firstInvoice.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd");
+
+        // Company Profile is now "edited" - the mock returns a different
+        // legal name for any *subsequent* getActive() call.
+        when(companyProfileService.getActive()).thenReturn(
+                CompanyProfileResponseDto.builder()
+                        .companyProfileId(UUID.randomUUID())
+                        .legalName("Paves Technologies Pvt Ltd (Renamed)")
+                        .isActive(true)
+                        .build()
+        );
+
+        // The already-generated invoice, as persisted, is untouched by the edit.
+        assertThat(firstInvoice.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd");
+
+        // A new invoice generated now picks up the newly-active profile.
+        UUID secondSnapshotId = UUID.randomUUID();
+        BillingSnapshot secondSnapshot = taxCompletedSnapshot();
+        secondSnapshot.setId(secondSnapshotId);
+        TaxCalculation secondTaxCalculation = completedTaxCalculation();
+
+        when(billingSnapshotRepository.findById(secondSnapshotId)).thenReturn(Optional.of(secondSnapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(secondSnapshotId)).thenReturn(Optional.of(secondTaxCalculation));
+        when(invoiceRepository.existsByBillingSnapshotId(secondSnapshotId)).thenReturn(false);
+
+        InvoiceResponseDto secondInvoice = invoiceService.generateInvoice(secondSnapshotId);
+
+        assertThat(secondInvoice.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd (Renamed)");
+        // The first invoice's own response object remains exactly as generated.
+        assertThat(firstInvoice.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd");
     }
 
     // Payment term name: frozen from the snapshot's own (frozen) payment term
@@ -469,6 +651,9 @@ class InvoiceServiceImplTest {
         assertThat(response.getInvoiceId()).isEqualTo(invoiceId);
         assertThat(response.getInvoiceNumber()).isEqualTo("INV-20260908164549");
         assertThat(response.getStatus()).isEqualTo(InvoiceStatus.GENERATED);
+                assertThat(response.getCountryCode()).isNull();
+                assertThat(response.getEmail()).isNull();
+                assertThat(response.getPhone()).isNull();
     }
 
     @Test

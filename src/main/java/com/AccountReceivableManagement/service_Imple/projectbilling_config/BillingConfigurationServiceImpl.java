@@ -460,6 +460,21 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 ? configuration.getClient().getClientName()
                                 : null)
 
+                .countryCode(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getCountryCode()
+                                : null)
+
+                .email(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getEmail()
+                                : null)
+
+                .phone(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getPhone()
+                                : null)
+
                 .projectId(
                         configuration.getProject() != null
                                 ? configuration.getProject().getPmsProjectId()
@@ -853,6 +868,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         ClientResponseDto.builder()
                                 .clientId(client.getClientId())
                                 .clientName(client.getClientName())
+                                .countryCode(client.getCountryCode())
+                                .email(client.getEmail())
+                                .phone(client.getPhone())
                                 .build())
                 .toList();
     }

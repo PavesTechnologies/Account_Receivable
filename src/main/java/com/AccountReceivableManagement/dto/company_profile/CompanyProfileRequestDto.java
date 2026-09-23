@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.dto.company_profile;
 
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.*;
@@ -36,6 +37,7 @@ public class CompanyProfileRequestDto {
     @Size(max = 50)
     private String gstin;
 
+    @Email(message = "Email must be a valid email address.")
     @Size(max = 255)
     private String email;
 

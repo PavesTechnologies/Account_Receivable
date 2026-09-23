@@ -1,6 +1,5 @@
 package com.AccountReceivableManagement.service_Imple.invoice_generation;
 
-import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceItemResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceTaxComponentResponseDto;
@@ -47,10 +46,7 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
     private static final Color HEADER_BACKGROUND = new Color(51, 51, 51);
 
     @Override
-    public byte[] generateInvoicePdf(
-            InvoiceResponseDto invoice,
-            CompanyProfileResponseDto companyProfile
-    ) {
+    public byte[] generateInvoicePdf(InvoiceResponseDto invoice) {
 
         Document document = new Document(PageSize.A4, 40, 40, 50, 40);
 
@@ -63,7 +59,7 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
             document.add(new Paragraph("INVOICE", TITLE_FONT));
             document.add(Chunk.NEWLINE);
 
-            addSellerAndBuyer(document, invoice, companyProfile);
+            addSellerAndBuyer(document, invoice);
             document.add(Chunk.NEWLINE);
 
             addInvoiceMeta(document, invoice);
@@ -97,23 +93,22 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
 
     private void addSellerAndBuyer(
             Document document,
-            InvoiceResponseDto invoice,
-            CompanyProfileResponseDto companyProfile
+            InvoiceResponseDto invoice
     ) throws DocumentException {
 
         document.add(new Paragraph("From", SECTION_FONT));
-        addLineIfPresent(document, companyProfile.getLegalName());
-        addLineIfPresent(document, companyProfile.getAddressLine1());
-        addLineIfPresent(document, companyProfile.getAddressLine2());
+        addLineIfPresent(document, invoice.getSellerLegalName());
+        addLineIfPresent(document, invoice.getSellerAddressLine1());
+        addLineIfPresent(document, invoice.getSellerAddressLine2());
         addLineIfPresent(document, joinNonBlank(
-                companyProfile.getCity(),
-                companyProfile.getState(),
-                companyProfile.getPostalCode(),
-                companyProfile.getCountry()
+                invoice.getSellerCity(),
+                invoice.getSellerState(),
+                invoice.getSellerPostalCode(),
+                invoice.getSellerCountry()
         ));
-        addLineIfPresent(document, prefixIfPresent("GSTIN: ", companyProfile.getGstin()));
-        addLineIfPresent(document, prefixIfPresent("Email: ", companyProfile.getEmail()));
-        addLineIfPresent(document, prefixIfPresent("Phone: ", companyProfile.getPhone()));
+        addLineIfPresent(document, prefixIfPresent("GSTIN: ", invoice.getSellerGstin()));
+        addLineIfPresent(document, prefixIfPresent("Email: ", invoice.getSellerEmail()));
+        addLineIfPresent(document, prefixIfPresent("Phone: ", invoice.getSellerPhone()));
 
         document.add(Chunk.NEWLINE);
 

@@ -8,5 +8,5 @@ import java.util.UUID;
 
 public interface CompanyProfileRepository extends JpaRepository<CompanyProfile, UUID> {
 
-    Optional<CompanyProfile> findFirstByIsActiveTrue();
+    Optional<CompanyProfile> findFirstByIsActiveTrueOrderByCreatedAtAsc();
 }
