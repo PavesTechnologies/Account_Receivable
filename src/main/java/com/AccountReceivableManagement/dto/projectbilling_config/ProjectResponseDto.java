@@ -26,5 +26,11 @@ public class ProjectResponseDto {
 
     private String primaryLocation;
 
+    private String countryCode;
+
+    private String email;
+
+    private String phoneNumber;
+
 //    private Long projectManager;
 }

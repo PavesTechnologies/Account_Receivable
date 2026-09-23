@@ -61,6 +61,14 @@ public class ClientDataProcessorImpl implements ClientDataProcessor {
 
         Client client = new Client();
         updateClientFromMap(payload.getAfter(), client);
+        
+        // DEBUG: Log client entity values before save
+        log.debug("Client before save: clientId={}, countryCode={}, email={}, phoneNumber={}",
+                client.getClientId(),
+                client.getCountryCode(),
+                client.getEmail(),
+                client.getPhoneNumber());
+        
         clientRepository.save(client);
         log.info("Created client: {}", client.getClientId());
     }
@@ -75,6 +83,14 @@ public class ClientDataProcessorImpl implements ClientDataProcessor {
                 .orElseThrow(() -> new IllegalArgumentException("Client not found for update: " + clientId));
 
         updateClientFromMap(payload.getAfter(), existingClient);
+        
+        // DEBUG: Log client entity values before save
+        log.debug("Client before update save: clientId={}, countryCode={}, email={}, phoneNumber={}",
+                existingClient.getClientId(),
+                existingClient.getCountryCode(),
+                existingClient.getEmail(),
+                existingClient.getPhoneNumber());
+        
         clientRepository.save(existingClient);
         log.info("Updated client: {}", clientId);
     }
@@ -96,12 +112,27 @@ public class ClientDataProcessorImpl implements ClientDataProcessor {
                 // Convert the value based on the mapping
                 Object convertedValue = valueConverter.convertValue(entry.getValue(), mapping);
 
+                // DEBUG: Log the mapping for the new fields
+                if (entry.getKey().equals("country_code") || entry.getKey().equals("email") || entry.getKey().equals("phone_number")) {
+                    log.debug("Mapping {} -> {}: sourceValue={}, convertedValue={}",
+                            entry.getKey(),
+                            mapping.getTargetField(),
+                            entry.getValue(),
+                            convertedValue);
+                }
+
                 // Find the target field in Client entity
                 Field field = Client.class.getDeclaredField(mapping.getTargetField());
                 field.setAccessible(true);
 
                 // Set the converted value
                 field.set(client, convertedValue);
+
+                // DEBUG: Verify the field was set correctly
+                if (entry.getKey().equals("country_code") || entry.getKey().equals("email") || entry.getKey().equals("phone_number")) {
+                    Object actualValue = field.get(client);
+                    log.debug("Field {} set successfully. Actual value in entity: {}", mapping.getTargetField(), actualValue);
+                }
 
             } catch (Exception e) {
                 log.error("Failed to map column '{}' to field '{}'",
