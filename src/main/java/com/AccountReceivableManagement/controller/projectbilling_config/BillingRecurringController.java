@@ -2,6 +2,7 @@ package com.AccountReceivableManagement.controller.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingPeriodDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.RenewalRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.RecurringBillingRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.RecurringBillingResponseDto;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.RecurringBillingService;
@@ -103,6 +104,35 @@ public class BillingRecurringController {
         return ResponseEntity.ok(ApiResponse.<Void>builder()
                 .success(true)
                 .message("Recurring billing configuration deleted successfully.")
+                .build());
+    }
+
+    @PostMapping("/{recurringConfigurationId}/renew")
+    public ResponseEntity<ApiResponse<RecurringBillingResponseDto>> renew(
+            @PathVariable UUID recurringConfigurationId,
+            @Valid @RequestBody RenewalRequestDto request) {
+
+        RecurringBillingResponseDto response =
+                recurringBillingService.renew(recurringConfigurationId, request);
+
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.<RecurringBillingResponseDto>builder()
+                        .success(true)
+                        .message("Recurring billing configuration renewed successfully.")
+                        .data(response)
+                        .build());
+    }
+
+    @GetMapping("/{recurringConfigurationId}/renewal-history")
+    public ResponseEntity<ApiResponse<List<RecurringBillingResponseDto>>> getRenewalHistory(
+            @PathVariable UUID recurringConfigurationId) {
+
+        List<RecurringBillingResponseDto> response =
+                recurringBillingService.getRenewalHistory(recurringConfigurationId);
+
+        return ResponseEntity.ok(ApiResponse.<List<RecurringBillingResponseDto>>builder()
+                .success(true)
+                .data(response)
                 .build());
     }
 

@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingContext;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import jakarta.validation.constraints.NotNull;
@@ -18,11 +19,16 @@ public class BillingConfigurationRequestDto {
     @NotNull(message = "Client is required.")
     private UUID clientId;
 
-    @NotNull(message = "Project is required.")
     private Long projectId;
 
     @NotNull(message = "Billing Type is required.")
     private UUID billingTypeId;
+
+    private BillingContext billingContext;
+
+    private String productName;
+
+    private String productDescription;
 
 //    @NotNull(message = "Currency is required.")
 //    private UUID currencyId;

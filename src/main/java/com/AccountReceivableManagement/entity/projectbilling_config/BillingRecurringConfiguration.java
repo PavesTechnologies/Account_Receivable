@@ -114,4 +114,11 @@ public class BillingRecurringConfiguration {
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "renewed_from_id",
+            referencedColumnName = "subscription_configuration_id"
+    )
+    private BillingRecurringConfiguration renewedFrom;
 }

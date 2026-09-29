@@ -38,7 +38,7 @@ public class BillingConfiguration {
     @JoinColumn(
             name = "project_id",
             referencedColumnName = "pms_project_id",
-            nullable = false
+            nullable = true
     )
     private ProjectMasterReference project;
 
@@ -131,4 +131,14 @@ public class BillingConfiguration {
     @Column(name = "manually_deactivated", nullable = false)
     @Builder.Default
     private Boolean manuallyDeactivated = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "billing_context", length = 30)
+    private BillingContext billingContext;
+
+    @Column(name = "product_name", length = 200)
+    private String productName;
+
+    @Column(name = "product_description", length = 500)
+    private String productDescription;
 }

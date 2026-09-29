@@ -123,6 +123,18 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
             String durationUnit,
             BigDecimal totalContractValue) {
 
+        return calculatePeriodsWithAmount(startDate, endDate, durationValue, durationUnit, totalContractValue, false);
+    }
+
+    @Override
+    public List<BillingPeriodDto> calculatePeriodsWithAmount(
+            LocalDate startDate,
+            LocalDate endDate,
+            Integer durationValue,
+            String durationUnit,
+            BigDecimal totalContractValue,
+            boolean usePerOccurrenceAmount) {
+
         if (totalContractValue == null ||
                 totalContractValue.compareTo(BigDecimal.ZERO) < 0) {
             throw new GlobalExceptionHandler.ValidationException(
@@ -137,6 +149,15 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
                     "No billing periods could be generated.");
         }
 
+        // For per-occurrence amount model (new recurring billing)
+        if (usePerOccurrenceAmount) {
+            for (BillingPeriodDto period : periods) {
+                period.setBillingAmount(totalContractValue);
+            }
+            return periods;
+        }
+
+        // Original day-based proration model (existing behavior)
         long totalDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
 
         if (totalDays <= 0) {
@@ -359,12 +380,18 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
 
         billingScheduleRepository.deleteByRecurringConfiguration(recurring);
 
+        /*
+         * For RECURRING billing, use total budget distribution model.
+         * The configured amount is the TOTAL contract value to be divided
+         * across all billing occurrences using day-based proration.
+         */
         List<BillingPeriodDto> newPeriods = calculatePeriodsWithAmount(
                 recurringStart,
                 recurringEnd,
                 frequency.getDurationValue(),
                 frequency.getDurationUnit().name(),
-                recurring.getContractValue()
+                recurring.getContractValue(),
+                false // Use total budget distribution for recurring billing
         );
 
         int startingPeriodNumber = invoicedSchedules.size() + 1;
@@ -422,62 +449,34 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
                     "Contract value cannot be negative.");
         }
 
-        long totalPendingDays = pendingSchedules.stream()
-                .mapToLong(schedule ->
-                        ChronoUnit.DAYS.between(
-                                schedule.getPeriodStartDate(),
-                                schedule.getPeriodEndDate()
-                        ) + 1
-                )
-                .sum();
+        /*
+         * For RECURRING billing, use total budget distribution model.
+         * The configured amount is the TOTAL contract value to be divided
+         * across all billing occurrences using day-based proration.
+         * Recalculate all pending schedules with the new total budget.
+         */
+        LocalDate startDate = recurring.getRecurringStartDate();
+        LocalDate endDate = recurring.getRecurringEndDate();
+        BillingFrequencyMaster frequency = recurring.getBillingFrequency();
 
-        if (totalPendingDays <= 0) {
+        if (startDate == null || endDate == null || frequency == null) {
             throw new GlobalExceptionHandler.ValidationException(
-                    "Invalid pending billing period dates.");
+                    "Recurring configuration is missing required date or frequency information.");
         }
 
-        BigDecimal allocatedAmount = BigDecimal.ZERO;
+        List<BillingPeriodDto> recalculatedPeriods = calculatePeriodsWithAmount(
+                startDate,
+                endDate,
+                frequency.getDurationValue(),
+                frequency.getDurationUnit().name(),
+                newContractValue,
+                false // Use total budget distribution for recurring billing
+        );
 
-        for (int i = 0; i < pendingSchedules.size(); i++) {
-
-            BillingSchedule schedule = pendingSchedules.get(i);
-
-            boolean isLastPending =
-                    i == pendingSchedules.size() - 1;
-
-            if (isLastPending) {
-
-                BigDecimal finalAmount =
-                        newContractValue
-                                .subtract(allocatedAmount)
-                                .setScale(2, RoundingMode.HALF_EVEN);
-
-                schedule.setBillingAmount(finalAmount);
-
-            } else {
-
-                long periodDays =
-                        ChronoUnit.DAYS.between(
-                                schedule.getPeriodStartDate(),
-                                schedule.getPeriodEndDate()
-                        ) + 1;
-
-                BigDecimal periodAmount =
-                        newContractValue
-                                .multiply(BigDecimal.valueOf(periodDays))
-                                .divide(
-                                        BigDecimal.valueOf(totalPendingDays),
-                                        2,
-                                        RoundingMode.HALF_EVEN
-                                );
-
-                schedule.setBillingAmount(periodAmount);
-
-                allocatedAmount =
-                        allocatedAmount.add(periodAmount);
-            }
-
-            billingScheduleRepository.save(schedule);
+        // Update pending schedules with recalculated amounts
+        for (int i = 0; i < pendingSchedules.size() && i < recalculatedPeriods.size(); i++) {
+            pendingSchedules.get(i).setBillingAmount(recalculatedPeriods.get(i).getBillingAmount());
+            billingScheduleRepository.save(pendingSchedules.get(i));
         }
     }
 
@@ -518,12 +517,18 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
                 renewalDurationUnit
         );
 
+        /*
+         * For RECURRING billing renewals, use total budget distribution model.
+         * The configured renewal amount is the TOTAL contract value to be divided
+         * across all billing occurrences using day-based proration.
+         */
         return calculatePeriodsWithAmount(
                 renewalStartDate,
                 renewalEndDate,
                 billingFrequencyValue,
                 billingFrequencyUnit,
-                renewalContractValue != null ? renewalContractValue : BigDecimal.ZERO
+                renewalContractValue != null ? renewalContractValue : BigDecimal.ZERO,
+                false // Use total budget distribution for recurring billing renewals
         );
     }
 }

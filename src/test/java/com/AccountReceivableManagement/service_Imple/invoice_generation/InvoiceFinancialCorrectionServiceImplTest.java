@@ -29,11 +29,13 @@ import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnap
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceApprovalHistoryRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingTMRateCardRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.CurrencyMasterRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
 import com.AccountReceivableManagement.service_Imple.billing_data_acquisition.BillingSnapshotServiceImpl;
 import com.AccountReceivableManagement.service_Imple.tax_calculation.TaxCalculationServiceImpl;
@@ -110,6 +112,12 @@ class InvoiceFinancialCorrectionServiceImplTest {
 
     @Mock
     private BillingConfigurationService billingConfigurationService;
+
+    @Mock
+    private BillingScheduleRepository billingScheduleRepository;
+
+    @Mock
+    private BillingConfigurationRepository billingConfigurationRepository;
 
     @Mock
     private BillingConfigurationIntegration billingConfigurationIntegration;
@@ -195,8 +203,10 @@ class InvoiceFinancialCorrectionServiceImplTest {
         TaxCalculationServiceImpl taxCalculationService = new TaxCalculationServiceImpl(
                 taxCalculationRepository,
                 billingSnapshotRepository,
+                billingScheduleRepository,
                 taxConfigurationRepository,
-                billingConfigurationService);
+                taxRegionMasterRepository,
+                billingConfigurationRepository);
 
         invoiceService = new InvoiceServiceImpl(
                 invoiceRepository,
