@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.service_Imple.invoice_generation;
 
+import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalHistoryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalSummaryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalWorkspaceResponseDto;
@@ -33,6 +34,7 @@ import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
+import com.AccountReceivableManagement.service_interface.company_profile.CompanyProfileService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import lombok.RequiredArgsConstructor;
@@ -122,6 +124,8 @@ public class InvoiceServiceImpl implements InvoiceService {
 
         private final BillingScheduleRepository billingScheduleRepository;
 
+        private final CompanyProfileService companyProfileService;
+
         public InvoiceServiceImpl(
                         InvoiceRepository invoiceRepository,
                         InvoiceApprovalHistoryRepository invoiceApprovalHistoryRepository,
@@ -137,6 +141,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 this.billingConfigurationService = billingConfigurationService;
                 this.paymentTermsMasterRepository = paymentTermsMasterRepository;
                 this.billingScheduleRepository = null;
+                this.companyProfileService = null;
         }
 
     @Override
@@ -206,6 +211,16 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 snapshot.getBillingConfigurationId()
                         );
 
+        /*
+         * Fails loudly (ResourceNotFoundException, via
+         * CompanyProfileService.getActive()) rather than generating an
+         * invoice with a fabricated or missing seller identity - the same
+         * "never fabricate" convention already applied to every other
+         * derived invoice field.
+         */
+        CompanyProfileResponseDto companyProfile =
+                companyProfileService.getActive();
+
         LocalDate invoiceDate = LocalDate.now();
 
         Invoice invoice =
@@ -222,6 +237,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .clientName(
                                 configuration.getClientName()
                         )
+                        .countryCode(configuration.getCountryCode())
+                        .email(configuration.getEmail())
+                        .phone(configuration.getPhone())
                         .projectId(snapshot.getProjectId())
                         .projectName(
                                 configuration.getProjectName()
@@ -236,6 +254,20 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .paymentTermCode(
                                 snapshot.getPaymentTermCode()
                         )
+                        .paymentTermName(
+                                snapshot.getPaymentTermName()
+                        )
+                        .sellerLegalName(companyProfile.getLegalName())
+                        .sellerAddressLine1(companyProfile.getAddressLine1())
+                        .sellerAddressLine2(companyProfile.getAddressLine2())
+                        .sellerCity(companyProfile.getCity())
+                        .sellerState(companyProfile.getState())
+                        .sellerPostalCode(companyProfile.getPostalCode())
+                        .sellerCountry(companyProfile.getCountry())
+                        .sellerGstin(companyProfile.getGstin())
+                        .sellerEmail(companyProfile.getEmail())
+                        .sellerPhone(companyProfile.getPhone())
+                        .sellerLogoReference(companyProfile.getLogoReference())
                         .subtotal(
                                 taxCalculation.getTaxableAmount()
                         )
@@ -283,6 +315,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                                     snapshotItem.getWorkDate()
                             )
                             .role(snapshotItem.getRole())
+                            .resourceName(
+                                    snapshotItem.getResourceName()
+                            )
                             .build();
 
             invoice.getItems().add(invoiceItem);
@@ -402,6 +437,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                         schedule.getBillingConfiguration().getBillingConfigurationId()
                 );
 
+        // Fails loudly rather than generating an invoice with a fabricated
+        // or missing seller identity - see the equivalent comment in
+        // generateInvoice(UUID).
+        CompanyProfileResponseDto companyProfile =
+                companyProfileService.getActive();
+
         LocalDate invoiceDate = LocalDate.now();
         BigDecimal billingAmount = schedule.getBillingAmount();
 
@@ -412,12 +453,27 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .taxCalculationId(taxCalculation.getTaxCalculationId())
                         .clientId(configuration.getClientId())
                         .clientName(configuration.getClientName())
+                        .countryCode(configuration.getCountryCode())
+                        .email(configuration.getEmail())
+                        .phone(configuration.getPhone())
                         .projectId(configuration.getProjectId())
                         .projectName(configuration.getProjectName())
                         .billingPeriodStart(schedule.getPeriodStartDate())
                         .billingPeriodEnd(schedule.getPeriodEndDate())
                         .currencyCode(configuration.getCurrencyCode())
                         .paymentTermCode(configuration.getPaymentTermCode())
+                        .paymentTermName(configuration.getPaymentTermName())
+                        .sellerLegalName(companyProfile.getLegalName())
+                        .sellerAddressLine1(companyProfile.getAddressLine1())
+                        .sellerAddressLine2(companyProfile.getAddressLine2())
+                        .sellerCity(companyProfile.getCity())
+                        .sellerState(companyProfile.getState())
+                        .sellerPostalCode(companyProfile.getPostalCode())
+                        .sellerCountry(companyProfile.getCountry())
+                        .sellerGstin(companyProfile.getGstin())
+                        .sellerEmail(companyProfile.getEmail())
+                        .sellerPhone(companyProfile.getPhone())
+                        .sellerLogoReference(companyProfile.getLogoReference())
                         .subtotal(taxCalculation.getTaxableAmount())
                         .totalTaxAmount(taxCalculation.getTotalTaxAmount())
                         .grandTotal(taxCalculation.getGrandTotal())
@@ -495,6 +551,22 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 new GlobalExceptionHandler
                                         .ResourceNotFoundException(
                                         "No invoice has been generated for this billing snapshot."
+                                )
+                        );
+
+        return mapToResponse(invoice);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public InvoiceResponseDto getInvoiceById(UUID invoiceId) {
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Invoice could not be found."
                                 )
                         );
 
@@ -733,6 +805,10 @@ public class InvoiceServiceImpl implements InvoiceService {
         invoice.setPaymentTermCode(
                 snapshot.getPaymentTermCode()
         );
+        invoice.setPaymentTermName(
+                snapshot.getPaymentTermName()
+        );
+
         invoice.setSubtotal(
                 taxCalculation.getTaxableAmount()
         );
@@ -778,6 +854,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                                     snapshotItem.getWorkDate()
                             )
                             .role(snapshotItem.getRole())
+                            .resourceName(
+                                    snapshotItem.getResourceName()
+                            )
                             .build()
             );
         }
@@ -1140,6 +1219,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                                         .amount(item.getAmount())
                                         .workDate(item.getWorkDate())
                                         .role(item.getRole())
+                                        .resourceName(
+                                                item.getResourceName()
+                                        )
                                         .build()
                         )
                         .toList();
@@ -1202,6 +1284,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 )
                 .clientId(invoice.getClientId())
                 .clientName(invoice.getClientName())
+                .countryCode(invoice.getCountryCode())
                 .billingAddress(invoice.getBillingAddress())
                 .gstinOrTaxId(invoice.getGstinOrTaxId())
                 .contact(invoice.getContact())
@@ -1215,6 +1298,20 @@ public class InvoiceServiceImpl implements InvoiceService {
                 )
                 .currencyCode(invoice.getCurrencyCode())
                 .paymentTermCode(invoice.getPaymentTermCode())
+                .paymentTermName(invoice.getPaymentTermName())
+                .email(invoice.getEmail())
+                .phone(invoice.getPhone())
+                .sellerLegalName(invoice.getSellerLegalName())
+                .sellerAddressLine1(invoice.getSellerAddressLine1())
+                .sellerAddressLine2(invoice.getSellerAddressLine2())
+                .sellerCity(invoice.getSellerCity())
+                .sellerState(invoice.getSellerState())
+                .sellerPostalCode(invoice.getSellerPostalCode())
+                .sellerCountry(invoice.getSellerCountry())
+                .sellerGstin(invoice.getSellerGstin())
+                .sellerEmail(invoice.getSellerEmail())
+                .sellerPhone(invoice.getSellerPhone())
+                .sellerLogoReference(invoice.getSellerLogoReference())
                 .invoiceDate(invoice.getInvoiceDate())
                 .dueDate(invoice.getDueDate())
                 .items(items)

@@ -21,6 +21,12 @@
 
         private String clientName;
 
+        private String countryCode;
+
+        private String email;
+
+        private String phone;
+
         private Long projectId;
 
         private String projectName;

@@ -52,6 +52,15 @@ public class Client {
     @Column(name = "country_name")
     private String countryName;
 
+    @Column(name = "country_code")
+    private String countryCode;
+
+    @Column(name = "email")
+    private String email;
+
+    @Column(name = "phone")
+    private String phone;
+
     @Column(name = "default_timezone")
     private String defaultTimezone;
 

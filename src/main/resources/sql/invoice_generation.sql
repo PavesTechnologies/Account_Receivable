@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS invoice (
     tax_calculation_id            CHAR(36)     NOT NULL,
     client_id                     CHAR(36)     NOT NULL,
     client_name                   VARCHAR(255)     NULL,
+    country_code                  VARCHAR(20)      NULL,
     -- billing_address / gstin_or_tax_id / contact: no source field exists
     -- anywhere in the current data model (Client has none of these). Kept
     -- as nullable columns for Phase 1 schema completeness; always NULL

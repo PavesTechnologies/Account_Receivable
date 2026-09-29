@@ -80,6 +80,15 @@ public class BillingSnapshot {
     @Column(name = "payment_term_code", length = 100)
     private String paymentTermCode;
 
+    /**
+     * Friendly {@code PaymentTermsMaster.paymentTermName} (e.g. "Net 30"),
+     * frozen alongside {@code paymentTermCode} so downstream consumers
+     * (Invoice generation) can carry a readable label without a live
+     * master-data lookup.
+     */
+    @Column(name = "payment_term_name", length = 100)
+    private String paymentTermName;
+
     @Column(name = "billing_frequency_id")
     private UUID billingFrequencyId;
 

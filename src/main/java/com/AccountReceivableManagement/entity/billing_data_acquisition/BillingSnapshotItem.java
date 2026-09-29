@@ -54,6 +54,15 @@ public class BillingSnapshotItem {
     @Column(name = "source_reference_id", length = 100)
     private String sourceReferenceId;
 
+    /**
+     * TMS employee display name ({@code TimesheetDto.resourceName}) —
+     * populated only for TIME_ENTRY lines, where it is a genuine value
+     * from the source system. {@code null} for line types with no
+     * resource concept (e.g. FIXED_PRICE, tool/software charges).
+     */
+    @Column(name = "resource_name", length = 255)
+    private String resourceName;
+
     @Column(name = "quantity", precision = 19, scale = 2)
     private BigDecimal quantity;
 

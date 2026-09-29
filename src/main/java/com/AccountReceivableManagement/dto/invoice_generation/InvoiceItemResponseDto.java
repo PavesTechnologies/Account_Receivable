@@ -22,6 +22,8 @@ public class InvoiceItemResponseDto {
 
     private String sourceReferenceId;
 
+    private String resourceName;
+
     private BigDecimal quantity;
 
     private BigDecimal rate;

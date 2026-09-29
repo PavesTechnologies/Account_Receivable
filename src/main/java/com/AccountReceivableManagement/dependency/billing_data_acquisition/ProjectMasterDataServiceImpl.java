@@ -1,24 +1,40 @@
 package com.AccountReceivableManagement.dependency.billing_data_acquisition;
 
+import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
+import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
 
 /**
- * Temporary stand-in for the shared CDC master-data lookup. Always returns
- * the same fixed client id. To be replaced once Project/Client entities and
- * repositories exist in the shared master-data module — no other class in
- * Epic 2 should need to change when that happens.
+ * Resolves a project's owning client from the local CDC-synced
+ * {@link ProjectMasterReference} (PMS -> CDC -> project_master_reference).
+ * Never falls back to a placeholder id: a snapshot stamped with a client id
+ * that has no {@code client} row breaks every downstream client lookup
+ * (e.g. the recipient email used by Send to Client).
  */
 @Service
+@RequiredArgsConstructor
 public class ProjectMasterDataServiceImpl implements ProjectMasterDataService {
 
-    private static final UUID MOCK_CLIENT_ID =
-            UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    private final ProjectMasterReferenceRepository projectMasterReferenceRepository;
 
-    // TODO: Replace with real ProjectRepository/ClientRepository lookup once the shared CDC module exists.
     @Override
     public UUID getClientIdByProjectId(Long projectId) {
-        return MOCK_CLIENT_ID;
+
+        UUID clientId =
+                projectMasterReferenceRepository.findBypmsProjectId(projectId)
+                        .map(ProjectMasterReference::getClientId)
+                        .orElse(null);
+
+        if (clientId == null) {
+            throw new GlobalExceptionHandler.ResourceNotFoundException(
+                    "Client could not be resolved for project " + projectId + "."
+            );
+        }
+
+        return clientId;
     }
 }
