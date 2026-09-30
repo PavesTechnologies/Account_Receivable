@@ -98,6 +98,12 @@
 
         private BigDecimal hourlyRate;
 
+        private BillingContext billingContext;
+
+        private String productName;
+
+        private String productDescription;
+
     // Billing-specific details
     private BillingFixedPriceResponseDto fixedPriceDetails;
     private RecurringBillingResponseDto recurringDetails;

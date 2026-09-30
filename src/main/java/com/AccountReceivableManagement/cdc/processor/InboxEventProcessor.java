@@ -56,6 +56,9 @@ public class InboxEventProcessor {
             // Deserialize payload
             CdcEventPayload payload = cdcInboxService.deserializePayload(inboxEvent.getPayload());
 
+            log.info("[PROJECT-CDC] Deserialized payload - Operation: {}, EntityId: {}, EntityType: {}",
+                    payload.getOperation(), payload.getEntityId(), payload.getEntityType());
+
             // Route to appropriate handler based on connector/entity type
             routeEvent(payload, inboxEvent);
 

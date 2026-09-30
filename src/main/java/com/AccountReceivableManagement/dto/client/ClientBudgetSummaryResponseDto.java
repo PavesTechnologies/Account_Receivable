@@ -4,6 +4,7 @@ import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Getter
@@ -17,11 +18,18 @@ public class ClientBudgetSummaryResponseDto {
 
     private String clientName;
 
-    private BigDecimal totalBudget;
-
-    private String currency;
-
-    private Long totalProjects;
+    private List<CurrencyBudget> budgets;
 
     private LocalDateTime lastCalculatedAt;
+
+    @Getter
+    @Setter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class CurrencyBudget {
+        private String currency;
+        private BigDecimal totalProjectBudget;
+        private Long projectCount;
+    }
 }

@@ -37,40 +37,47 @@ public class ClientBudgetSummaryServiceImpl implements ClientBudgetSummaryServic
         long projectCount = projectMasterReferenceRepository.countByClientId(clientId);
 
         if (projectCount == 0) {
-
             clientBudgetSummaryRepository
                     .findByClient_ClientId(clientId)
-                    .ifPresent(clientBudgetSummaryRepository::delete);
-
+                    .forEach(clientBudgetSummaryRepository::delete);
             return;
         }
-        BigDecimal totalBudget =
-                projectMasterReferenceRepository.calculateTotalBudget(clientId);
 
-        if (totalBudget == null) {
-            totalBudget = BigDecimal.ZERO;
+        List<Object[]> budgetSummaries = 
+                projectMasterReferenceRepository.getBudgetSummaryByCurrency(clientId);
+
+        for (Object[] row : budgetSummaries) {
+            String currency = (String) row[0];
+            BigDecimal totalBudget = (BigDecimal) row[1];
+            Long currencyProjectCount = ((Number) row[2]).longValue();
+
+            if (totalBudget == null) {
+                totalBudget = BigDecimal.ZERO;
+            }
+
+            ClientBudgetSummary summary =
+                    clientBudgetSummaryRepository.findByClient_ClientIdAndCurrency(clientId, currency)
+                            .orElseGet(ClientBudgetSummary::new);
+            summary.setClient(client);
+            summary.setCurrency(currency);
+            summary.setTotalBudget(totalBudget);
+            summary.setProjectCount(currencyProjectCount);
+            summary.setLastCalculatedAt(LocalDateTime.now());
+            clientBudgetSummaryRepository.save(summary);
         }
-        List<String> currencies =
-                projectMasterReferenceRepository.getCurrencies(clientId);
-        String currency = "N/A";
 
-        if (!currencies.isEmpty()) {
-
-            if (currencies.size() > 1) {
-                throw new GlobalExceptionHandler.ValidationException("Projects under the same client contain multiple currencies.");
-            } else {
-                currency = currencies.get(0);
+        List<ClientBudgetSummary> existingSummaries = 
+                clientBudgetSummaryRepository.findByClient_ClientId(clientId);
+        for (ClientBudgetSummary existing : existingSummaries) {
+            boolean currencyStillExists = budgetSummaries.stream()
+                    .anyMatch(row -> row[0].equals(existing.getCurrency()));
+            if (!currencyStillExists) {
+                clientBudgetSummaryRepository.delete(existing);
             }
         }
-        ClientBudgetSummary summary =
-                clientBudgetSummaryRepository.findByClient_ClientId(clientId)
-                        .orElseGet(ClientBudgetSummary::new);
-        summary.setClient(client);
-        summary.setTotalBudget(totalBudget);
-        summary.setCurrency(currency);
-        summary.setLastCalculatedAt(LocalDateTime.now());
-        clientBudgetSummaryRepository.save(summary);
-        log.info("Client budget summary refreshed for client: {}", clientId);
+
+        log.info("Client budget summary refreshed for client: {} with {} currency summaries", 
+                clientId, budgetSummaries.size());
 
     }
 
@@ -78,28 +85,31 @@ public class ClientBudgetSummaryServiceImpl implements ClientBudgetSummaryServic
     @Transactional(readOnly = true)
     public ClientBudgetSummaryResponseDto
     getClientBudget(UUID clientId) {
-        ClientBudgetSummary summary =
-                clientBudgetSummaryRepository
-                        .findByClient_ClientId(clientId)
-                        .orElseThrow(() ->
-                                new GlobalExceptionHandler.ResourceNotFoundException(
-                                        "Client Budget Summary not found."));
-        long projectCount =
-                projectMasterReferenceRepository.countByClientId(clientId);
+        Client client = clientRepository.findById(clientId)
+                .orElseThrow(() ->
+                        new GlobalExceptionHandler.ResourceNotFoundException("Client not found."));
+
+        List<ClientBudgetSummary> summaries =
+                clientBudgetSummaryRepository.findByClient_ClientId(clientId);
+
+        if (summaries.isEmpty()) {
+            throw new GlobalExceptionHandler.ResourceNotFoundException(
+                    "Client Budget Summary not found.");
+        }
+
+        List<ClientBudgetSummaryResponseDto.CurrencyBudget> currencyBudgets = summaries.stream()
+                .map(summary -> ClientBudgetSummaryResponseDto.CurrencyBudget.builder()
+                        .currency(summary.getCurrency())
+                        .totalProjectBudget(summary.getTotalBudget())
+                        .projectCount(summary.getProjectCount())
+                        .build())
+                .toList();
+
         return ClientBudgetSummaryResponseDto.builder()
-
-                .clientId(summary.getClient().getClientId())
-
-                .clientName(summary.getClient().getClientName())
-
-                .totalBudget(summary.getTotalBudget())
-
-                .currency(summary.getCurrency())
-
-                .totalProjects(projectCount)
-
-                .lastCalculatedAt(summary.getLastCalculatedAt())
-
+                .clientId(client.getClientId())
+                .clientName(client.getClientName())
+                .budgets(currencyBudgets)
+                .lastCalculatedAt(summaries.get(0).getLastCalculatedAt())
                 .build();
     }
 

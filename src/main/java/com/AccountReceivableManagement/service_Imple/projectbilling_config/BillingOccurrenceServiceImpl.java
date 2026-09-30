@@ -454,10 +454,10 @@ public class BillingOccurrenceServiceImpl {
                         currentStart, 
                         isLastPeriod);
             } else {
-                // For Recurring: day-based proration (existing behavior)
+                // For Recurring: day-based proration (total budget distribution)
                 long totalDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
                 long periodDays = ChronoUnit.DAYS.between(currentStart, currentEnd) + 1;
-                
+
                 if (isLastPeriod) {
                     BigDecimal allocatedAmount = schedules.stream()
                             .map(BillingSchedule::getBillingAmount)

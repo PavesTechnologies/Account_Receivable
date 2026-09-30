@@ -27,6 +27,14 @@ public interface BillingPeriodCalculatorService {
             String durationUnit,
             BigDecimal totalContractValue);
 
+    List<BillingPeriodDto> calculatePeriodsWithAmount(
+            LocalDate startDate,
+            LocalDate endDate,
+            Integer durationValue,
+            String durationUnit,
+            BigDecimal totalContractValue,
+            boolean usePerOccurrenceAmount);
+
     BigDecimal calculatePeriodAmount(
             BigDecimal totalContractValue,
             int totalPeriods,

@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnap
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.*;
+import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingPeriodCalculatorService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -43,6 +44,7 @@ class BillingConfigurationServiceImplTest {
     @Mock private BillingSnapshotRepository billingSnapshotRepository;
     @Mock private BillingOccurrenceServiceImpl billingOccurrenceService;
     @Mock private ProjectEligibilityRepository projectEligibilityRepository;
+    @Mock private BillingPeriodCalculatorService billingPeriodCalculatorService;
 
     private BillingConfigurationServiceImpl service;
 
@@ -67,7 +69,8 @@ class BillingConfigurationServiceImplTest {
                 billingScheduleRepository,
                 billingSnapshotRepository,
                 billingOccurrenceService,
-                projectEligibilityRepository);
+                projectEligibilityRepository,
+                billingPeriodCalculatorService);
 
         configurationId = UUID.randomUUID();
         draftConfiguration = BillingConfiguration.builder()

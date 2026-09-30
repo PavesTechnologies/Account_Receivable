@@ -36,5 +36,17 @@ WHERE p.clientId=:clientId
             @Param("clientId")
             UUID clientId);
 
+    @Query("""
+SELECT p.projectBudgetCurrency, COALESCE(SUM(p.projectBudget),0), COUNT(p)
+FROM ProjectMasterReference p
+WHERE p.clientId=:clientId
+GROUP BY p.projectBudgetCurrency
+""")
+    List<Object[]> getBudgetSummaryByCurrency(
+            @Param("clientId")
+            UUID clientId);
+
     long countByClientId(UUID clientId);
+
+    long countByClientIdAndProjectBudgetCurrency(UUID clientId, String currency);
 }

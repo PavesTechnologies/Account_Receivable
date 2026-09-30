@@ -25,4 +25,8 @@ public interface BillingRecurringConfigurationRepository extends JpaRepository<B
 
     void deleteByBillingConfiguration(
             BillingConfiguration billingConfiguration);
+
+    List<BillingRecurringConfiguration>
+    findByRenewedFrom(
+            BillingRecurringConfiguration renewedFrom);
 }

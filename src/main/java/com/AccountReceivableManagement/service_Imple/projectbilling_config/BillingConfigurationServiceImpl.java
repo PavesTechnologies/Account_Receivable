@@ -6,6 +6,7 @@ import com.AccountReceivableManagement.entity.project_entity.ProjectMasterRefere
 import com.AccountReceivableManagement.entity.projectbilling_config.*;
 import com.AccountReceivableManagement.entity_enums.client.RecordStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingContext;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
@@ -67,10 +68,30 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 .orElseThrow(() ->
                         new ResourceNotFoundException("Client not found."));
 
-        ProjectMasterReference project =
-                projectRepository.findById(request.getProjectId())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException("Project not found."));
+        // Validate billing context and project requirements
+        BillingContext billingContext = request.getBillingContext();
+        if (billingContext == null) {
+            // Default to PROJECT for backward compatibility
+            billingContext = BillingContext.PROJECT;
+        }
+
+        ProjectMasterReference project = null;
+        if (billingContext == BillingContext.PROJECT) {
+            if (request.getProjectId() == null) {
+                throw new ValidationException("Project is required for PROJECT billing context.");
+            }
+            project = projectRepository.findById(request.getProjectId())
+                    .orElseThrow(() ->
+                            new ResourceNotFoundException("Project not found."));
+        } else {
+            // PRODUCT_SERVICE context
+            if (request.getProjectId() != null) {
+                throw new ValidationException("Project must be null for PRODUCT_SERVICE billing context.");
+            }
+            if (request.getProductName() == null || request.getProductName().trim().isEmpty()) {
+                throw new ValidationException("Product name is required for PRODUCT_SERVICE billing context.");
+            }
+        }
 
         BillingTypeMaster billingType =
                 billingTypeRepository
@@ -105,42 +126,53 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                         "Tax Region not found."));
 
         /*
-         * Validate project belongs to selected client.
+         * Validate project belongs to selected client (only for PROJECT context).
          */
-        if (!Objects.equals(
-                project.getClientId(),
-                client.getClientId())) {
+        CurrencyMaster currency;
+        if (billingContext == BillingContext.PROJECT) {
+            if (!Objects.equals(
+                    project.getClientId(),
+                    client.getClientId())) {
 
-            throw new ValidationException(
-                    "Selected project does not belong to the selected client.");
+                throw new ValidationException(
+                        "Selected project does not belong to the selected client.");
+            }
+
+            /*
+             * Validate currency from PMS project.
+             */
+            String projectCurrencyCode = project.getProjectBudgetCurrency();
+            if (projectCurrencyCode == null
+                    || projectCurrencyCode.isBlank()) {
+
+                throw new ValidationException(
+                        "Project Currency is not available from PMS.");
+            }
+
+            currency =
+                    currencyRepository
+                            .findByCurrencyCodeIgnoreCase(projectCurrencyCode)
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Currency not found: " + projectCurrencyCode));
+
+            /*
+             * Validate effective dates against project duration.
+             */
+            validateEffectiveDatesAgainstProjectDuration(
+                    project,
+                    request.getEffectiveFrom(),
+                    request.getEffectiveTo());
+        } else {
+            // For PRODUCT_SERVICE, use the provided currency
+            String currencyCode = request.getCurrency();
+            currency =
+                    currencyRepository
+                            .findByCurrencyCodeIgnoreCase(currencyCode)
+                            .orElseThrow(() ->
+                                    new ResourceNotFoundException(
+                                            "Currency not found: " + currencyCode));
         }
-
-        /*
-         * Validate currency from PMS project.
-         */
-        if (project.getProjectBudgetCurrency() == null
-                || project.getProjectBudgetCurrency().isBlank()) {
-
-            throw new ValidationException(
-                    "Project Currency is not available from PMS.");
-        }
-
-        CurrencyMaster currency =
-                currencyRepository
-                        .findByCurrencyCodeIgnoreCase(
-                                project.getProjectBudgetCurrency())
-                        .orElseThrow(() ->
-                                new ResourceNotFoundException(
-                                        "Currency not found: "
-                                                + project.getProjectBudgetCurrency()));
-
-        /*
-         * Validate effective dates against project duration.
-         */
-        validateEffectiveDatesAgainstProjectDuration(
-                project,
-                request.getEffectiveFrom(),
-                request.getEffectiveTo());
 
         /*
          * Validate general effective dates.
@@ -188,6 +220,10 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             configuration.setBillingFrequency(billingFrequency);
         }
         configuration.setTaxRegion(taxRegion);
+
+        configuration.setBillingContext(billingContext);
+        configuration.setProductName(request.getProductName());
+        configuration.setProductDescription(request.getProductDescription());
 
         configuration.setExpenseBillingEligible(
                 request.getExpenseBillingEligible());
@@ -593,6 +629,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
                 .hourlyRate(
                         configuration.getHourlyRate())
+
+                .billingContext(
+                        configuration.getBillingContext())
+
+                .productName(
+                        configuration.getProductName())
+
+                .productDescription(
+                        configuration.getProductDescription())
 
                 .createdAt(
                         configuration.getCreatedAt())

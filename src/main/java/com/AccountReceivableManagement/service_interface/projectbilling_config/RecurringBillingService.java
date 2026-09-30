@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.service_interface.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingPeriodDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.RenewalRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.RecurringBillingRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.RecurringBillingResponseDto;
 
@@ -27,5 +28,12 @@ public interface RecurringBillingService {
             UUID recurringConfigurationId);
 
     void delete(
+            UUID recurringConfigurationId);
+
+    RecurringBillingResponseDto renew(
+            UUID recurringConfigurationId,
+            RenewalRequestDto request);
+
+    List<RecurringBillingResponseDto> getRenewalHistory(
             UUID recurringConfigurationId);
 }

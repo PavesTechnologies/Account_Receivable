@@ -11,10 +11,12 @@ import com.AccountReceivableManagement.service_interface.client.ClientBudgetSumm
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Field;
 import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -26,19 +28,27 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
     private final ClientBudgetSummaryService clientBudgetSummaryService;
 
     @Override
-    @Transactional
     public void process(CdcEventPayload payload) {
         String operation = payload.getOperation();
         Map<String, Object> data;
 
+        log.info("[PROJECT-CDC] ProjectDataProcessor.process() called - Operation: {}, EntityId: {}",
+                operation, payload.getEntityId());
+
         switch (operation) {
             case "c":
+                log.info("[PROJECT-CDC] CREATE operation detected for EntityId: {}", payload.getEntityId());
                 data = payload.getAfter();
                 if (data == null) {
                     log.warn("After payload is null for create operation and entityId '{}'", payload.getEntityId());
                     return;
                 }
                 handleCreate(data);
+                // Refresh client budget in separate transaction after project is committed
+                Long pmsProjectId = getPmsProjectId(data);
+                projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId).ifPresent(project -> {
+                    refreshClientBudgetAsync(project.getClientId());
+                });
                 break;
             case "u":
                 data = payload.getAfter();
@@ -47,6 +57,11 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
                     return;
                 }
                 handleUpdate(data);
+                // Refresh client budget in separate transaction after update is committed
+                Long pmsProjectIdUpdate = getPmsProjectId(data);
+                projectMasterReferenceRepository.findBypmsProjectId(pmsProjectIdUpdate).ifPresent(project -> {
+                    refreshClientBudgetAsync(project.getClientId());
+                });
                 break;
             case "d":
                 data = payload.getBefore();
@@ -69,28 +84,54 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
         );
     }
 
+    @Transactional
     private void handleCreate(Map<String, Object> data) {
         Long pmsProjectId = getPmsProjectId(data);
+        log.info("[PROJECT-CDC] CREATE START - Extracted pmsProjectId: {}", pmsProjectId);
+        
         if (pmsProjectId == null) {
             log.error("PMS Project ID is null for create operation.");
             throw new IllegalArgumentException("PMS Project ID cannot be null for create operations.");
         }
 
-        if (projectMasterReferenceRepository.existsBypmsProjectId(pmsProjectId)) {
+        boolean projectExists = projectMasterReferenceRepository.existsBypmsProjectId(pmsProjectId);
+        log.info("[PROJECT-CDC] Existing project check - pmsProjectId: {}, exists: {}", pmsProjectId, projectExists);
+        
+        if (projectExists) {
             log.warn("Project with PMS ID {} already exists. Skipping create operation.", pmsProjectId);
             return;
         }
 
+        log.info("[PROJECT-CDC] Creating new ProjectMasterReference for pmsProjectId: {}", pmsProjectId);
         ProjectMasterReference project = new ProjectMasterReference();
         updateProjectFromMap(data, project);
         project.setPmsProjectId(pmsProjectId); // Ensure the ID is set
+        
+        log.info("[PROJECT-CDC] Saving project_master_reference - pmsProjectId: {}, clientId: {}, budget: {}, currency: {}",
+                project.getPmsProjectId(), project.getClientId(), project.getProjectBudget(), project.getProjectBudgetCurrency());
+        
         ProjectMasterReference savedProject =
                 projectMasterReferenceRepository.save(project);
-
-        clientBudgetSummaryService.refreshClientBudget(savedProject.getClientId());
-        log.info("Created project with PMS ID: {}", project.getPmsProjectId());
+        
+        log.info("[PROJECT-CDC] project_master_reference saved successfully - pmsProjectId: {}",
+                savedProject.getPmsProjectId());
+        
+        log.info("[PROJECT-CDC] CREATE COMPLETE - Created project with PMS ID: {}", project.getPmsProjectId());
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    private void refreshClientBudgetAsync(UUID clientId) {
+        try {
+            log.info("[PROJECT-CDC] Refreshing client budget summary for clientId: {}", clientId);
+            clientBudgetSummaryService.refreshClientBudget(clientId);
+            log.info("[PROJECT-CDC] Client budget summary refreshed successfully for clientId: {}", clientId);
+        } catch (Exception e) {
+            log.error("Failed to refresh client budget summary for client {}. This runs in a separate transaction and does not affect project save.", 
+                    clientId, e);
+        }
+    }
+
+    @Transactional
     private void handleUpdate(Map<String, Object> data) {
         Long pmsProjectId = getPmsProjectId(data);
         if (pmsProjectId == null) {
@@ -105,10 +146,10 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
         ProjectMasterReference updatedProject =
                 projectMasterReferenceRepository.save(existingProject);
 
-        clientBudgetSummaryService.refreshClientBudget(updatedProject.getClientId());
         log.info("Updated project with PMS ID: {}", pmsProjectId);
     }
 
+    @Transactional
     private void handleDelete(Map<String, Object> data) {
 
         Long pmsProjectId = getPmsProjectId(data);
@@ -127,10 +168,10 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
                     // Delete project
                     projectMasterReferenceRepository.delete(project);
 
-                    // Refresh summary
-                    clientBudgetSummaryService.refreshClientBudget(clientId);
-
                     log.info("Deleted project with PMS ID: {}", pmsProjectId);
+                    
+                    // Refresh summary in separate transaction after delete is committed
+                    refreshClientBudgetAsync(clientId);
                 });
     }
 
