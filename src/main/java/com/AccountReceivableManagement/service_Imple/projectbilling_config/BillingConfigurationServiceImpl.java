@@ -508,7 +508,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
                 .phone(
                         configuration.getClient() != null
-                                ? configuration.getClient().getPhone()
+                                ? configuration.getClient().getPhoneNumber()
                                 : null)
 
                 .projectId(
@@ -915,7 +915,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 .clientName(client.getClientName())
                                 .countryCode(client.getCountryCode())
                                 .email(client.getEmail())
-                                .phone(client.getPhone())
+                                .phone(client.getPhoneNumber())
                                 .build())
                 .toList();
     }

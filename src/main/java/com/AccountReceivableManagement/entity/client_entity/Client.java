@@ -58,9 +58,6 @@ public class Client {
     @Column(name = "email")
     private String email;
 
-    @Column(name = "phone")
-    private String phone;
-
     @Column(name = "default_timezone")
     private String defaultTimezone;
 
