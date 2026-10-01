@@ -54,6 +54,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
     private final ProjectEligibilityRepository projectEligibilityRepository;
     private final BillingPeriodCalculatorService billingPeriodCalculatorService;
+    private final BillingMilestonePlanRepository billingMilestonePlanRepository;
+    private final BillingPaymentEntryRepository billingPaymentEntryRepository;
 
     // =========================================================
     // CREATE BILLING CONFIGURATION
@@ -94,12 +96,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         BillingTypeMaster billingType =
-                billingTypeRepository
-                        .findByBillingTypeIdAndIsActiveTrue(
-                                request.getBillingTypeId())
+                billingTypeRepository.findById(request.getBillingTypeId())
                         .orElseThrow(() ->
                                 new ValidationException(
                                         "Selected Billing Type is inactive or does not exist."));
+
+        if (!billingType.getIsActive()) {
+            throw new ValidationException(
+                    "Selected Billing Type is inactive or does not exist.");
+        }
 
         PaymentTermsMaster paymentTerm =
                 paymentTermsRepository.findById(
@@ -655,7 +660,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 builder.recurringDetails(getRecurringDetails(configuration));
             } else if ("Timesheet Based".equalsIgnoreCase(billingTypeName.trim())) {
                 builder.tmRateCards(getTMRateCards(configuration));
-            } else if ("Milestone Based".equalsIgnoreCase(billingTypeName)) {
+            } else if ("Milestone Plan".equalsIgnoreCase(billingTypeName)) {
                 builder.milestoneSchedules(getMilestoneSchedules(configuration));
             }
         }
@@ -867,13 +872,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
     private java.util.List<BillingScheduleResponseDto> getMilestoneSchedules(BillingConfiguration configuration) {
         try {
+            // Return billing schedules for the milestone plan configuration
+            // These are generated from BillingPaymentEntry records
             return billingScheduleRepository
                     .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration)
                     .stream()
                     .map(this::mapScheduleToResponse)
                     .toList();
         } catch (Exception e) {
-            log.error("Error fetching milestone schedules for configuration: {}", 
+            log.error("Error fetching milestone schedules for configuration: {}",
                     configuration.getBillingConfigurationId(), e);
             return java.util.Collections.emptyList();
         }
@@ -1146,12 +1153,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                         "Project not found."));
 
         BillingTypeMaster billingType =
-                billingTypeRepository
-                        .findByBillingTypeIdAndIsActiveTrue(
-                                request.getBillingTypeId())
+                billingTypeRepository.findById(request.getBillingTypeId())
                         .orElseThrow(() ->
                                 new ValidationException(
                                         "Selected Billing Type is inactive or does not exist."));
+
+        if (!billingType.getIsActive()) {
+            throw new ValidationException(
+                    "Selected Billing Type is inactive or does not exist.");
+        }
 
         PaymentTermsMaster paymentTerm =
                 paymentTermsRepository.findById(
@@ -1442,6 +1452,16 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         // Delete child configurations first
+        
+        // Handle Milestone Plan and its Payment Entries
+        billingMilestonePlanRepository.findByBillingConfigurationAndIsActiveTrue(configuration)
+                .ifPresent(milestonePlan -> {
+                    // Delete Payment Entries first (child of Milestone Plan)
+                    billingPaymentEntryRepository.deleteByMilestonePlan(milestonePlan);
+                    // Then delete Milestone Plan (child of BillingConfiguration)
+                    billingMilestonePlanRepository.delete(milestonePlan);
+                });
+
         billingFixedPriceRepository
                 .deleteByBillingConfiguration(configuration);
 
@@ -1485,12 +1505,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // VALIDATE BILLING TYPE
         // =========================================================
         BillingTypeMaster billingType =
-                billingTypeRepository
-                        .findByBillingTypeIdAndIsActiveTrue(
-                                request.getBillingTypeId())
+                billingTypeRepository.findById(request.getBillingTypeId())
                         .orElseThrow(() ->
                                 new ValidationException(
                                         "Selected Billing Type is inactive or does not exist."));
+
+        if (!billingType.getIsActive()) {
+            throw new ValidationException(
+                    "Selected Billing Type is inactive or does not exist.");
+        }
 
         // =========================================================
         // VALIDATE PROJECT BELONGS TO CLIENT
@@ -1609,13 +1632,30 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // =========================================================
         // FIND BILLING TYPE
         // =========================================================
+        UUID requestedBillingTypeId = request.getBillingTypeId();
+        log.debug("saveDraft: Requested billingTypeId = {}", requestedBillingTypeId);
+
         BillingTypeMaster billingType =
-                billingTypeRepository
-                        .findByBillingTypeIdAndIsActiveTrue(
-                                request.getBillingTypeId())
-                        .orElseThrow(() ->
-                                new ValidationException(
-                                        "Selected Billing Type is inactive or does not exist."));
+                billingTypeRepository.findById(requestedBillingTypeId)
+                        .orElseThrow(() -> {
+                            log.error("saveDraft: Billing type NOT found with ID = {}", requestedBillingTypeId);
+                            return new ValidationException(
+                                    "Selected Billing Type is inactive or does not exist.");
+                        });
+
+        log.debug("saveDraft: Billing type found - ID: {}, Name: {}, IsActive: {}",
+                billingType.getBillingTypeId(),
+                billingType.getBillingTypeName(),
+                billingType.getIsActive());
+
+        if (!billingType.getIsActive()) {
+            log.error("saveDraft: Billing type is inactive - ID: {}, Name: {}, IsActive: {}",
+                    billingType.getBillingTypeId(),
+                    billingType.getBillingTypeName(),
+                    billingType.getIsActive());
+            throw new ValidationException(
+                    "Selected Billing Type is inactive or does not exist.");
+        }
 
         // =========================================================
         // UPDATE CLIENT / PROJECT / BILLING TYPE
