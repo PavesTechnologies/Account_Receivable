@@ -3,17 +3,22 @@ package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingFixedPriceConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingFrequencyMaster;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingMilestonePlan;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingPaymentEntry;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingScheduleType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.PaymentStructure;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import org.springframework.dao.DataIntegrityViolationException;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingFixedPriceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingFrequencyMasterRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingPaymentEntryRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingMilestonePlanRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingRecurringConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
@@ -40,6 +45,8 @@ public class BillingOccurrenceServiceImpl {
     private final BillingScheduleRepository billingScheduleRepository;
     private final BillingFixedPriceRepository billingFixedPriceRepository;
     private final BillingRecurringConfigurationRepository billingRecurringConfigurationRepository;
+    private final BillingMilestonePlanRepository billingMilestonePlanRepository;
+    private final BillingPaymentEntryRepository billingPaymentEntryRepository;
     private final BillingPeriodCalculatorServiceImpl billingPeriodCalculatorService;
     private final com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository billingConfigurationRepository;
     private final BillingFrequencyMasterRepository billingFrequencyRepository;
@@ -164,6 +171,8 @@ public class BillingOccurrenceServiceImpl {
         } else if (billingTypeName.equalsIgnoreCase("Recurring") ||
                 billingTypeName.equalsIgnoreCase("Subscription")) {
             reconcileRecurringOccurrences(configuration);
+        } else if (billingTypeName.equalsIgnoreCase("Milestone Plan")) {
+            reconcileMilestonePlanOccurrences(configuration);
         }
     }
 
@@ -1212,5 +1221,106 @@ public class BillingOccurrenceServiceImpl {
         }
         
         generateOccurrencesForRecurring(configuration.getBillingConfigurationId());
+    }
+
+    private void reconcileMilestonePlanOccurrences(BillingConfiguration configuration) {
+        BillingMilestonePlan milestonePlan = billingMilestonePlanRepository
+                .findByBillingConfigurationAndIsActiveTrue(configuration)
+                .orElse(null);
+
+        if (milestonePlan == null) {
+            return;
+        }
+
+        List<BillingPaymentEntry> entries =
+                billingPaymentEntryRepository.findByMilestonePlanAndIsActiveTrueOrderBySequenceAsc(milestonePlan);
+
+        List<BillingSchedule> existingSchedules = billingScheduleRepository
+                .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration);
+
+        // For milestone plans, we regenerate all SCHEDULED occurrences when the plan is updated
+        // This is simpler than trying to detect individual changes since milestone plans
+        // can have varying numbers of entries
+        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
+                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+                .toList();
+
+        if (!scheduledSchedules.isEmpty()) {
+            billingScheduleRepository.deleteAll(scheduledSchedules);
+            log.info("Deleted {} scheduled occurrences for Milestone Plan configuration update",
+                    scheduledSchedules.size());
+        }
+
+        // Generate new occurrences from milestone plan entries
+        generateOccurrencesForMilestonePlan(configuration, milestonePlan, entries);
+    }
+
+    public void generateOccurrencesForMilestonePlan(
+            BillingConfiguration configuration,
+            BillingMilestonePlan milestonePlan,
+            List<BillingPaymentEntry> entries) {
+
+        validateConfigurationApproved(configuration);
+
+        if (entries == null || entries.isEmpty()) {
+            log.warn("No entries found for Milestone Plan {}", milestonePlan.getMilestonePlanId());
+            return;
+        }
+
+        List<BillingSchedule> newSchedules = new ArrayList<>();
+
+        for (BillingPaymentEntry entry : entries) {
+            // For FULL_PAYMENT: generate single occurrence with billing date
+            // For INSTALLMENTS: generate occurrence with billing date for each installment
+
+            LocalDate billingDate;
+            if (entry.getBillingDate() == null) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Billing date is required for all payment entries");
+            }
+            billingDate = entry.getBillingDate();
+
+            // Check if occurrence already exists for this entry
+            boolean exists = billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
+                    configuration,
+                    billingDate,
+                    billingDate
+            );
+
+            if (exists) {
+                log.info("Occurrence already exists for payment entry {} on {}", entry.getSequence(), billingDate);
+                continue;
+            }
+
+            BillingSchedule schedule = BillingSchedule.builder()
+                    .billingConfiguration(configuration)
+                    .periodNumber(entry.getSequence())
+                    .periodStartDate(billingDate)
+                    .periodEndDate(billingDate)
+                    .billingDate(billingDate)
+                    .billingAmount(entry.getAmount())
+                    .scheduleType(BillingScheduleType.PRIMARY)
+                    .isPartialPeriod(false)
+                    .periodStatus(BillingPeriodStatus.SCHEDULED)
+                    .taxStatus(BillingPeriodStatus.PENDING)
+                    .isInvoiced(false)
+                    .isActive(true)
+                    .remarks("Payment " + entry.getSequence())
+                    .build();
+
+            newSchedules.add(schedule);
+        }
+
+        if (!newSchedules.isEmpty()) {
+            try {
+                billingScheduleRepository.saveAll(newSchedules);
+                log.info("Generated {} occurrences for Milestone Plan configuration {}",
+                        newSchedules.size(), configuration.getBillingConfigurationId());
+            } catch (DataIntegrityViolationException e) {
+                log.error("Data integrity violation while saving milestone plan occurrences: {}",
+                        e.getMostSpecificCause().getMessage(), e);
+                throw e;
+            }
+        }
     }
 }
