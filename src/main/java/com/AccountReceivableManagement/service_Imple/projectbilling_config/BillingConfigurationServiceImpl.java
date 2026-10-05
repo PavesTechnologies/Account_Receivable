@@ -56,6 +56,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingPeriodCalculatorService billingPeriodCalculatorService;
     private final BillingMilestonePlanRepository billingMilestonePlanRepository;
     private final BillingPaymentEntryRepository billingPaymentEntryRepository;
+    private final BillingConfigurationChangeTrackingService changeTrackingService;
+    private final com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationSnapshotRepository snapshotRepository;
 
     // =========================================================
     // CREATE BILLING CONFIGURATION
@@ -370,57 +372,28 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         configuration);
 
         /*
-         * Generate Billing Schedules and Occurrences for RECURRING billing
-         * after approval.
-         *
-         * This is done here because:
-         * 1. Schedules/Occurrences require APPROVED status
-         * 2. Configuration must be saved first to have the APPROVED status
-         * 3. This ensures the approval gate is respected
+         * Reconcile billing occurrences after approval.
+         * This handles both new approvals and re-approvals after edits.
+         * The reconciliation logic will:
+         * 1. For new approvals: generate new occurrences
+         * 2. For re-approvals: reconcile existing occurrences with new configuration
          */
-        if (saved.getBillingType() != null &&
-                saved.getBillingType().getBillingTypeName() != null) {
+        try {
+            billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
+                    saved.getBillingConfigurationId());
 
-            String billingTypeName = saved.getBillingType()
-                    .getBillingTypeName()
-                    .trim();
+            log.info(
+                    "Billing occurrences reconciled successfully for configuration {}",
+                    saved.getBillingConfigurationId());
 
-            if (billingTypeName.equalsIgnoreCase("Fixed Price")) {
-                try {
-                    billingOccurrenceService.generateOccurrencesForFixedPrice(
-                            saved.getBillingConfigurationId());
+        } catch (Exception e) {
+            log.error(
+                    "Failed to reconcile billing occurrences for configuration {}",
+                    saved.getBillingConfigurationId(),
+                    e);
 
-                    log.info(
-                            "Fixed Price billing occurrences generated successfully for configuration {}",
-                            saved.getBillingConfigurationId());
-
-                } catch (Exception e) {
-                    log.error(
-                            "Failed to generate Fixed Price billing occurrences for configuration {}",
-                            saved.getBillingConfigurationId(),
-                            e);
-
-                    throw new ValidationException(
-                            "Billing Configuration approved, but Billing Schedule generation failed: "
-                                    + e.getMessage());
-                }
-
-            } else if (billingTypeName.equalsIgnoreCase("Subscription") ||
-                    billingTypeName.equalsIgnoreCase("Recurring")) {
-
-                try {
-                    billingOccurrenceService.generateOccurrencesForRecurring(
-                            saved.getBillingConfigurationId());
-
-                } catch (Exception e) {
-                    log.error(
-                            "Failed to generate Recurring billing occurrences for configuration {}: {}",
-                            saved.getBillingConfigurationId(),
-                            e.getMessage(),
-                            e);
-                    // Don't fail the approval - log and continue
-                }
-            }
+            // Don't fail the approval - log and continue
+            // The configuration is approved, but occurrence reconciliation failed
         }
 
         return mapToResponse(saved);
@@ -449,6 +422,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             throw new ValidationException(
                     "Only configurations pending approval can be rejected.");
         }
+
+        // =========================================================
+        // RESTORE PREVIOUS APPROVED STATE IF SNAPSHOT EXISTS
+        // =========================================================
+        snapshotRepository.findByBillingConfigurationAndIsRestoredFalse(configuration)
+                .ifPresent(snapshot -> {
+                    log.info("Restoring configuration {} from snapshot {}", id, snapshot.getSnapshotId());
+                    changeTrackingService.restoreConfigurationFromSnapshot(configuration, snapshot);
+                });
 
         configuration.setApprovalStatus(
                 ApprovalStatus.REJECTED);
@@ -526,11 +508,25 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 ? configuration.getProject().getPrimaryLocation()
                                 : null)
 
+                .projectStartDate(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getStartDate()
+                                : null)
+
+                .projectEndDate(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getEndDate()
+                                : null)
+
                 .projectName(
                         configuration.getProject() != null
                                 ? configuration.getProject().getProjectName()
                                 : null)
 
+                .projectCode(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getProjectCode()
+                                : null)
 
                 .projectBudget(
                         configuration.getProject() != null
@@ -653,7 +649,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // Populate billing-specific data based on billing type
         if (configuration.getBillingType() != null) {
             String billingTypeName = configuration.getBillingType().getBillingTypeName();
-            
+
             if ("Fixed Price".equalsIgnoreCase(billingTypeName)) {
                 builder.fixedPriceDetails(getFixedPriceDetails(configuration));
             } else if ("Recurring".equalsIgnoreCase(billingTypeName) || "Subscription".equalsIgnoreCase(billingTypeName)) {
@@ -665,73 +661,21 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             }
         }
 
-//        // Add change tracking information if configuration is PENDING_APPROVAL
-//        if (configuration.getApprovalStatus() == ApprovalStatus.PENDING_APPROVAL) {
-//            com.AccountReceivableManagement.entity.projectbilling_config.BillingConfigurationAudit audit =
-//                    changeTrackingService.getLatestAudit(configuration);
-//
-//            if (audit != null) {
-//                List<com.AccountReceivableManagement.entity.projectbilling_config.BillingConfigurationChangeDetail> details =
-//                        changeTrackingService.getChangeDetails(audit);
-//
-//                builder.changes(changeTrackingService.mapChangesToDto(details));
-//                builder.previousApprovalStatus(audit.getApprovalStatus().name());
-//                builder.previousBillingStatus(audit.getBillingStatus().name());
-//            }
-//        }
+        // Add change tracking information if configuration is PENDING_APPROVAL
+        if (configuration.getApprovalStatus() == ApprovalStatus.PENDING_APPROVAL) {
+            snapshotRepository.findFirstByBillingConfigurationOrderByCreatedAtDesc(configuration)
+                    .ifPresent(snapshot -> {
+                        List<com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationChangeDto> changes =
+                                changeTrackingService.getChangesForConfiguration(configuration);
+
+                        builder.changes(changes);
+                        builder.previousApprovalStatus(snapshot.getPreviousApprovalStatus().name());
+                        builder.previousBillingStatus(snapshot.getPreviousBillingStatus().name());
+                    });
+        }
 
         return builder.build();
     }
-
-//    /**
-//     * Clones a BillingConfiguration for audit purposes.
-//     * Creates a shallow copy of the entity to capture previous state.
-//     */
-//    private BillingConfiguration cloneConfiguration(BillingConfiguration original) {
-//        if (original == null) {
-//            return null;
-//        }
-//
-//        BillingConfiguration clone = new BillingConfiguration();
-//        clone.setBillingConfigurationId(original.getBillingConfigurationId());
-//        clone.setApprovalStatus(original.getApprovalStatus());
-//        clone.setBillingStatus(original.getBillingStatus());
-//        clone.setContractValue(original.getContractValue());
-//        clone.setEffectiveFrom(original.getEffectiveFrom());
-//        clone.setEffectiveTo(original.getEffectiveTo());
-//        clone.setHourlyRate(original.getHourlyRate());
-//        clone.setPricingModel(original.getPricingModel());
-//        clone.setInvoiceGenerationType(original.getInvoiceGenerationType());
-//        clone.setExpenseBillingEligible(original.getExpenseBillingEligible());
-//        clone.setManuallyDeactivated(original.getManuallyDeactivated());
-//        clone.setRejectionReason(original.getRejectionReason());
-//
-//        return clone;
-//    }
-
-//    /**
-//     * Tracks general configuration field changes.
-//     */
-//    private void trackGeneralConfigurationChanges(
-//            com.AccountReceivableManagement.entity.projectbilling_config.BillingConfigurationAudit audit,
-//            BillingConfiguration previous,
-//            BillingConfiguration current) {
-//
-//        changeTrackingService.recordChange(audit, "contractValue", "Contract Value", "DECIMAL",
-//                previous.getContractValue(), current.getContractValue(), "COMMERCIAL");
-//        changeTrackingService.recordChange(audit, "effectiveFrom", "Effective From", "DATE",
-//                previous.getEffectiveFrom(), current.getEffectiveFrom(), "DATES");
-//        changeTrackingService.recordChange(audit, "effectiveTo", "Effective To", "DATE",
-//                previous.getEffectiveTo(), current.getEffectiveTo(), "DATES");
-//        changeTrackingService.recordChange(audit, "hourlyRate", "Hourly Rate", "DECIMAL",
-//                previous.getHourlyRate(), current.getHourlyRate(), "PRICING");
-//        changeTrackingService.recordChange(audit, "pricingModel", "Pricing Model", "ENUM",
-//                previous.getPricingModel(), current.getPricingModel(), "PRICING");
-//        changeTrackingService.recordChange(audit, "invoiceGenerationType", "Invoice Generation Type", "ENUM",
-//                previous.getInvoiceGenerationType(), current.getInvoiceGenerationType(), "BILLING");
-//        changeTrackingService.recordChange(audit, "expenseBillingEligible", "Expense Billing Eligible", "BOOLEAN",
-//                previous.getExpenseBillingEligible(), current.getExpenseBillingEligible(), "BILLING");
-//    }
 
     private BillingFixedPriceResponseDto getFixedPriceDetails(BillingConfiguration configuration) {
         try {
@@ -1001,9 +945,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                     project.getProjectName()
                             )
                             .projectCode(
-                                    String.valueOf(
-                                            project.getPmsProjectId()
-                                    )
+                                    project.getProjectCode()
                             )
                             .projectDuration(
                                     projectDuration
@@ -1208,15 +1150,20 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         /*
          * Validate dates.
+         * For Milestone Plan billing type, effectiveTo is not used for billing - the schedule
+         * is driven by payment entry billingDate fields. Skip effectiveTo validation for Milestone Plan.
          */
         validateEffectiveDates(
                 request.getEffectiveFrom(),
                 request.getEffectiveTo());
 
-        validateEffectiveDatesAgainstProjectDuration(
-                project,
-                request.getEffectiveFrom(),
-                request.getEffectiveTo());
+        // Only validate effectiveTo against project duration if NOT Milestone Plan
+        if (billingType == null || !"Milestone Plan".equalsIgnoreCase(billingType.getBillingTypeName())) {
+            validateEffectiveDatesAgainstProjectDuration(
+                    project,
+                    request.getEffectiveFrom(),
+                    request.getEffectiveTo());
+        }
 
         /*
          * Update master-data relationships.
@@ -1237,8 +1184,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setEffectiveFrom(
                 request.getEffectiveFrom());
 
-        configuration.setEffectiveTo(
-                request.getEffectiveTo());
+        // For Milestone Plan billing type, effectiveTo is not used for billing - the schedule
+        // is driven by payment entry billingDate fields. Only update effectiveTo if NOT Milestone Plan.
+        if (billingType == null || !"Milestone Plan".equalsIgnoreCase(billingType.getBillingTypeName())) {
+            configuration.setEffectiveTo(
+                    request.getEffectiveTo());
+        }
 
         configuration.setPricingModel(
                 request.getPricingModel());
@@ -1602,13 +1553,32 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                         "Billing Configuration not found."));
 
         // =========================================================
-        // ONLY DRAFT CAN BE EDITED
+        // VALIDATE EDITABLE STATUS
         // =========================================================
-        if (configuration.getApprovalStatus()
-                != ApprovalStatus.DRAFT) {
+        boolean isDraft = configuration.getApprovalStatus() == ApprovalStatus.DRAFT;
+        boolean isApprovedAndActive = configuration.getApprovalStatus() == ApprovalStatus.APPROVED
+                && configuration.getBillingStatus() == BillingConfigurationStatus.ACTIVE;
 
+        if (!isDraft && !isApprovedAndActive) {
             throw new ValidationException(
-                    "Only draft billing configurations can be edited.");
+                    "Only draft or approved active billing configurations can be edited.");
+        }
+
+        // =========================================================
+        // HANDLE APPROVED+ACTIVE EDIT
+        // =========================================================
+        BillingConfigurationSnapshot snapshot = null;
+        BillingConfiguration previousConfiguration = null;
+
+        if (isApprovedAndActive) {
+            log.info("Editing APPROVED+ACTIVE configuration: {}", billingConfigurationId);
+
+            // Clone the current configuration for comparison
+            previousConfiguration = cloneConfigurationForComparison(configuration);
+
+            // Create snapshot of the approved state
+            snapshot = changeTrackingService.createSnapshot(configuration);
+            log.info("Created snapshot {} for configuration {}", snapshot.getSnapshotId(), billingConfigurationId);
         }
 
         // =========================================================
@@ -1751,29 +1721,34 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setEffectiveFrom(
                 request.getEffectiveFrom());
 
-        configuration.setEffectiveTo(
-                request.getEffectiveTo());
+        // For Milestone Plan billing type, effectiveTo is not used for billing - the schedule
+        // is driven by payment entry billingDate fields. Only update effectiveTo if NOT Milestone Plan.
+        if (billingType == null || !"Milestone Plan".equalsIgnoreCase(billingType.getBillingTypeName())) {
+            configuration.setEffectiveTo(
+                    request.getEffectiveTo());
+        }
 
         configuration.setHourlyRate(
                 request.getHourlyRate());
 
         // =========================================================
-        // DRAFT STATUS
+        // STATUS TRANSITION
         // =========================================================
-        configuration.setApprovalStatus(
-                ApprovalStatus.DRAFT);
+        if (isDraft) {
+            // DRAFT → DRAFT (normal draft editing)
+            configuration.setApprovalStatus(ApprovalStatus.DRAFT);
+            configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+            configuration.setManuallyDeactivated(false);
+            configuration.setRejectionReason(null);
+        } else if (isApprovedAndActive) {
+            // APPROVED+ACTIVE → PENDING_APPROVAL + INACTIVE
+            configuration.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+            configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+            configuration.setManuallyDeactivated(false);
+            configuration.setRejectionReason(null);
 
-        configuration.setBillingStatus(
-                BillingConfigurationStatus.INACTIVE);
-
-        /*
-         * Important:
-         * This is a normal draft save.
-         * It must never activate the configuration.
-         */
-        configuration.setManuallyDeactivated(false);
-
-        configuration.setRejectionReason(null);
+            log.info("Configuration {} transitioned to PENDING_APPROVAL + INACTIVE", billingConfigurationId);
+        }
 
         configuration.setUpdatedAt(
                 LocalDateTime.now());
@@ -1785,7 +1760,93 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 billingConfigurationRepository.save(
                         configuration);
 
+        // =========================================================
+        // TRACK CHANGES FOR APPROVED+ACTIVE EDIT
+        // =========================================================
+        if (isApprovedAndActive && snapshot != null && previousConfiguration != null) {
+            changeTrackingService.trackGeneralConfigurationChanges(
+                    snapshot, previousConfiguration, saved);
+
+            // Track billing-type-specific changes
+            trackBillingTypeSpecificChanges(snapshot, saved);
+        }
+
         return mapToDraftResponse(saved);
+    }
+
+    /**
+     * Clones a BillingConfiguration for comparison purposes.
+     * Creates a shallow copy to capture previous state before editing.
+     */
+    private BillingConfiguration cloneConfigurationForComparison(BillingConfiguration original) {
+        if (original == null) {
+            return null;
+        }
+
+        BillingConfiguration clone = new BillingConfiguration();
+        clone.setBillingConfigurationId(original.getBillingConfigurationId());
+        clone.setClient(original.getClient());
+        clone.setProject(original.getProject());
+        clone.setBillingType(original.getBillingType());
+        clone.setCurrency(original.getCurrency());
+        clone.setPaymentTerm(original.getPaymentTerm());
+        clone.setBillingFrequency(original.getBillingFrequency());
+        clone.setTaxRegion(original.getTaxRegion());
+        clone.setContractValue(original.getContractValue());
+        clone.setExpenseBillingEligible(original.getExpenseBillingEligible());
+        clone.setEffectiveFrom(original.getEffectiveFrom());
+        clone.setEffectiveTo(original.getEffectiveTo());
+        clone.setHourlyRate(original.getHourlyRate());
+        clone.setPricingModel(original.getPricingModel());
+        clone.setInvoiceGenerationType(original.getInvoiceGenerationType());
+        clone.setBillingContext(original.getBillingContext());
+        clone.setProductName(original.getProductName());
+        clone.setProductDescription(original.getProductDescription());
+
+        return clone;
+    }
+
+    /**
+     * Tracks billing-type-specific configuration changes.
+     * Delegates to the appropriate service based on billing type.
+     */
+    private void trackBillingTypeSpecificChanges(BillingConfigurationSnapshot snapshot,
+                                                   BillingConfiguration configuration) {
+        if (configuration.getBillingType() == null) {
+            return;
+        }
+
+        String billingTypeName = configuration.getBillingType().getBillingTypeName();
+
+        if ("Milestone Plan".equalsIgnoreCase(billingTypeName)) {
+            trackMilestonePlanChanges(snapshot, configuration);
+        }
+        // Additional billing types can be added here as needed
+    }
+
+    /**
+     * Tracks milestone plan payment entry changes.
+     */
+    private void trackMilestonePlanChanges(BillingConfigurationSnapshot snapshot,
+                                            BillingConfiguration configuration) {
+        try {
+            BillingMilestonePlan milestonePlan = billingMilestonePlanRepository
+                    .findByBillingConfigurationAndIsActiveTrue(configuration)
+                    .orElse(null);
+
+            if (milestonePlan != null) {
+                List<BillingPaymentEntry> entries = billingPaymentEntryRepository
+                        .findByMilestonePlanAndIsActiveTrueOrderBySequenceAsc(milestonePlan);
+
+                // Store the current entries for comparison
+                // Note: For a complete implementation, we would need to compare with previous entries
+                // This is a placeholder for the milestone-specific change tracking
+                log.debug("Tracking milestone plan changes for configuration: {}", 
+                        configuration.getBillingConfigurationId());
+            }
+        } catch (Exception e) {
+            log.error("Error tracking milestone plan changes: {}", e.getMessage(), e);
+        }
     }
 
     private BillingConfigurationDraftResponseDto mapToDraftResponse(
