@@ -15,6 +15,8 @@ public interface BillingPaymentEntryRepository extends JpaRepository<BillingPaym
 
     List<BillingPaymentEntry> findByMilestonePlanAndIsActiveTrue(BillingMilestonePlan milestonePlan);
 
+    List<BillingPaymentEntry> findByMilestonePlan(BillingMilestonePlan milestonePlan);
+
     void deleteByMilestonePlan(BillingMilestonePlan milestonePlan);
 
 }

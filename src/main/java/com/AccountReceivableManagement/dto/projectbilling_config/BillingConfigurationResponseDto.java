@@ -33,12 +33,15 @@
 
         private String primaryLocation;
 
+        private LocalDate projectStartDate;
+
+        private LocalDate projectEndDate;
 
         private UUID billingTypeId;
 
         private String billingTypeName;
 
-        private Long projectcode;
+        private String projectCode;
 
         private UUID currencyId;
 
@@ -110,9 +113,9 @@
     private java.util.List<BillingTMRateCardResponseDto> tmRateCards;
     private java.util.List<BillingScheduleResponseDto> milestoneSchedules;
 
-//    // Change tracking for pending approval
-//    private java.util.List<BillingConfigurationChangeDto> changes;
-//    private String previousApprovalStatus;
-//    private String previousBillingStatus;
+    // Change tracking for pending approval
+    private java.util.List<BillingConfigurationChangeDto> changes;
+    private String previousApprovalStatus;
+    private String previousBillingStatus;
 
     }

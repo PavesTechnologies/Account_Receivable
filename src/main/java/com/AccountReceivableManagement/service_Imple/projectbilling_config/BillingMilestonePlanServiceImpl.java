@@ -38,6 +38,7 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
     private final BillingPaymentEntryRepository billingPaymentEntryRepository;
     private final BillingConfigurationRepository billingConfigurationRepository;
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
+    private final BillingConfigurationChangeTrackingService changeTrackingService;
 
     @Override
     @Transactional
@@ -113,6 +114,28 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
 
         validateRequest(request);
 
+        // Validate billing dates against project dates
+        validateBillingDatesAgainstProject(configuration, request);
+
+        // =========================================================
+        // SNAPSHOT CREATION FOR APPROVED+ACTIVE EDIT
+        // =========================================================
+        com.AccountReceivableManagement.entity.projectbilling_config.BillingConfigurationSnapshot snapshot = null;
+        List<BillingPaymentEntry> previousEntries = null;
+
+        if (originalApprovalStatus == ApprovalStatus.APPROVED &&
+            configuration.getBillingStatus() == BillingConfigurationStatus.ACTIVE) {
+            log.info("Editing APPROVED+ACTIVE Milestone Plan: {}", milestonePlanId);
+
+            // Capture previous entries for comparison
+            previousEntries = billingPaymentEntryRepository
+                    .findByMilestonePlanAndIsActiveTrueOrderBySequenceAsc(milestonePlan);
+
+            // Create snapshot of the approved state
+            snapshot = changeTrackingService.createSnapshot(configuration);
+            log.info("Created snapshot {} for Milestone Plan configuration {}", snapshot.getSnapshotId(), configuration.getBillingConfigurationId());
+        }
+
         // Deactivate existing entries
         List<BillingPaymentEntry> existingEntries =
                 billingPaymentEntryRepository.findByMilestonePlanAndIsActiveTrue(milestonePlan);
@@ -136,6 +159,14 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
 
         billingPaymentEntryRepository.saveAll(newEntries);
 
+        // =========================================================
+        // TRACK CHANGES FOR APPROVED+ACTIVE EDIT
+        // =========================================================
+        if (snapshot != null && previousEntries != null) {
+            changeTrackingService.trackMilestonePlanChanges(snapshot, previousEntries, newEntries);
+            log.info("Tracked milestone plan changes for snapshot {}", snapshot.getSnapshotId());
+        }
+
         // Update parent BillingConfiguration with the actual contract value
         configuration.setContractValue(request.getTotalContractValue());
 
@@ -146,11 +177,9 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
         configuration.setUpdatedAt(LocalDateTime.now());
         billingConfigurationRepository.save(configuration);
 
-// Reconcile billing occurrences on update
-        if (originalApprovalStatus == ApprovalStatus.APPROVED) {
-            billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
-                    configuration.getBillingConfigurationId());
-        }
+        // NOTE: Occurrence reconciliation is NOT performed here.
+        // Reconciliation only happens after Finance APPROVES the pending changes
+        // in the BillingConfigurationServiceImpl.approve() method.
 
         return mapToResponse(savedPlan, newEntries);
     }
@@ -272,6 +301,43 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
             case INSTALLMENTS:
                 validateInstallmentEntries(entries, totalContractValue);
                 break;
+        }
+    }
+
+    private void validateBillingDatesAgainstProject(
+            BillingConfiguration configuration,
+            BillingMilestonePlanRequestDto request) {
+
+        // Only validate if the configuration has a project
+        if (configuration.getProject() == null) {
+            return;
+        }
+
+        java.time.LocalDate projectStart = configuration.getProject().getStartDate();
+        java.time.LocalDate projectEnd = configuration.getProject().getEndDate();
+
+        // If project dates are not available, skip validation
+        if (projectStart == null || projectEnd == null) {
+            return;
+        }
+
+        // Validate each billing date in the request
+        if (request.getEntries() != null) {
+            for (BillingPaymentEntryRequestDto entry : request.getEntries()) {
+                if (entry.getBillingDate() != null) {
+                    // Validate billing date is not before project start
+                    if (entry.getBillingDate().isBefore(projectStart)) {
+                        throw new GlobalExceptionHandler.ValidationException(
+                                "Billing date cannot be before Project Start Date (" + projectStart + ").");
+                    }
+
+                    // Validate billing date is not after project end
+                    if (entry.getBillingDate().isAfter(projectEnd)) {
+                        throw new GlobalExceptionHandler.ValidationException(
+                                "Billing date cannot be after Project End Date (" + projectEnd + ").");
+                    }
+                }
+            }
         }
     }
 
