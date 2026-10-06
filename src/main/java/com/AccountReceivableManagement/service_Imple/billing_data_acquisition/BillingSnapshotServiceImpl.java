@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.service_Imple.billing_data_acquisition;
 
+import com.AccountReceivableManagement.dto.billing_data_acquisition.AcquireDataResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingAcquisitionResultDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnapshotCreateRequestDto;
@@ -12,17 +13,22 @@ import com.AccountReceivableManagement.builder.billing_data_acquisition.BillingS
 import com.AccountReceivableManagement.dependency.billing_data_acquisition.ProjectMasterDataService;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshotItem;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingAcquisitionStatus;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.integration.billing_data_acquisition.BillingConfigurationIntegration;
 import com.AccountReceivableManagement.mapper.billing_data_acquisition.BillingSnapshotMapper;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
+import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingAcquisitionService;
 import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingSnapshotService;
 import com.AccountReceivableManagement.strategy.billing_data_acquisition.BillingAcquisitionStrategy;
 import com.AccountReceivableManagement.validator.billing_data_acquisition.BillingAcquisitionValidator;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -48,6 +54,7 @@ import lombok.extern.slf4j.Slf4j;
 public class BillingSnapshotServiceImpl implements BillingSnapshotService {
 
     private static final DateTimeFormatter SNAPSHOT_NUMBER_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    private static final int SNAPSHOT_NUMBER_SUFFIX_LENGTH = 8;
 
     private final BillingSnapshotRepository billingSnapshotRepository;
     private final BillingConfigurationIntegration billingConfigurationIntegration;
@@ -59,6 +66,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     private final com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository projectMasterReferenceRepository;
     private final com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository taxRegionMasterRepository;
     private final Map<BillingType, BillingAcquisitionStrategy> strategiesByBillingType;
+    private final BillingAcquisitionService billingAcquisitionService;
+    private final TransactionTemplate transactionTemplate;
 
     public BillingSnapshotServiceImpl(BillingSnapshotRepository billingSnapshotRepository,
             BillingConfigurationIntegration billingConfigurationIntegration,
@@ -69,7 +78,9 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
             com.AccountReceivableManagement.repo.projectbilling_config.CurrencyMasterRepository currencyMasterRepository,
             com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository projectMasterReferenceRepository,
             com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository taxRegionMasterRepository,
-            List<BillingAcquisitionStrategy> strategies) {
+            List<BillingAcquisitionStrategy> strategies,
+            BillingAcquisitionService billingAcquisitionService,
+            PlatformTransactionManager transactionManager) {
         this.billingSnapshotRepository = billingSnapshotRepository;
         this.billingConfigurationIntegration = billingConfigurationIntegration;
         this.projectMasterDataService = projectMasterDataService;
@@ -81,6 +92,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         this.taxRegionMasterRepository = taxRegionMasterRepository;
         this.strategiesByBillingType = strategies.stream()
                 .collect(Collectors.toMap(BillingAcquisitionStrategy::getSupportedBillingType, Function.identity()));
+        this.billingAcquisitionService = billingAcquisitionService;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     @Override
@@ -89,15 +102,9 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
             return ApiResponse.failure("Billing period start date cannot be after end date.");
         }
 
-        Optional<BillingSnapshot> existingOpt = billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
+        Optional<BillingSnapshot> existingOpt = findExistingSnapshot(request);
         if (existingOpt.isPresent()) {
-            BillingSnapshot existing = existingOpt.get();
-            BillingConfigurationResponseDto configuration =
-                    resolveHistoricalConfiguration(existing.getBillingConfigurationId());
-            BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(existing, configuration);
-            return ApiResponse.success(
-                    "Billing Snapshot already exists for the selected project and billing period.", responseDto);
+            return reuseOrRejectExistingSnapshot(existingOpt.get(), request);
         }
 
         BillingConfigurationResponseDto configuration = loadApprovedBillingConfiguration(request);
@@ -150,9 +157,41 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         BillingSnapshot snapshot = billingSnapshotBuilder.build(context);
 
         try {
-            BillingSnapshot savedSnapshot = persistSnapshot(snapshot);
-            BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(savedSnapshot, configuration);
+            // Snapshot and its acquisition record commit together or not at all,
+            // so a persisted snapshot can no longer be left without its record.
+            SnapshotCreation creation = transactionTemplate.execute(txStatus -> {
+                BillingSnapshot savedSnapshot = persistSnapshot(snapshot);
+                AcquireDataResponseDto acquisition = billingAcquisitionService.createManualAcquisition(
+                        savedSnapshot.getBillingConfigurationId(),
+                        savedSnapshot.getBillingPeriodStart(),
+                        savedSnapshot.getBillingPeriodEnd(),
+                        savedSnapshot.getId(),
+                        BillingAcquisitionStatus.READY.name());
+                return new SnapshotCreation(savedSnapshot, acquisition);
+            });
+            BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(creation.snapshot(), configuration);
+            responseDto.setExistingSnapshot(false);
+            applyAcquisitionStatus(responseDto, creation.acquisition());
             return ApiResponse.success("Billing Snapshot created successfully.", responseDto);
+        } catch (DataIntegrityViolationException ex) {
+            // A concurrent request for the same project and period committed first
+            // (uk_billing_snapshot_project_period). This transaction has been rolled
+            // back; re-read in a fresh one and reuse the winner's snapshot.
+            Optional<BillingSnapshot> concurrentSnapshot = findExistingSnapshot(request);
+            if (concurrentSnapshot.isPresent()) {
+                log.warn("[BillingSnapshotConcurrentCreate] Snapshot for projectId={}, period {} to {} was created "
+                                + "by a concurrent request; reusing it.",
+                        request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
+                return reuseOrRejectExistingSnapshot(concurrentSnapshot.get(), request);
+            }
+            log.error("[BillingSnapshotPersistenceError] Snapshot creation failed for projectId={}: {}",
+                    request.getProjectId(), ex.getMostSpecificCause().getMessage(), ex);
+            return ApiResponse.failure("Failed to save Billing Snapshot: " + ex.getMostSpecificCause().getMessage());
+        } catch (GlobalExceptionHandler.ValidationException | GlobalExceptionHandler.ResourceNotFoundException ex) {
+            // Acquisition-record validation (e.g. configuration not active) - the
+            // snapshot was rolled back with it; surface the real message, as the
+            // other validation failures in this method do.
+            throw ex;
         } catch (Exception ex) {
             log.error("[BillingSnapshotPersistenceError] Snapshot creation failed for projectId={}: {}",
                     request.getProjectId(), ex.getMessage(), ex);
@@ -163,6 +202,12 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     @Override
     public ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId,
             LocalDate billingPeriodStart, LocalDate billingPeriodEnd) {
+        return getByProjectAndPeriod(projectId, billingPeriodStart, billingPeriodEnd, null);
+    }
+
+    @Override
+    public ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId,
+            LocalDate billingPeriodStart, LocalDate billingPeriodEnd, UUID billingConfigurationId) {
         Optional<BillingSnapshot> snapshotOptional = billingSnapshotRepository
                 .findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(projectId, billingPeriodStart,
                         billingPeriodEnd);
@@ -173,6 +218,17 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         }
 
         BillingSnapshot snapshot = snapshotOptional.get();
+
+        // The (project, period) key is shared by every configuration the project has
+        // had, so a snapshot of another configuration is not this configuration's.
+        if (billingConfigurationId != null && !billingConfigurationId.equals(snapshot.getBillingConfigurationId())) {
+            log.warn("[BillingSnapshotConfigurationMismatch] snapshotId={} belongs to billingConfigurationId={}, "
+                            + "requested billingConfigurationId={}; not returned.",
+                    snapshot.getId(), snapshot.getBillingConfigurationId(), billingConfigurationId);
+            return ApiResponse.failure(
+                    "Billing Snapshot not found for the selected billing configuration and billing period.");
+        }
+
         BillingConfigurationResponseDto configuration =
                 resolveHistoricalConfiguration(snapshot.getBillingConfigurationId());
 
@@ -257,6 +313,97 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         return billingSnapshotRepository.save(snapshot);
     }
 
+    private Optional<BillingSnapshot> findExistingSnapshot(BillingSnapshotCreateRequestDto request) {
+        return billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+                request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
+    }
+
+    /**
+     * Snapshots are unique per (project, period), not per configuration, so the
+     * row found for a request may belong to a different - e.g. earlier,
+     * since-replaced - Billing Configuration of the same project. Handing that
+     * snapshot back would show the requested configuration another
+     * configuration's lifecycle state (including INVOICED), so it is rejected
+     * instead, naming the conflicting snapshot. A request that names no
+     * configuration is checked against the project's currently approved one,
+     * when that can be resolved.
+     */
+    private ApiResponse<BillingSnapshotResponseDto> reuseOrRejectExistingSnapshot(BillingSnapshot existing,
+            BillingSnapshotCreateRequestDto request) {
+        UUID requestedConfigurationId = resolveRequestedConfigurationId(request);
+        if (requestedConfigurationId != null
+                && !requestedConfigurationId.equals(existing.getBillingConfigurationId())) {
+            log.warn("[BillingSnapshotConfigurationMismatch] projectId={}, period {} to {}: snapshotId={} ({}, {}) "
+                            + "belongs to billingConfigurationId={}, requested billingConfigurationId={}; not reused.",
+                    request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd(),
+                    existing.getId(), existing.getSnapshotNumber(), existing.getStatus(),
+                    existing.getBillingConfigurationId(), requestedConfigurationId);
+            return ApiResponse.failure("Billing Snapshot " + existing.getSnapshotNumber() + " (status "
+                    + existing.getStatus() + ") already exists for this project and billing period under a "
+                    + "different Billing Configuration (" + existing.getBillingConfigurationId() + "). It cannot "
+                    + "be reused for the selected Billing Configuration; choose another billing period or "
+                    + "resolve the earlier snapshot.");
+        }
+        return reuseExistingSnapshot(existing);
+    }
+
+    private UUID resolveRequestedConfigurationId(BillingSnapshotCreateRequestDto request) {
+        if (request.getBillingConfigurationId() != null) {
+            return request.getBillingConfigurationId();
+        }
+        try {
+            BillingConfigurationResponseDto active =
+                    billingConfigurationIntegration.getApprovedBillingConfiguration(request.getProjectId());
+            return active != null ? active.getBillingConfigurationId() : null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /**
+     * Returns an already-persisted snapshot exactly as stored - same id,
+     * snapshot number, totals and lifecycle status, never rebuilt - after
+     * making sure its acquisition record exists and references it.
+     */
+    private ApiResponse<BillingSnapshotResponseDto> reuseExistingSnapshot(BillingSnapshot existing) {
+        BillingConfigurationResponseDto configuration =
+                resolveHistoricalConfiguration(existing.getBillingConfigurationId());
+        BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(existing, configuration);
+        responseDto.setExistingSnapshot(true);
+        applyAcquisitionStatus(responseDto, reconcileAcquisition(existing));
+        return ApiResponse.success(
+                "Billing Snapshot already exists for the selected project and billing period.", responseDto);
+    }
+
+    /**
+     * Repairs a missing or stale acquisition record for an existing snapshot.
+     * A configuration that can no longer be recorded against (deleted,
+     * unapproved or inactive) must not hide the snapshot itself, so those
+     * validation failures are logged and the snapshot is still returned.
+     */
+    private AcquireDataResponseDto reconcileAcquisition(BillingSnapshot existing) {
+        try {
+            return billingAcquisitionService.recordAcquisitionForSnapshot(
+                    existing.getBillingConfigurationId(),
+                    existing.getBillingPeriodStart(),
+                    existing.getBillingPeriodEnd(),
+                    existing.getId());
+        } catch (GlobalExceptionHandler.ValidationException | GlobalExceptionHandler.ResourceNotFoundException ex) {
+            log.warn("[BillingAcquisitionReconcileSkipped] snapshotId={}, billingConfigurationId={}: {}",
+                    existing.getId(), existing.getBillingConfigurationId(), ex.getMessage());
+            return null;
+        }
+    }
+
+    private void applyAcquisitionStatus(BillingSnapshotResponseDto responseDto, AcquireDataResponseDto acquisition) {
+        if (acquisition != null && acquisition.getStatus() != null) {
+            responseDto.setAcquisitionStatus(acquisition.getStatus());
+        }
+    }
+
+    private record SnapshotCreation(BillingSnapshot snapshot, AcquireDataResponseDto acquisition) {
+    }
+
     /**
      * Resolves the Billing Configuration referenced by a snapshot's frozen,
      * historical {@code billingConfigurationId}. That id is never re-pointed
@@ -310,8 +457,16 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 .build();
     }
 
-    private String generateSnapshotNumber() {
-        return "BS-" + LocalDateTime.now().format(SNAPSHOT_NUMBER_FORMATTER);
+    /**
+     * {@code BS-yyyyMMddHHmmss-XXXXXXXX} (26 chars, fits the 30-char
+     * snapshot_number columns). The random hex suffix keeps numbers unique
+     * when several snapshots are created within the same second; earlier
+     * {@code BS-yyyyMMddHHmmss} numbers are left as they are.
+     */
+    String generateSnapshotNumber() {
+        String suffix = UUID.randomUUID().toString().replace("-", "")
+                .substring(0, SNAPSHOT_NUMBER_SUFFIX_LENGTH).toUpperCase();
+        return "BS-" + LocalDateTime.now().format(SNAPSHOT_NUMBER_FORMATTER) + "-" + suffix;
     }
 
     private BillingSnapshotBuilderContext buildContext(BillingConfigurationResponseDto configuration,
@@ -399,7 +554,13 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 snapshot.getTotalAmount());
 
         try {
-            return billingSnapshotRepository.save(snapshot);
+            // Flushed so a unique-key conflict surfaces here, not at commit.
+            return billingSnapshotRepository.saveAndFlush(snapshot);
+        } catch (DataIntegrityViolationException ex) {
+            // Left untranslated - the caller distinguishes a lost race from other failures.
+            log.warn("[BillingSnapshotSaveConflict] snapshotNumber={}: {}",
+                    snapshot.getSnapshotNumber(), ex.getMostSpecificCause().getMessage());
+            throw ex;
         } catch (Exception ex) {
             Throwable rootCause = ex;
             while (rootCause.getCause() != null) {

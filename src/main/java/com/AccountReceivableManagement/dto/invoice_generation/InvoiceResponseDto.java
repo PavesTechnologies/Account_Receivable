@@ -82,6 +82,17 @@ public class InvoiceResponseDto {
 
     private String sellerLogoReference;
 
+    /**
+     * Tax context frozen on the invoice at generation - the Tax Region code,
+     * and the supplier (source) and customer (destination) tax jurisdiction
+     * codes used to select the tax components. Null when not recorded.
+     */
+    private String taxRegionCode;
+
+    private String sourceTaxJurisdictionCode;
+
+    private String destinationTaxJurisdictionCode;
+
     private LocalDate invoiceDate;
 
     private LocalDate dueDate;

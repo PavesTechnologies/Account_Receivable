@@ -198,7 +198,11 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 currencyMasterRepository,
                 projectMasterReferenceRepository,
                 taxRegionMasterRepository,
-                List.of(timeAndMaterialStrategy));
+                List.of(timeAndMaterialStrategy),
+                // Not used by rebuildBillingSnapshot (the correction path).
+                org.mockito.Mockito.mock(
+                        com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingAcquisitionService.class),
+                org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class));
 
         TaxCalculationServiceImpl taxCalculationService = new TaxCalculationServiceImpl(
                 taxCalculationRepository,
@@ -321,15 +325,20 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 .build();
     }
 
-    private com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto
+    private com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration
     epic1ConfigurationForTaxResponseMapping() {
-        return com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto.builder()
+        return com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration.builder()
                 .billingConfigurationId(configId)
-                .projectName("Website Redesign")
-                .clientName("Acme Corp")
-                .currencyCode("USD")
-                .taxRegionName("Domestic (GST 18%)")
-                .taxRegionCode("DOM")
+                .project(com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference.builder()
+                        .projectName("Website Redesign").build())
+                .client(com.AccountReceivableManagement.entity.client_entity.Client.builder()
+                        .clientName("Acme Corp").build())
+                .currency(com.AccountReceivableManagement.entity.projectbilling_config.CurrencyMaster.builder()
+                        .currencyCode("USD").build())
+                .taxRegion(com.AccountReceivableManagement.entity.projectbilling_config.TaxRegionMaster.builder()
+                        .taxRegionName("Domestic (GST 18%)")
+                        .taxRegionCode("DOM")
+                        .build())
                 .build();
     }
 
@@ -424,8 +433,10 @@ class InvoiceFinancialCorrectionServiceImplTest {
 
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(configId))
                 .thenReturn(approvedTimeAndMaterialConfiguration());
-        when(billingConfigurationService.getBillingConfiguration(configId))
-                .thenReturn(epic1ConfigurationForTaxResponseMapping());
+        // TaxCalculationServiceImpl reads the configuration through the
+        // repository (not BillingConfigurationService) for its response mapping.
+        when(billingConfigurationRepository.findById(configId))
+                .thenReturn(Optional.of(epic1ConfigurationForTaxResponseMapping()));
         when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, PERIOD_START))
                 .thenReturn(List.of(taxConfigurationCgstSgst()));
 

@@ -249,12 +249,24 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
         }
 
         /*
-         * If configuration contains components but none apply,
-         * tax is legitimately zero.
-         *
-         * If your business wants this to be an error,
-         * change this validation later.
+         * No applicable component means the tax configuration or the
+         * snapshot's jurisdictions are incomplete - not that tax is zero.
+         * Fail with the missing prerequisite (as calculateTaxForSchedule
+         * does) rather than completing the snapshot with a fabricated zero
+         * tax that invoice generation would then copy. A configured 0% rate
+         * still produces a component and is unaffected.
          */
+        if (calculation.getComponents().isEmpty()) {
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    describeNoApplicableComponents(
+                            configuration,
+                            snapshot,
+                            transactionApplicability
+                    )
+            );
+        }
+
         calculation.setTotalTaxAmount(totalTax);
 
         calculation.setGrandTotal(
@@ -656,6 +668,41 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         log.info("Jurisdictions are DIFFERENT: {} != {}", source, destination);
         return TaxApplicabilityType.DIFFERENT_JURISDICTION;
+    }
+
+    /**
+     * Names the exact missing prerequisite when no configured tax component
+     * applies to a billing snapshot's transaction.
+     */
+    private String describeNoApplicableComponents(
+            TaxConfiguration configuration,
+            BillingSnapshot snapshot,
+            TaxApplicabilityType transactionApplicability
+    ) {
+
+        List<TaxApplicabilityType> activeApplicabilities =
+                configuration.getComponents()
+                        .stream()
+                        .filter(component ->
+                                Boolean.TRUE.equals(component.getIsActive()))
+                        .map(TaxConfigurationComponent::getApplicabilityType)
+                        .distinct()
+                        .toList();
+
+        if (activeApplicabilities.isEmpty()) {
+            return "No active tax components are configured for the selected Tax Configuration.";
+        }
+
+        if (transactionApplicability == TaxApplicabilityType.ALL) {
+            return "Unable to determine applicable tax components because source and destination "
+                    + "jurisdictions are not available for this billing snapshot.";
+        }
+
+        return "No active tax component in the selected Tax Configuration applies to this billing snapshot: "
+                + "the transaction is " + transactionApplicability
+                + " (source jurisdiction " + normalize(snapshot.getSourceTaxJurisdictionCode())
+                + ", destination jurisdiction " + normalize(snapshot.getDestinationTaxJurisdictionCode())
+                + ") but active components are configured only for " + activeApplicabilities + ".";
     }
 
     private boolean isApplicable(

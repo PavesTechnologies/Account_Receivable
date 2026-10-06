@@ -160,6 +160,23 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 )
                         );
 
+        /*
+         * Checked before the lifecycle state: once an invoice exists the
+         * snapshot is INVOICED, so a repeated request (double-click, retry,
+         * refresh) must be told an invoice already exists rather than that
+         * tax calculation is incomplete.
+         */
+        if (invoiceRepository
+                .existsByBillingSnapshotId(
+                        billingSnapshotId
+                )) {
+
+            throw new GlobalExceptionHandler
+                    .DuplicateResourceException(
+                    "An invoice has already been generated for this billing snapshot."
+            );
+        }
+
         if (snapshot.getStatus()
                 != BillingSnapshotStatus.TAX_COMPLETED) {
 
@@ -181,14 +198,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 )
                         );
 
-        if (invoiceRepository
-                .existsByBillingSnapshotId(
-                        billingSnapshotId
-                )) {
+        if (taxCalculation.getStatus()
+                != TaxCalculationStatus.CALCULATED) {
 
             throw new GlobalExceptionHandler
-                    .DuplicateResourceException(
-                    "An invoice has already been generated for this billing snapshot."
+                    .ValidationException(
+                    "Invoice cannot be generated because the tax calculation has not completed successfully."
             );
         }
 
@@ -268,6 +283,13 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .sellerEmail(companyProfile.getEmail())
                         .sellerPhone(companyProfile.getPhone())
                         .sellerLogoReference(companyProfile.getLogoReference())
+                        .taxRegionCode(snapshot.getTaxRegionCode())
+                        .sourceTaxJurisdictionCode(
+                                snapshot.getSourceTaxJurisdictionCode()
+                        )
+                        .destinationTaxJurisdictionCode(
+                                snapshot.getDestinationTaxJurisdictionCode()
+                        )
                         .subtotal(
                                 taxCalculation.getTaxableAmount()
                         )
@@ -361,6 +383,13 @@ public class InvoiceServiceImpl implements InvoiceService {
         try {
 
             saved = invoiceRepository.save(invoice);
+
+            // Flushed here so the unique constraint on billing_snapshot_id is
+            // evaluated inside this try block. Without it the insert is deferred
+            // to commit, where a concurrent duplicate surfaces as an untranslated
+            // DataIntegrityViolationException (HTTP 500) instead of the
+            // duplicate-invoice error below.
+            invoiceRepository.flush();
 
         } catch (DataIntegrityViolationException ex) {
 
@@ -474,6 +503,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .sellerEmail(companyProfile.getEmail())
                         .sellerPhone(companyProfile.getPhone())
                         .sellerLogoReference(companyProfile.getLogoReference())
+                        // The schedule tax path does not persist the jurisdictions
+                        // it compared, so only the Tax Region is frozen here.
+                        .taxRegionCode(configuration.getTaxRegionCode())
                         .subtotal(taxCalculation.getTaxableAmount())
                         .totalTaxAmount(taxCalculation.getTotalTaxAmount())
                         .grandTotal(taxCalculation.getGrandTotal())
@@ -802,6 +834,13 @@ public class InvoiceServiceImpl implements InvoiceService {
                 snapshot.getBillingPeriodEnd()
         );
         invoice.setCurrencyCode(snapshot.getCurrencyCode());
+        invoice.setTaxRegionCode(snapshot.getTaxRegionCode());
+        invoice.setSourceTaxJurisdictionCode(
+                snapshot.getSourceTaxJurisdictionCode()
+        );
+        invoice.setDestinationTaxJurisdictionCode(
+                snapshot.getDestinationTaxJurisdictionCode()
+        );
         invoice.setPaymentTermCode(
                 snapshot.getPaymentTermCode()
         );
@@ -1151,6 +1190,24 @@ public class InvoiceServiceImpl implements InvoiceService {
                     inconsistencyMessage
             );
         }
+
+        // The invoice copies both the total and the components, so they
+        // must agree - the breakdown has to explain the tax charged.
+        BigDecimal componentTaxTotal =
+                taxCalculation.getComponents()
+                        .stream()
+                        .map(TaxCalculationComponent::getTaxAmount)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (componentTaxTotal.compareTo(
+                taxCalculation.getTotalTaxAmount()
+        ) != 0) {
+
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    inconsistencyMessage
+            );
+        }
     }
 
     private String generateInvoiceNumber() {
@@ -1312,6 +1369,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .sellerEmail(invoice.getSellerEmail())
                 .sellerPhone(invoice.getSellerPhone())
                 .sellerLogoReference(invoice.getSellerLogoReference())
+                .taxRegionCode(invoice.getTaxRegionCode())
+                .sourceTaxJurisdictionCode(invoice.getSourceTaxJurisdictionCode())
+                .destinationTaxJurisdictionCode(invoice.getDestinationTaxJurisdictionCode())
                 .invoiceDate(invoice.getInvoiceDate())
                 .dueDate(invoice.getDueDate())
                 .items(items)

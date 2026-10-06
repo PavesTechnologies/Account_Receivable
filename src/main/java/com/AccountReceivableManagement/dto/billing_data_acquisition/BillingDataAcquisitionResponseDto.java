@@ -87,4 +87,10 @@ public class BillingDataAcquisitionResponseDto {
      */
     @JsonInclude(JsonInclude.Include.ALWAYS)
     private String lastInvoice;
+
+    /**
+     * Billing Snapshot of the latest acquisition, or of the latest snapshot
+     * when no acquisition record exists for it. Null when never acquired.
+     */
+    private UUID snapshotId;
 }

@@ -149,6 +149,13 @@ public class BillingSnapshotResponseDto {
     private BillingSnapshotStatus status;
 
     /**
+     * True when {@code POST /billing-snapshots} returned a snapshot that was
+     * already persisted for the project and billing period instead of
+     * creating one; false when it was just created. Omitted on retrieval.
+     */
+    private Boolean existingSnapshot;
+
+    /**
      * Timesheet line items acquired from TMS — returned so the UI can
      * immediately render the Labor Charges Preview table without a
      * second round-trip. Each entry mirrors one TMS timesheet row with

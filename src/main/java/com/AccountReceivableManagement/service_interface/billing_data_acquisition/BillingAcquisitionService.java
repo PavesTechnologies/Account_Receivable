@@ -18,4 +18,21 @@ public interface BillingAcquisitionService {
      * Overload accepting request DTO.
      */
     AcquireDataResponseDto createManualAcquisition(BillingAcquisitionRequestDto requestDto);
+
+    /**
+     * Creates or updates a manual billing acquisition record, setting the given
+     * snapshot reference and status (READY when {@code status} is blank).
+     */
+    AcquireDataResponseDto createManualAcquisition(UUID billingConfigurationId, LocalDate startDate,
+            LocalDate endDate, UUID snapshotId, String status);
+
+    /**
+     * Ensures an acquisition record exists for an already-persisted Billing
+     * Snapshot. An existing record for the configuration and period keeps its
+     * status and is only re-pointed at {@code snapshotId}; a missing one is
+     * created as READY. Used to reconcile snapshots whose acquisition record
+     * was never written.
+     */
+    AcquireDataResponseDto recordAcquisitionForSnapshot(UUID billingConfigurationId, LocalDate startDate,
+            LocalDate endDate, UUID snapshotId);
 }

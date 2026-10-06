@@ -21,6 +21,13 @@ public interface BillingSnapshotService {
     ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
 
     /**
+     * As above, but a snapshot that belongs to a different Billing Configuration
+     * than {@code billingConfigurationId} is reported as not found. A null
+     * {@code billingConfigurationId} behaves exactly like the three-argument form.
+     */
+    ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd, UUID billingConfigurationId);
+
+    /**
      * Phase 2B financial correction - rebuilds an already-persisted
      * {@code BillingSnapshot} in place from freshly re-acquired authoritative
      * source data (TMS, for Time &amp; Material), rather than creating a new

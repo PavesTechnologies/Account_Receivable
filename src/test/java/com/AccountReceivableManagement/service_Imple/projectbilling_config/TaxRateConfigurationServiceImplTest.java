@@ -427,4 +427,135 @@ class TaxRateConfigurationServiceImplTest {
         assertThat(taxRate.scale()).isEqualTo(4);
         assertThat(taxRate).isEqualByComparingTo(new BigDecimal("9.1234"));
     }
+
+    // ---------------------------------------------------------------
+    // Duplicate / overlap, update and jurisdiction-applicability contract
+    // ---------------------------------------------------------------
+
+    // Open-ended create is compared against stored rows up to 9999-12-31, and the
+    // tax regime plays no part in the duplicate check - only region + dates do.
+    @Test
+    void create_openEndedPeriod_overlapCheckUsesRegionAndOpenEndedDate() {
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+        when(configurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
+                .thenReturn(List.of(existingConfiguration(UUID.randomUUID())));
+
+        TaxConfigurationRequestDto request = validRequest();
+        request.setTaxRegime("Sales Tax");
+        request.setEffectiveFrom(LocalDate.of(2026, 10, 1));
+
+        assertThatThrownBy(() -> taxConfigurationService.create(request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("An active tax configuration already exists for this tax region and effective period.");
+
+        verify(configurationRepository).findOverlappingConfigurations(
+                activeTaxRegion.getTaxRegionId(),
+                LocalDate.of(2026, 10, 1),
+                LocalDate.of(9999, 12, 31),
+                null);
+        verify(configurationRepository, never()).save(any());
+    }
+
+    // The existing configuration is updated in place: same id, own id excluded from
+    // the overlap check, components replaced (not merged), and a DIFFERENT_JURISDICTION
+    // component of a second tax type can sit beside the SAME_JURISDICTION one.
+    @Test
+    void update_addsDifferentJurisdictionComponent_keepsIdAndReplacesComponents() {
+        UUID configurationId = UUID.randomUUID();
+        TaxConfiguration existing = existingConfiguration(configurationId);
+        existing.getComponents().get(0).setApplicabilityType(TaxApplicabilityType.SAME_JURISDICTION);
+
+        TaxTypeMaster igst = TaxTypeMaster.builder()
+                .taxTypeId(UUID.randomUUID())
+                .taxTypeCode("IGST")
+                .taxTypeName("Integrated GST")
+                .isActive(true)
+                .build();
+
+        when(configurationRepository.findById(configurationId)).thenReturn(Optional.of(existing));
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+        when(configurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
+                .thenReturn(List.of());
+        when(taxTypeMasterRepository.findById(activeTaxType.getTaxTypeId()))
+                .thenReturn(Optional.of(activeTaxType));
+        when(taxTypeMasterRepository.findById(igst.getTaxTypeId())).thenReturn(Optional.of(igst));
+        when(configurationRepository.save(any(TaxConfiguration.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        TaxConfigurationRequestDto request = validRequest();
+        request.setComponents(new ArrayList<>(List.of(
+                TaxConfigurationComponentRequestDto.builder()
+                        .taxTypeId(activeTaxType.getTaxTypeId())
+                        .taxRate(new BigDecimal("9"))
+                        .applicabilityType(TaxApplicabilityType.SAME_JURISDICTION)
+                        .build(),
+                TaxConfigurationComponentRequestDto.builder()
+                        .taxTypeId(igst.getTaxTypeId())
+                        .taxRate(new BigDecimal("18"))
+                        .applicabilityType(TaxApplicabilityType.DIFFERENT_JURISDICTION)
+                        .build())));
+
+        TaxConfigurationResponseDto response = taxConfigurationService.update(configurationId, request);
+
+        assertThat(response.getTaxConfigurationId()).isEqualTo(configurationId);
+        assertThat(response.getComponents())
+                .extracting(c -> c.getTaxTypeCode() + ":" + c.getApplicabilityType())
+                .containsExactlyInAnyOrder("GST:SAME_JURISDICTION", "IGST:DIFFERENT_JURISDICTION");
+        verify(configurationRepository).findOverlappingConfigurations(
+                activeTaxRegion.getTaxRegionId(), LocalDate.of(2026, 4, 1),
+                LocalDate.of(9999, 12, 31), configurationId);
+    }
+
+    // Updating cannot make a configuration overlap a different active one.
+    @Test
+    void update_overlappingAnotherConfiguration_throwsValidationException() {
+        UUID configurationId = UUID.randomUUID();
+        when(configurationRepository.findById(configurationId))
+                .thenReturn(Optional.of(existingConfiguration(configurationId)));
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+        when(configurationRepository.findOverlappingConfigurations(any(), any(), any(), any()))
+                .thenReturn(List.of(existingConfiguration(UUID.randomUUID())));
+
+        assertThatThrownBy(() -> taxConfigurationService.update(configurationId, validRequest()))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("An active tax configuration already exists for this tax region and effective period.");
+
+        verify(configurationRepository, never()).save(any());
+    }
+
+    @Test
+    void update_missingConfiguration_throwsResourceNotFoundException() {
+        UUID configurationId = UUID.randomUUID();
+        when(configurationRepository.findById(configurationId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> taxConfigurationService.update(configurationId, validRequest()))
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class);
+    }
+
+    // The same tax type cannot be listed twice, even for different applicability types.
+    @Test
+    void create_sameTaxTypeForTwoApplicabilities_isRejected() {
+        when(taxRegionMasterRepository.findById(activeTaxRegion.getTaxRegionId()))
+                .thenReturn(Optional.of(activeTaxRegion));
+
+        TaxConfigurationRequestDto request = validRequest();
+        request.setComponents(new ArrayList<>(List.of(
+                TaxConfigurationComponentRequestDto.builder()
+                        .taxTypeId(activeTaxType.getTaxTypeId())
+                        .taxRate(new BigDecimal("9"))
+                        .applicabilityType(TaxApplicabilityType.SAME_JURISDICTION)
+                        .build(),
+                TaxConfigurationComponentRequestDto.builder()
+                        .taxTypeId(activeTaxType.getTaxTypeId())
+                        .taxRate(new BigDecimal("18"))
+                        .applicabilityType(TaxApplicabilityType.DIFFERENT_JURISDICTION)
+                        .build())));
+
+        assertThatThrownBy(() -> taxConfigurationService.create(request))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("A tax type cannot be configured more than once in the same configuration.");
+    }
 }
