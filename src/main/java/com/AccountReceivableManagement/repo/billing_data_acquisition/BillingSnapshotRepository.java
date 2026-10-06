@@ -31,4 +31,10 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
     Optional<BillingSnapshot> findBySnapshotNumber(String snapshotNumber);
 
     boolean existsByBillingConfigurationId(UUID billingConfigurationId);
+
+    /**
+     * Latest snapshot for a Billing Configuration - the listing's fallback when
+     * no BillingAcquisition record was ever written for an existing snapshot.
+     */
+    Optional<BillingSnapshot> findFirstByBillingConfigurationIdOrderByCreatedDateDesc(UUID billingConfigurationId);
 }

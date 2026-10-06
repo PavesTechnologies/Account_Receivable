@@ -206,6 +206,22 @@ public class Invoice {
     @Column(name = "seller_logo_reference", length = 500)
     private String sellerLogoReference;
 
+    /**
+     * Tax context the invoice's tax was calculated under, frozen at
+     * generation: the Tax Region code, and the source (supplier) and
+     * destination (customer) tax jurisdiction codes whose comparison chose
+     * SAME_JURISDICTION or DIFFERENT_JURISDICTION components. Null when the
+     * source data did not record them - never derived or defaulted.
+     */
+    @Column(name = "tax_region_code", length = 100)
+    private String taxRegionCode;
+
+    @Column(name = "source_tax_jurisdiction_code", length = 50)
+    private String sourceTaxJurisdictionCode;
+
+    @Column(name = "destination_tax_jurisdiction_code", length = 50)
+    private String destinationTaxJurisdictionCode;
+
     @Column(
             name = "subtotal",
             nullable = false,

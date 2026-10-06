@@ -712,10 +712,8 @@ class InvoiceServiceImplTest {
     @Test
     void generateInvoice_invoiceAlreadyExists_throwsDuplicateResourceException() {
         BillingSnapshot snapshot = taxCompletedSnapshot();
-        TaxCalculation taxCalculation = completedTaxCalculation();
 
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
-        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
         when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(true);
 
         assertThatThrownBy(() -> invoiceService.generateInvoice(snapshotId))
@@ -748,6 +746,53 @@ class InvoiceServiceImplTest {
         verify(billingSnapshotRepository, never()).save(any());
         assertThat(snapshot.getStatus()).isNotEqualTo(BillingSnapshotStatus.INVOICED);
     }
+
+    // A repeated request (double-click / retry / refresh) after a successful generation finds the
+    // snapshot already INVOICED. It must be answered with the duplicate-invoice error, not with the
+    // misleading "has not completed tax calculation" validation error.
+    @Test
+    void generateInvoice_retryAfterSuccess_snapshotAlreadyInvoiced_throwsDuplicateNotTaxIncomplete() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.INVOICED);
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(true);
+
+        assertThatThrownBy(() -> invoiceService.generateInvoice(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.DuplicateResourceException.class)
+                .hasMessage("An invoice has already been generated for this billing snapshot.");
+
+        verify(invoiceRepository, never()).save(any());
+        verify(billingSnapshotRepository, never()).save(any());
+        verifyNoInteractions(taxCalculationRepository, companyProfileService);
+    }
+
+    // The unique constraint is evaluated at flush, inside the service call, so the losing request of
+    // two concurrent generations gets the duplicate-invoice error rather than a commit-time 500.
+    @Test
+    void generateInvoice_concurrentDuplicateAtFlush_throwsDuplicateResourceExceptionAndKeepsSnapshotUninvoiced() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        TaxCalculation taxCalculation = completedTaxCalculation();
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        doThrow(new DataIntegrityViolationException("Duplicate entry for key 'uk_invoice_billing_snapshot'"))
+                .when(invoiceRepository).flush();
+
+        assertThatThrownBy(() -> invoiceService.generateInvoice(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.DuplicateResourceException.class)
+                .hasMessage("An invoice has already been generated for this billing snapshot.");
+
+        verify(billingSnapshotRepository, never()).save(any());
+        assertThat(snapshot.getStatus()).isNotEqualTo(BillingSnapshotStatus.INVOICED);
+    }
+
+    // Missing active company profile fails with the existing not-found error before anything is persisted.
+    // (Covered in detail by generateInvoice_noActiveCompanyProfile_*.)
 
     // CASE 16 — Invoice generation rolls back on unexpected persistence failure.
     @Test
@@ -2698,5 +2743,215 @@ class InvoiceServiceImplTest {
                         InvoiceApprovalAction.CORRECTED,
                         InvoiceApprovalAction.SUBMITTED
                 );
+    }
+
+    // =========================================================
+    // Tax breakdown and tax context on the persisted invoice
+    // =========================================================
+
+    private BillingSnapshot taxCompletedSnapshotWithTaxContext() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setTaxRegionCode("IN");
+        snapshot.setSourceTaxJurisdictionCode("IN");
+        snapshot.setDestinationTaxJurisdictionCode("IN");
+        return snapshot;
+    }
+
+    private void stubSnapshotInvoiceGeneration(BillingSnapshot snapshot, TaxCalculation taxCalculation) {
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+    }
+
+    // Tests 1-3: components persisted, associated with the invoice, and summing to its tax total.
+    @Test
+    void generateInvoice_persistsTaxComponentsOnInvoiceWithTotalEqualToTheirSum() {
+        BillingSnapshot snapshot = taxCompletedSnapshotWithTaxContext();
+        TaxCalculation taxCalculation = completedTaxCalculation();
+        stubSnapshotInvoiceGeneration(snapshot, taxCalculation);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        ArgumentCaptor<Invoice> savedCaptor = ArgumentCaptor.forClass(Invoice.class);
+        when(invoiceRepository.save(savedCaptor.capture())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoice(snapshotId);
+
+        Invoice persisted = savedCaptor.getValue();
+        assertThat(persisted.getTaxComponents()).hasSize(2);
+        assertThat(persisted.getTaxComponents()).allSatisfy(component ->
+                assertThat(component.getInvoice()).isSameAs(persisted));
+        assertThat(persisted.getTaxComponents())
+                .extracting(InvoiceTaxComponent::getTaxTypeCode, InvoiceTaxComponent::getAppliedRate,
+                        InvoiceTaxComponent::getApplicabilityType)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("CGST", new BigDecimal("9.0000"), TaxApplicabilityType.ALL),
+                        org.assertj.core.groups.Tuple.tuple("SGST", new BigDecimal("9.0000"), TaxApplicabilityType.ALL));
+
+        BigDecimal componentTotal = persisted.getTaxComponents().stream()
+                .map(InvoiceTaxComponent::getTaxAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(persisted.getTotalTaxAmount()).isEqualByComparingTo(componentTotal);
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+
+        // Tax context frozen from the snapshot the tax was calculated for.
+        assertThat(persisted.getTaxRegionCode()).isEqualTo("IN");
+        assertThat(response.getTaxRegionCode()).isEqualTo("IN");
+        assertThat(response.getSourceTaxJurisdictionCode()).isEqualTo("IN");
+        assertThat(response.getDestinationTaxJurisdictionCode()).isEqualTo("IN");
+    }
+
+    // Test 6: jurisdictions the snapshot never recorded stay null - never derived.
+    @Test
+    void generateInvoice_snapshotWithoutJurisdictions_leavesTaxContextNull() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        stubSnapshotInvoiceGeneration(snapshot, completedTaxCalculation());
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoice(snapshotId);
+
+        assertThat(response.getTaxRegionCode()).isNull();
+        assertThat(response.getSourceTaxJurisdictionCode()).isNull();
+        assertThat(response.getDestinationTaxJurisdictionCode()).isNull();
+    }
+
+    // Test 5: a tax calculation that did not complete successfully is rejected explicitly.
+    @Test
+    void generateInvoice_taxCalculationNotCalculated_throwsValidationExceptionAndPersistsNothing() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        TaxCalculation taxCalculation = completedTaxCalculation();
+        taxCalculation.setStatus(TaxCalculationStatus.FAILED);
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+
+        assertThatThrownBy(() -> invoiceService.generateInvoice(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Invoice cannot be generated because the tax calculation has not completed successfully.");
+
+        verify(invoiceRepository, never()).save(any());
+        assertThat(snapshot.getStatus()).isEqualTo(BillingSnapshotStatus.TAX_COMPLETED);
+    }
+
+    // Test 3: the breakdown must explain the tax charged.
+    @Test
+    void generateInvoice_componentsDoNotSumToTotalTax_throwsValidationExceptionAndPersistsNothing() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        TaxCalculation taxCalculation = completedTaxCalculation();
+        // Totals still self-consistent (5500 + 990 = 6490), but components sum to 895.00.
+        taxCalculation.getComponents().get(1).setTaxAmount(new BigDecimal("400.00"));
+        stubSnapshotInvoiceGeneration(snapshot, taxCalculation);
+
+        assertThatThrownBy(() -> invoiceService.generateInvoice(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Tax calculation totals are inconsistent for this billing snapshot. Invoice cannot be generated.");
+
+        verify(invoiceRepository, never()).save(any());
+    }
+
+    // Test 4: the detail API returns the persisted breakdown and tax context -
+    // no dependency on the (possibly since-changed) tax calculation.
+    @Test
+    void getInvoiceByBillingSnapshotId_returnsPersistedTaxBreakdownAndContext() {
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(UUID.randomUUID());
+        invoice.setTaxRegionCode("IN");
+        invoice.setSourceTaxJurisdictionCode("IN");
+        invoice.setDestinationTaxJurisdictionCode("US");
+        UUID componentId = UUID.randomUUID();
+        UUID taxTypeId = UUID.randomUUID();
+        invoice.getTaxComponents().add(InvoiceTaxComponent.builder()
+                .invoiceTaxComponentId(componentId)
+                .invoice(invoice)
+                .taxTypeId(taxTypeId)
+                .taxTypeCode("IGST")
+                .taxTypeName("Integrated GST")
+                .appliedRate(new BigDecimal("18.0000"))
+                .taxAmount(new BigDecimal("990.00"))
+                .applicabilityType(TaxApplicabilityType.DIFFERENT_JURISDICTION)
+                .build());
+
+        when(billingSnapshotRepository.existsById(snapshotId)).thenReturn(true);
+        when(invoiceRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(invoice));
+
+        InvoiceResponseDto response = invoiceService.getInvoiceByBillingSnapshotId(snapshotId);
+
+        assertThat(response.getTaxComponents()).singleElement().satisfies(component -> {
+            assertThat(component.getInvoiceTaxComponentId()).isEqualTo(componentId);
+            assertThat(component.getTaxTypeId()).isEqualTo(taxTypeId);
+            assertThat(component.getTaxTypeCode()).isEqualTo("IGST");
+            assertThat(component.getTaxTypeName()).isEqualTo("Integrated GST");
+            assertThat(component.getAppliedRate()).isEqualByComparingTo("18.0000");
+            assertThat(component.getTaxAmount()).isEqualByComparingTo("990.00");
+            assertThat(component.getApplicabilityType()).isEqualTo(TaxApplicabilityType.DIFFERENT_JURISDICTION);
+        });
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+        assertThat(response.getTaxRegionCode()).isEqualTo("IN");
+        assertThat(response.getSourceTaxJurisdictionCode()).isEqualTo("IN");
+        assertThat(response.getDestinationTaxJurisdictionCode()).isEqualTo("US");
+        verify(taxCalculationRepository, never()).findByBillingSnapshotId(any());
+    }
+
+    // Test 7: repeated refresh replaces tax components; it never accumulates duplicates.
+    @Test
+    void refreshAfterCorrection_repeated_keepsExactlyTheCalculationsComponents() {
+        UUID invoiceId = UUID.randomUUID();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.setInvoiceId(invoiceId);
+        invoice.setStatus(InvoiceStatus.REJECTED);
+
+        BillingSnapshot snapshot = taxCompletedSnapshotWithTaxContext();
+        TaxCalculation taxCalculation = completedTaxCalculation();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        invoiceService.refreshAfterCorrection(invoiceId);
+        InvoiceResponseDto response = invoiceService.refreshAfterCorrection(invoiceId);
+
+        assertThat(invoice.getTaxComponents()).hasSize(2);
+        assertThat(response.getTaxComponents())
+                .extracting(InvoiceTaxComponentResponseDto::getTaxTypeCode)
+                .containsExactlyInAnyOrder("CGST", "SGST");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+        assertThat(response.getTaxRegionCode()).isEqualTo("IN");
+    }
+
+    // Schedule path: only the Tax Region is recorded by its tax calculation.
+    @Test
+    void generateInvoiceForSchedule_freezesTaxRegionAndLeavesUnrecordedJurisdictionsNull() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(schedule));
+        when(taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingScheduleId(schedule.getBillingScheduleId())).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(BillingConfigurationResponseDto.builder()
+                        .clientId(clientId)
+                        .projectId(23L)
+                        .currencyCode("USD")
+                        .taxRegionCode("IN")
+                        .build());
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingScheduleRepository.save(any(BillingSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId());
+
+        assertThat(response.getTaxComponents()).hasSize(2);
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("450.00");
+        assertThat(response.getTaxRegionCode()).isEqualTo("IN");
+        assertThat(response.getSourceTaxJurisdictionCode()).isNull();
+        assertThat(response.getDestinationTaxJurisdictionCode()).isNull();
     }
 }

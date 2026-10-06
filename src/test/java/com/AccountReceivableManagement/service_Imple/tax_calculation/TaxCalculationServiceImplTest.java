@@ -1,8 +1,12 @@
 package com.AccountReceivableManagement.service_Imple.tax_calculation;
 
-import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.dto.tax_calculation.TaxCalculationResponseDto;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
+import com.AccountReceivableManagement.entity.client_entity.Client;
+import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.CurrencyMaster;
+import com.AccountReceivableManagement.entity.projectbilling_config.TaxRegionMaster;
 import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfigurationComponent;
 import com.AccountReceivableManagement.entity.projectbilling_config.TaxTypeMaster;
@@ -13,8 +17,8 @@ import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculati
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
-import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -51,7 +55,7 @@ class TaxCalculationServiceImplTest {
     private TaxConfigurationRepository taxConfigurationRepository;
 
     @Mock
-    private BillingConfigurationService billingConfigurationService;
+    private BillingConfigurationRepository billingConfigurationRepository;
 
     @InjectMocks
     private TaxCalculationServiceImpl taxCalculationService;
@@ -117,13 +121,16 @@ class TaxCalculationServiceImplTest {
                 .build();
     }
 
-    private BillingConfigurationResponseDto snapshotConfiguration() {
-        return BillingConfigurationResponseDto.builder()
-                .projectName("Website Redesign")
-                .clientName("Acme Corp")
-                .currencyCode("USD")
-                .taxRegionName("Domestic (GST 18%)")
-                .taxRegionCode("DOM")
+    private BillingConfiguration snapshotBillingConfiguration() {
+        return BillingConfiguration.builder()
+                .billingConfigurationId(UUID.randomUUID())
+                .project(ProjectMasterReference.builder().projectName("Website Redesign").build())
+                .client(Client.builder().clientName("Acme Corp").build())
+                .currency(CurrencyMaster.builder().currencyCode("USD").build())
+                .taxRegion(TaxRegionMaster.builder()
+                        .taxRegionName("Domestic (GST 18%)")
+                        .taxRegionCode("DOM")
+                        .build())
                 .build();
     }
 
@@ -176,8 +183,8 @@ class TaxCalculationServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
@@ -226,8 +233,8 @@ class TaxCalculationServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
@@ -357,8 +364,8 @@ class TaxCalculationServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         taxCalculationService.calculateTax(snapshotId);
 
@@ -386,8 +393,8 @@ class TaxCalculationServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
@@ -418,8 +425,8 @@ class TaxCalculationServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
@@ -475,8 +482,8 @@ class TaxCalculationServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
@@ -485,10 +492,11 @@ class TaxCalculationServiceImplTest {
         assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("15120.00");
     }
 
-    // CASE 13 — A component whose applicability doesn't match the transaction is excluded,
-    // resulting in legitimately zero tax when nothing else applies.
+    // CASE 13 — No component applies to the transaction's jurisdictions: the
+    // configuration is incomplete, so calculation fails naming the gap instead
+    // of completing the snapshot with a fabricated zero tax.
     @Test
-    void calculateTax_noApplicableComponents_resultsInZeroTax() {
+    void calculateTax_noApplicableComponents_failsWithMissingPrerequisiteAndPersistsNothing() {
         BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"), "IN-KA", "IN-KA");
 
         TaxConfiguration configuration = configurationOf(
@@ -499,18 +507,89 @@ class TaxCalculationServiceImplTest {
         when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
         when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
                 .thenReturn(List.of(configuration));
+
+        assertThatThrownBy(() -> taxCalculationService.calculateTax(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("No active tax component in the selected Tax Configuration applies to this "
+                        + "billing snapshot: the transaction is SAME_JURISDICTION (source jurisdiction IN-KA, "
+                        + "destination jurisdiction IN-KA) but active components are configured only for "
+                        + "[DIFFERENT_JURISDICTION].");
+
+        verify(taxCalculationRepository, never()).save(any());
+        verify(billingSnapshotRepository, never()).save(any());
+        assertThat(snapshot.getStatus()).isNotEqualTo(BillingSnapshotStatus.TAX_COMPLETED);
+    }
+
+    // CASE 13b — Every configured component is inactive.
+    @Test
+    void calculateTax_onlyInactiveComponents_failsWithMissingPrerequisite() {
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("900.00"), "IN", "US");
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(igstType, "18.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, false)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+
+        assertThatThrownBy(() -> taxCalculationService.calculateTax(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("No active tax components are configured for the selected Tax Configuration.");
+        verify(taxCalculationRepository, never()).save(any());
+    }
+
+    // CASE 13c — Jurisdictions missing on the snapshot and only jurisdiction-specific components configured.
+    @Test
+    void calculateTax_missingJurisdictions_failsWithoutFabricatingThem() {
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("900.00"), null, null);
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(igstType, "18.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, true)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+
+        assertThatThrownBy(() -> taxCalculationService.calculateTax(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Unable to determine applicable tax components because source and destination "
+                        + "jurisdictions are not available for this billing snapshot.");
+        verify(taxCalculationRepository, never()).save(any());
+    }
+
+    // CASE 13d — A configured 0% rate is a real, applicable component: zero tax, one component.
+    @Test
+    void calculateTax_zeroRatedApplicableComponent_isPersistedAsComponent() {
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("900.00"), "IN", "US");
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(igstType, "0.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, true)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
         when(taxCalculationRepository.save(any(TaxCalculation.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
-        assertThat(response.getComponents()).isEmpty();
+        assertThat(response.getComponents()).singleElement().satisfies(component -> {
+            assertThat(component.getTaxTypeCode()).isEqualTo("IGST");
+            assertThat(component.getTaxAmount()).isEqualByComparingTo("0");
+        });
         assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("0");
-        assertThat(response.getGrandTotal()).isEqualByComparingTo("168000.00");
+        assertThat(snapshot.getStatus()).isEqualTo(BillingSnapshotStatus.TAX_COMPLETED);
     }
 
     // CASE 14 — Same-jurisdiction transactions apply CGST/SGST components and skip IGST.
@@ -532,8 +611,8 @@ class TaxCalculationServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
@@ -562,8 +641,8 @@ class TaxCalculationServiceImplTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
 
@@ -593,8 +672,8 @@ class TaxCalculationServiceImplTest {
 
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
-        when(billingConfigurationService.getBillingConfiguration(any()))
-                .thenReturn(snapshotConfiguration());
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
 
         TaxCalculationResponseDto response = taxCalculationService.getTaxCalculationBySnapshotId(snapshotId);
 

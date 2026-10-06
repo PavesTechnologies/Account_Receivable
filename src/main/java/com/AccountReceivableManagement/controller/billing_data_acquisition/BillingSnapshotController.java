@@ -68,10 +68,12 @@ public class BillingSnapshotController {
         public ResponseEntity<ApiResponse<BillingSnapshotResponseDto>> getByProjectAndPeriod(
                         @RequestParam Long projectId,
                         @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate billingPeriodStart,
-                        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate billingPeriodEnd) {
+                        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate billingPeriodEnd,
+                        @RequestParam(required = false) java.util.UUID billingConfigurationId) {
 
                 ApiResponse<BillingSnapshotResponseDto> response = billingSnapshotService
-                                .getByProjectAndPeriod(projectId, billingPeriodStart, billingPeriodEnd);
+                                .getByProjectAndPeriod(projectId, billingPeriodStart, billingPeriodEnd,
+                                                billingConfigurationId);
 
                 return ResponseEntity.ok(response);
         }
