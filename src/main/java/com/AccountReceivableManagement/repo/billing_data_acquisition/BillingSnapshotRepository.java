@@ -37,4 +37,12 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
      * no BillingAcquisition record was ever written for an existing snapshot.
      */
     Optional<BillingSnapshot> findFirstByBillingConfigurationIdOrderByCreatedDateDesc(UUID billingConfigurationId);
+
+    /**
+     * Finds a billing snapshot for a specific billing configuration and billing period.
+     * Used for Time & Material invoice generation to locate the snapshot associated
+     * with a billing schedule occurrence.
+     */
+    Optional<BillingSnapshot> findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+            UUID billingConfigurationId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
 }

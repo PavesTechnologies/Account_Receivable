@@ -57,4 +57,6 @@ public class BillingOccurrenceResponseDto {
     private String currencyCode;
     private String taxRegionName;
     private String taxRegionCode;
+    private LocalDate projectStartDate;
+    private LocalDate projectEndDate;
 }

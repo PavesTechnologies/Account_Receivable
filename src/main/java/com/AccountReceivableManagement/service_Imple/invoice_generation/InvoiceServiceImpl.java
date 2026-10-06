@@ -466,6 +466,40 @@ public class InvoiceServiceImpl implements InvoiceService {
                         schedule.getBillingConfiguration().getBillingConfigurationId()
                 );
 
+        // Determine billing type from BillingConfiguration
+        String billingTypeName = configuration.getBillingTypeName();
+        boolean isTimeMaterial = billingTypeName != null && 
+                (billingTypeName.equalsIgnoreCase("Time & Material") || 
+                 billingTypeName.equalsIgnoreCase("Time and Material") ||
+                 billingTypeName.equalsIgnoreCase("TIME_MATERIAL"));
+
+        // For Time & Material, fetch the Billing Snapshot
+        UUID billingSnapshotId = null;
+        String billingSnapshotNumber = null;
+        
+        if (isTimeMaterial) {
+            // T&M requires a Billing Snapshot
+            BillingSnapshot snapshot = billingSnapshotRepository
+                    .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                            schedule.getBillingConfiguration().getBillingConfigurationId(),
+                            schedule.getPeriodStartDate(),
+                            schedule.getPeriodEndDate()
+                    )
+                    .orElseThrow(() ->
+                            new GlobalExceptionHandler.ResourceNotFoundException(
+                                    "Billing Snapshot not found for Time & Material billing occurrence. Invoice cannot be generated."
+                            ));
+            
+            if (snapshot.getStatus() != BillingSnapshotStatus.TAX_COMPLETED) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Invoice cannot be generated because the billing snapshot has not completed tax calculation."
+                );
+            }
+            
+            billingSnapshotId = snapshot.getId();
+            billingSnapshotNumber = snapshot.getSnapshotNumber();
+        }
+
         // Fails loudly rather than generating an invoice with a fabricated
         // or missing seller identity - see the equivalent comment in
         // generateInvoice(UUID).
@@ -475,10 +509,11 @@ public class InvoiceServiceImpl implements InvoiceService {
         LocalDate invoiceDate = LocalDate.now();
         BigDecimal billingAmount = schedule.getBillingAmount();
 
-        Invoice invoice =
-                Invoice.builder()
+        Invoice.InvoiceBuilder invoiceBuilder = Invoice.builder()
                         .invoiceNumber(generateInvoiceNumber())
                         .billingScheduleId(schedule.getBillingScheduleId())
+                        .billingSnapshotId(billingSnapshotId)
+                        .billingSnapshotNumber(billingSnapshotNumber)
                         .taxCalculationId(taxCalculation.getTaxCalculationId())
                         .clientId(configuration.getClientId())
                         .clientName(configuration.getClientName())
@@ -512,14 +547,21 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .invoiceDate(invoiceDate)
                         .dueDate(resolveDueDate(configuration.getPaymentTermId(), invoiceDate))
                         .generatedAt(LocalDateTime.now())
-                        .status(InvoiceStatus.GENERATED)
-                        .build();
+                        .status(InvoiceStatus.GENERATED);
+
+        Invoice invoice = invoiceBuilder.build();
+
+        // Determine item type based on billing type
+        BillingItemType itemType = isTimeMaterial ? BillingItemType.TIME_MATERIAL : BillingItemType.FIXED_PRICE;
+        String itemName = isTimeMaterial 
+                ? "Time & Material - Period " + schedule.getPeriodNumber()
+                : configuration.getBillingTypeName() + " - Period " + schedule.getPeriodNumber();
 
         invoice.getItems().add(
                 InvoiceItem.builder()
                         .invoice(invoice)
-                        .itemType(BillingItemType.FIXED_PRICE)
-                        .itemName("Fixed Price - Period " + schedule.getPeriodNumber())
+                        .itemType(itemType)
+                        .itemName(itemName)
                         .sourceReferenceId(schedule.getBillingScheduleId().toString())
                         .quantity(BigDecimal.ONE)
                         .rate(billingAmount)

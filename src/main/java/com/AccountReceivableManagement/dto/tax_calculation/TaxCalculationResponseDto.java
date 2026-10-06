@@ -33,6 +33,10 @@ public class TaxCalculationResponseDto {
 
     private LocalDate billingPeriodEnd;
 
+    private LocalDate projectStartDate;
+
+    private LocalDate projectEndDate;
+
     private String currencyCode;
 
     private BillingSnapshotStatus snapshotStatus;
