@@ -26,10 +26,6 @@ import java.util.UUID;
         name = "invoice",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uk_invoice_billing_snapshot",
-                        columnNames = {"billing_snapshot_id"}
-                ),
-                @UniqueConstraint(
                         name = "uk_invoice_billing_schedule",
                         columnNames = {"billing_schedule_id"}
                 ),
@@ -65,10 +61,7 @@ public class Invoice {
     )
     private String invoiceNumber;
 
-    @Column(
-            name = "billing_snapshot_id",
-            unique = true
-    )
+    @Column(name = "billing_snapshot_id")
     private UUID billingSnapshotId;
 
     @Column(name = "billing_schedule_id", unique = true)

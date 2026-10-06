@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS invoice (
     billing_schedule_id           CHAR(36)     NULL,
     -- Human-readable BillingSnapshot.snapshot_number, frozen at generation
     -- time through the billing_snapshot_id relationship (never fabricated).
+    -- Only populated for Time & Material billing; NULL for Milestone Plan and Recurring.
     billing_snapshot_number       VARCHAR(30)      NULL,
     tax_calculation_id            CHAR(36)     NOT NULL,
     client_id                     CHAR(36)     NOT NULL,
@@ -79,7 +80,6 @@ CREATE TABLE IF NOT EXISTS invoice (
     created_at                     DATETIME     NOT NULL,
     updated_at                     DATETIME         NULL,
     PRIMARY KEY (invoice_id),
-    CONSTRAINT uk_invoice_billing_snapshot UNIQUE (billing_snapshot_id),
     CONSTRAINT uk_invoice_billing_schedule UNIQUE (billing_schedule_id),
     CONSTRAINT uk_invoice_number UNIQUE (invoice_number)
 );
