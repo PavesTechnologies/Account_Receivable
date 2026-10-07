@@ -47,12 +47,21 @@ public class TaxConfiguration {
     )
     private TaxRegionMaster taxRegion;
 
+    /**
+     * Tax regime string field kept for backward compatibility.
+     * New implementations should use taxRegimeMaster relationship.
+     */
     @Column(
             name = "tax_regime",
-            nullable = false,
             length = 50
     )
     private String taxRegime;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(
+            name = "tax_regime_id"
+    )
+    private TaxRegimeMaster taxRegimeMaster;
 
     @Column(
             name = "effective_from",

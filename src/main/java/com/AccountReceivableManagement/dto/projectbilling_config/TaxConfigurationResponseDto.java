@@ -23,6 +23,14 @@ public class TaxConfigurationResponseDto {
 
     private String taxRegionName;
 
+    /**
+     * Tax regime ID for dynamic regime reference.
+     */
+    private UUID taxRegimeId;
+
+    /**
+     * Tax regime string field kept for backward compatibility.
+     */
     private String taxRegime;
 
     private LocalDate effectiveFrom;
