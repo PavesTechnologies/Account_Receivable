@@ -122,6 +122,12 @@ public class Invoice {
     @Column(name = "project_name", length = 255)
     private String projectName;
 
+    @Column(name = "project_start_date")
+    private LocalDate projectStartDate;
+
+    @Column(name = "project_end_date")
+    private LocalDate projectEndDate;
+
     @Column(name = "billing_period_start", nullable = false)
     private LocalDate billingPeriodStart;
 
