@@ -24,6 +24,17 @@ public interface InvoiceService {
 
     InvoiceResponseDto generateInvoiceForSchedule(UUID billingScheduleId);
 
+    /**
+     * Read-only invoice preview for a billing snapshot. If an invoice already
+     * exists it is returned as-is ({@code generated = true}). Otherwise, for a
+     * {@code TAX_COMPLETED} snapshot, returns what generation would produce
+     * - one line per snapshot item, the persisted tax totals, client, project
+     * and payment-term data - with {@code generated = false} and no invoice
+     * number, status, invoice date, due date or generation timestamp.
+     * Persists nothing and changes no status.
+     */
+    InvoiceResponseDto previewInvoice(UUID billingSnapshotId);
+
     InvoiceResponseDto getInvoiceByBillingSnapshotId(UUID billingSnapshotId);
 
     /**
@@ -40,6 +51,15 @@ public interface InvoiceService {
      * Invoice Generation workspace. Purely read-only - generates nothing.
      */
     List<InvoiceSummaryResponseDto> getAllInvoices();
+
+    /**
+     * Invoice Generation workspace: every {@code TAX_COMPLETED} snapshot
+     * that has no invoice yet (workspace status {@code READY_FOR_INVOICE}),
+     * followed by every existing invoice, plus KPI counts. Purely read-only -
+     * generates nothing and changes no persisted status.
+     */
+    com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceResponseDto
+    getInvoiceGenerationWorkspace();
 
     /**
      * {@code GENERATED -> PENDING_APPROVAL}, or {@code REJECTED ->

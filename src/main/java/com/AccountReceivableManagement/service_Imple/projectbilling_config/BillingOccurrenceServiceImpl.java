@@ -54,6 +54,22 @@ public class BillingOccurrenceServiceImpl {
     private final TaxCalculationService taxCalculationService;
     private final BillingOccurrenceTransactionService billingOccurrenceTransactionService;
 
+    /**
+     * Logged immediately before every BillingSchedule insert so a duplicate
+     * (configuration, start, end) key can be traced to the call that produced it.
+     */
+    private void logScheduleInsert(String source, BillingSchedule schedule) {
+        log.info("[BillingScheduleInsert] source=BillingOccurrenceServiceImpl.{} configurationId={} recurringId={} "
+                        + "periodStart={} periodEnd={} scheduleType={} periodNumber={}",
+                source,
+                schedule.getBillingConfiguration() != null
+                        ? schedule.getBillingConfiguration().getBillingConfigurationId() : null,
+                schedule.getRecurringConfiguration() != null
+                        ? schedule.getRecurringConfiguration().getRecurringConfigurationId() : null,
+                schedule.getPeriodStartDate(), schedule.getPeriodEndDate(),
+                schedule.getScheduleType(), schedule.getPeriodNumber());
+    }
+
     private void validateConfigurationApproved(BillingConfiguration configuration) {
         if (configuration.getApprovalStatus() != ApprovalStatus.APPROVED) {
             throw new GlobalExceptionHandler.ValidationException(
@@ -204,6 +220,7 @@ public class BillingOccurrenceServiceImpl {
                 .build();
 
         try {
+            logScheduleInsert("generateOneTimeFixedPriceOccurrence", schedule);
             billingScheduleRepository.save(schedule);
 
             log.info(
@@ -299,6 +316,7 @@ public class BillingOccurrenceServiceImpl {
         }
 
         try {
+            newSchedules.forEach(s -> logScheduleInsert("generateRecurringFixedPriceOccurrences", s));
             billingScheduleRepository.saveAll(newSchedules);
 
             log.info(
@@ -384,6 +402,7 @@ public class BillingOccurrenceServiceImpl {
         );
 
         try {
+            newSchedules.forEach(s -> logScheduleInsert("generateRecurringOccurrences", s));
             billingScheduleRepository.saveAll(newSchedules);
 
             log.info(
@@ -693,6 +712,34 @@ public class BillingOccurrenceServiceImpl {
             handleAmountChangeForRecurring(configuration, recurring, existingSchedules, changeDetector);
         } else {
             handleEffectiveToChangeForRecurring(configuration, recurring, existingSchedules);
+        }
+    }
+
+    /**
+     * Moves this configuration's already-due occurrences (SCHEDULED, billing
+     * date today or earlier) to TAX_PENDING - the same transition the daily
+     * job applies - inside the caller's transaction, so approval and its
+     * occurrences commit or roll back together. Future occurrences stay
+     * SCHEDULED for the job to pick up.
+     */
+    public void promoteDueOccurrencesToTaxPending(UUID billingConfigurationId) {
+        BillingConfiguration configuration = billingConfigurationRepository
+                .findById(billingConfigurationId)
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
+                        "Billing Configuration not found"));
+
+        LocalDate today = LocalDate.now();
+
+        for (BillingSchedule schedule : billingScheduleRepository
+                .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration)) {
+            if (schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED
+                    && schedule.getTaxStatus() == BillingPeriodStatus.PENDING
+                    && schedule.getBillingDate() != null
+                    && !schedule.getBillingDate().isAfter(today)) {
+                schedule.setPeriodStatus(BillingPeriodStatus.TAX_PENDING);
+                schedule.setTaxStatus(BillingPeriodStatus.TAX_PENDING);
+                billingScheduleRepository.save(schedule);
+            }
         }
     }
 
@@ -1268,6 +1315,7 @@ public class BillingOccurrenceServiceImpl {
         }
 
         List<BillingSchedule> newSchedules = new ArrayList<>();
+        java.util.Set<LocalDate> datesInBatch = new java.util.HashSet<>();
 
         for (BillingPaymentEntry entry : entries) {
             // For FULL_PAYMENT: generate single occurrence with billing date
@@ -1280,15 +1328,46 @@ public class BillingOccurrenceServiceImpl {
             }
             billingDate = entry.getBillingDate();
 
-            // Check if occurrence already exists for this entry
-            boolean exists = billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
-                    configuration,
-                    billingDate,
-                    billingDate
-            );
+            // One occurrence per billing date: the unique key is (configuration,
+            // start, end) and every milestone occurrence is a single day. Rows in
+            // this batch are not persisted yet, so the lookup below cannot see
+            // them - two entries on one date would both be inserted and collide.
+            if (!datesInBatch.add(billingDate)) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "More than one payment entry of this Milestone Plan has the billing date "
+                                + billingDate + ". Each billing date can have only one billing occurrence - "
+                                + "change the billing date or combine the payment entries.");
+            }
 
-            if (exists) {
-                log.info("Occurrence already exists for payment entry {} on {}", entry.getSequence(), billingDate);
+            // The unique key (configuration, start, end) also covers inactive
+            // rows, so look at every row, not just active ones.
+            BillingSchedule existing = billingScheduleRepository
+                    .findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                            configuration, billingDate, billingDate)
+                    .orElse(null);
+
+            if (existing != null) {
+                if (Boolean.TRUE.equals(existing.getIsActive())) {
+                    log.info("Occurrence already exists for payment entry {} on {}", entry.getSequence(), billingDate);
+                    continue;
+                }
+
+                if (Boolean.TRUE.equals(existing.getIsInvoiced())) {
+                    throw new GlobalExceptionHandler.ValidationException(
+                            "An invoiced billing occurrence already exists for the payment entry dated "
+                                    + billingDate + " and cannot be regenerated.");
+                }
+
+                // Soft-deleted occurrence for the same date: reactivate it
+                // instead of inserting a row that would violate the unique key.
+                existing.setIsActive(true);
+                existing.setPeriodNumber(entry.getSequence());
+                existing.setBillingAmount(entry.getAmount());
+                existing.setPeriodStatus(BillingPeriodStatus.SCHEDULED);
+                existing.setTaxStatus(BillingPeriodStatus.PENDING);
+                existing.setRemarks("Payment " + entry.getSequence());
+                billingScheduleRepository.save(existing);
+                log.info("Reactivated inactive occurrence for payment entry {} on {}", entry.getSequence(), billingDate);
                 continue;
             }
 
@@ -1313,7 +1392,12 @@ public class BillingOccurrenceServiceImpl {
 
         if (!newSchedules.isEmpty()) {
             try {
+                newSchedules.forEach(s -> logScheduleInsert("generateOccurrencesForMilestonePlan", s));
                 billingScheduleRepository.saveAll(newSchedules);
+                // Flush here so a constraint violation is raised - and attributed -
+                // by this generation step rather than by whichever query next
+                // triggers an auto-flush.
+                billingScheduleRepository.flush();
                 log.info("Generated {} occurrences for Milestone Plan configuration {}",
                         newSchedules.size(), configuration.getBillingConfigurationId());
             } catch (DataIntegrityViolationException e) {

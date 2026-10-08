@@ -39,6 +39,13 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
     Optional<BillingSnapshot> findFirstByBillingConfigurationIdOrderByCreatedDateDesc(UUID billingConfigurationId);
 
     /**
+     * Backs the Invoice Generation workspace - snapshots in a given lifecycle
+     * status, newest first.
+     */
+    java.util.List<BillingSnapshot> findAllByStatusOrderByCreatedDateDesc(
+            com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus status);
+
+    /**
      * Finds a billing snapshot for a specific billing configuration and billing period.
      * Used for Time & Material invoice generation to locate the snapshot associated
      * with a billing schedule occurrence.
