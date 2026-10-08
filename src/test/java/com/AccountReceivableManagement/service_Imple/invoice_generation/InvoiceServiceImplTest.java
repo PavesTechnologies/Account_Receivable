@@ -212,6 +212,8 @@ class InvoiceServiceImplTest {
                 .countryCode("+91")
                 .email("client@example.com")
                 .phone("9876543210")
+                .projectStartDate(LocalDate.of(2026, 8, 19))
+                .projectEndDate(LocalDate.of(2026, 10, 7))
                 .build();
     }
 
@@ -279,6 +281,8 @@ class InvoiceServiceImplTest {
                         .currencyCode("USD")
                         .paymentTermId(paymentTermId)
                         .paymentTermCode("NET_30")
+                        .projectStartDate(LocalDate.of(2026, 8, 19))
+                        .projectEndDate(LocalDate.of(2026, 10, 7))
                         .build());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
         when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -290,6 +294,8 @@ class InvoiceServiceImplTest {
         assertThat(response.getBillingScheduleId()).isEqualTo(schedule.getBillingScheduleId());
         assertThat(response.getClientId()).isEqualTo(clientId);
         assertThat(response.getProjectId()).isEqualTo(23L);
+        assertThat(response.getProjectStartDate()).isEqualTo(LocalDate.of(2026, 8, 19));
+        assertThat(response.getProjectEndDate()).isEqualTo(LocalDate.of(2026, 10, 7));
         assertThat(response.getBillingPeriodStart()).isEqualTo(schedule.getPeriodStartDate());
         assertThat(response.getBillingPeriodEnd()).isEqualTo(schedule.getPeriodEndDate());
         assertThat(response.getSubtotal()).isEqualByComparingTo("2500.00");
@@ -430,6 +436,10 @@ class InvoiceServiceImplTest {
         assertThat(response.getPhone()).isEqualTo("9876543210");
         assertThat(response.getProjectId()).isEqualTo(23L);
         assertThat(response.getProjectName()).isEqualTo("Website Redesign");
+
+        // Project duration copied from BillingConfiguration.
+        assertThat(response.getProjectStartDate()).isEqualTo(LocalDate.of(2026, 8, 19));
+        assertThat(response.getProjectEndDate()).isEqualTo(LocalDate.of(2026, 10, 7));
 
         // Billing period copied.
         assertThat(response.getBillingPeriodStart()).isEqualTo(LocalDate.of(2026, 6, 1));

@@ -51,10 +51,13 @@ public class TaxRegionMaster {
      * GST
      * VAT
      * SALES_TAX
+     *
+     * This field is kept for backward compatibility only.
+     * The generic design supports multiple tax regimes per region.
+     * TaxConfiguration links a specific TaxRegion to a specific TaxRegime.
      */
     @Column(
             name = "tax_regime",
-            nullable = false,
             length = 50
     )
     private String taxRegime;

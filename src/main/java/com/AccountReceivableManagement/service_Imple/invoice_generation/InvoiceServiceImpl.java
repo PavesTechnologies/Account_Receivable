@@ -259,6 +259,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .projectName(
                                 configuration.getProjectName()
                         )
+                        .projectStartDate(
+                                configuration.getProjectStartDate()
+                        )
+                        .projectEndDate(
+                                configuration.getProjectEndDate()
+                        )
                         .billingPeriodStart(
                                 snapshot.getBillingPeriodStart()
                         )
@@ -522,6 +528,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .phone(configuration.getPhone())
                         .projectId(configuration.getProjectId())
                         .projectName(configuration.getProjectName())
+                        .projectStartDate(configuration.getProjectStartDate())
+                        .projectEndDate(configuration.getProjectEndDate())
                         .billingPeriodStart(schedule.getPeriodStartDate())
                         .billingPeriodEnd(schedule.getPeriodEndDate())
                         .currencyCode(configuration.getCurrencyCode())
@@ -830,7 +838,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                 "Tax calculation totals are inconsistent for this billing snapshot. Invoice cannot be refreshed."
         );
 
-        refreshInvoiceFromAuthoritativeData(invoice, snapshot, taxCalculation);
+        BillingConfigurationResponseDto configuration =
+                billingConfigurationService.getBillingConfiguration(
+                        snapshot.getBillingConfigurationId()
+                );
+
+        refreshInvoiceFromAuthoritativeData(invoice, snapshot, taxCalculation, configuration);
 
         snapshot.setStatus(BillingSnapshotStatus.INVOICED);
 
@@ -860,7 +873,8 @@ public class InvoiceServiceImpl implements InvoiceService {
     private void refreshInvoiceFromAuthoritativeData(
             Invoice invoice,
             BillingSnapshot snapshot,
-            TaxCalculation taxCalculation
+            TaxCalculation taxCalculation,
+            BillingConfigurationResponseDto configuration
     ) {
 
         invoice.setBillingSnapshotNumber(
@@ -868,6 +882,12 @@ public class InvoiceServiceImpl implements InvoiceService {
         );
         invoice.setTaxCalculationId(
                 taxCalculation.getTaxCalculationId()
+        );
+        invoice.setProjectStartDate(
+                configuration.getProjectStartDate()
+        );
+        invoice.setProjectEndDate(
+                configuration.getProjectEndDate()
         );
         invoice.setBillingPeriodStart(
                 snapshot.getBillingPeriodStart()
@@ -1389,6 +1409,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .contact(invoice.getContact())
                 .projectId(invoice.getProjectId())
                 .projectName(invoice.getProjectName())
+                .projectStartDate(invoice.getProjectStartDate())
+                .projectEndDate(invoice.getProjectEndDate())
                 .billingPeriodStart(
                         invoice.getBillingPeriodStart()
                 )
