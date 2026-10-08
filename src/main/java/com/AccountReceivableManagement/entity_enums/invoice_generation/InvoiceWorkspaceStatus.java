@@ -1,4 +1,4 @@
-﻿package com.AccountReceivableManagement.entity_enums.invoice_generation;
+package com.AccountReceivableManagement.entity_enums.invoice_generation;
 
 /**
  * Response-only status of a row in the Invoice Generation workspace. Never
