@@ -44,4 +44,12 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
      */
     java.util.List<BillingSnapshot> findAllByStatusOrderByCreatedDateDesc(
             com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus status);
+
+    /**
+     * Finds a billing snapshot for a specific billing configuration and billing period.
+     * Used for Time & Material invoice generation to locate the snapshot associated
+     * with a billing schedule occurrence.
+     */
+    Optional<BillingSnapshot> findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+            UUID billingConfigurationId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
 }

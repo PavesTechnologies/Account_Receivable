@@ -60,6 +60,10 @@ public class InvoiceResponseDto {
 
     private String projectName;
 
+    private LocalDate projectStartDate;
+
+    private LocalDate projectEndDate;
+
     private LocalDate billingPeriodStart;
 
     private LocalDate billingPeriodEnd;

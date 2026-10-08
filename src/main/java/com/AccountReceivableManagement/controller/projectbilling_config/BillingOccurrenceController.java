@@ -234,7 +234,9 @@ public class BillingOccurrenceController {
                         .clientName(configDto.getClientName())
                         .currencyCode(configDto.getCurrencyCode())
                         .taxRegionName(configDto.getTaxRegionName())
-                        .taxRegionCode(configDto.getTaxRegionCode());
+                        .taxRegionCode(configDto.getTaxRegionCode())
+                        .projectStartDate(configDto.getProjectStartDate())
+                        .projectEndDate(configDto.getProjectEndDate());
             } catch (Exception e) {
                 // Ignore if configuration details cannot be retrieved
             }

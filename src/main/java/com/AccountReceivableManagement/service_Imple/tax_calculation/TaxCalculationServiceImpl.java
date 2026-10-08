@@ -818,6 +818,12 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                 .billingPeriodEnd(
                         snapshot.getBillingPeriodEnd()
                 )
+                .projectStartDate(
+                        configuration.getProjectStartDate()
+                )
+                .projectEndDate(
+                        configuration.getProjectEndDate()
+                )
                 .currencyCode(
                         configuration.getCurrencyCode()
                 )
@@ -922,6 +928,12 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                 .billingPeriodEnd(
                         schedule.getPeriodEndDate()
                 )
+                .projectStartDate(
+                        configuration.getProjectStartDate()
+                )
+                .projectEndDate(
+                        configuration.getProjectEndDate()
+                )
                 .currencyCode(
                         configuration.getCurrencyCode()
                 )
@@ -994,6 +1006,18 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                 .projectName(
                         configuration.getProject() != null
                                 ? configuration.getProject().getProjectName()
+                                : null
+                )
+
+                .projectStartDate(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getStartDate()
+                                : null
+                )
+
+                .projectEndDate(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getEndDate()
                                 : null
                 )
 

@@ -18,6 +18,11 @@ public class TaxRegionResponseDto {
 
     private String taxRegionName;
 
+    /**
+     * Tax regime string field kept for backward compatibility only.
+     * The generic design supports multiple tax regimes per region.
+     * TaxConfiguration links a specific TaxRegion to a specific TaxRegime.
+     */
     private String taxRegime;
 
     private String currencyCode;

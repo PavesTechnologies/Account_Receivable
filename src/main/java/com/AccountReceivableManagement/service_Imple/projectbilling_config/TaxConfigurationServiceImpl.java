@@ -4,12 +4,10 @@ import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfiguratio
 import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationComponentResponseDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.TaxConfigurationResponseDto;
-import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfiguration;
-import com.AccountReceivableManagement.entity.projectbilling_config.TaxConfigurationComponent;
-import com.AccountReceivableManagement.entity.projectbilling_config.TaxRegionMaster;
-import com.AccountReceivableManagement.entity.projectbilling_config.TaxTypeMaster;
+import com.AccountReceivableManagement.entity.projectbilling_config.*;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.TaxRegimeMasterRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.TaxTypeMasterRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.TaxConfigurationService;
@@ -40,6 +38,7 @@ public class TaxConfigurationServiceImpl implements TaxConfigurationService {
     private final TaxConfigurationRepository configurationRepository;
     private final TaxRegionMasterRepository taxRegionRepository;
     private final TaxTypeMasterRepository taxTypeRepository;
+    private final TaxRegimeMasterRepository taxRegimeRepository;
 
     @Override
     public TaxConfigurationResponseDto create(
@@ -63,11 +62,15 @@ public class TaxConfigurationServiceImpl implements TaxConfigurationService {
                 null
         );
 
+        TaxRegimeMaster regime = resolveTaxRegime(request.getTaxRegimeId(), request.getTaxRegime());
+
         TaxConfiguration configuration =
                 TaxConfiguration.builder()
                         .taxRegion(region)
+                        .taxRegimeMaster(regime)
                         .taxRegime(
-                                request.getTaxRegime().trim()
+                                regime != null ? regime.getTaxRegimeCode() :
+                                        (request.getTaxRegime() != null ? request.getTaxRegime().trim() : null)
                         )
                         .effectiveFrom(
                                 request.getEffectiveFrom()
@@ -120,10 +123,15 @@ public class TaxConfigurationServiceImpl implements TaxConfigurationService {
                 id
         );
 
+        TaxRegimeMaster regime = resolveTaxRegime(request.getTaxRegimeId(), request.getTaxRegime());
+
         configuration.setTaxRegion(region);
 
+        configuration.setTaxRegimeMaster(regime);
+
         configuration.setTaxRegime(
-                request.getTaxRegime().trim()
+                regime != null ? regime.getTaxRegimeCode() :
+                        (request.getTaxRegime() != null ? request.getTaxRegime().trim() : null)
         );
 
         configuration.setEffectiveFrom(
@@ -322,6 +330,29 @@ public class TaxConfigurationServiceImpl implements TaxConfigurationService {
         return region;
     }
 
+    private TaxRegimeMaster resolveTaxRegime(UUID taxRegimeId, String taxRegimeString) {
+
+        // taxRegimeId is the canonical source when provided
+        if (taxRegimeId != null) {
+            return taxRegimeRepository.findById(taxRegimeId)
+                    .orElseThrow(() ->
+                            new GlobalExceptionHandler
+                                    .ResourceNotFoundException(
+                                    "Tax regime not found."
+                            )
+                    );
+        }
+
+        // taxRegimeString is kept for backward compatibility only
+        // It resolves to a TaxRegimeMaster if a matching code exists
+        if (taxRegimeString != null && !taxRegimeString.trim().isEmpty()) {
+            return taxRegimeRepository.findByTaxRegimeCodeIgnoreCase(taxRegimeString.trim())
+                    .orElse(null);
+        }
+
+        return null;
+    }
+
     private void validateDates(
             LocalDate from,
             LocalDate to
@@ -413,6 +444,10 @@ public class TaxConfigurationServiceImpl implements TaxConfigurationService {
                 )
                 .taxRegionName(
                         region.getTaxRegionName()
+                )
+                .taxRegimeId(
+                        configuration.getTaxRegimeMaster() != null ?
+                                configuration.getTaxRegimeMaster().getTaxRegimeId() : null
                 )
                 .taxRegime(
                         configuration.getTaxRegime()

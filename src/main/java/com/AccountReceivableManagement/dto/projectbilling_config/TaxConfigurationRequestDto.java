@@ -19,7 +19,16 @@ public class TaxConfigurationRequestDto {
     @NotNull(message = "Tax region is required.")
     private UUID taxRegionId;
 
-    @NotBlank(message = "Tax regime is required.")
+    /**
+     * Tax regime ID for dynamic regime reference.
+     * If provided, takes precedence over taxRegime string.
+     */
+    private UUID taxRegimeId;
+
+    /**
+     * Tax regime string field kept for backward compatibility.
+     * New implementations should use taxRegimeId.
+     */
     @Size(max = 50)
     private String taxRegime;
 
