@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -45,6 +46,10 @@ class BillingConfigurationServiceImplTest {
     @Mock private BillingOccurrenceServiceImpl billingOccurrenceService;
     @Mock private ProjectEligibilityRepository projectEligibilityRepository;
     @Mock private BillingPeriodCalculatorService billingPeriodCalculatorService;
+    @Mock private BillingMilestonePlanRepository billingMilestonePlanRepository;
+    @Mock private BillingPaymentEntryRepository billingPaymentEntryRepository;
+    @Mock private BillingConfigurationChangeTrackingService changeTrackingService;
+    @Mock private BillingConfigurationSnapshotRepository snapshotRepository;
 
     private BillingConfigurationServiceImpl service;
 
@@ -70,7 +75,11 @@ class BillingConfigurationServiceImplTest {
                 billingSnapshotRepository,
                 billingOccurrenceService,
                 projectEligibilityRepository,
-                billingPeriodCalculatorService);
+                billingPeriodCalculatorService,
+                billingMilestonePlanRepository,
+                billingPaymentEntryRepository,
+                changeTrackingService,
+                snapshotRepository);
 
         configurationId = UUID.randomUUID();
         draftConfiguration = BillingConfiguration.builder()
@@ -135,6 +144,93 @@ class BillingConfigurationServiceImplTest {
 
         verify(billingSnapshotRepository, never()).existsByBillingConfigurationId(any());
         verify(billingConfigurationRepository, never()).delete(any());
+    }
+
+    // =========================================================
+    // APPROVE - occurrence reconciliation is atomic with approval
+    // =========================================================
+
+    private BillingConfiguration pendingConfiguration() {
+        return BillingConfiguration.builder()
+                .billingConfigurationId(configurationId)
+                .approvalStatus(ApprovalStatus.PENDING_APPROVAL)
+                .billingStatus(com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.INACTIVE)
+                .effectiveFrom(java.time.LocalDate.now().minusDays(1))
+                .build();
+    }
+
+    private void stubApprovableConfiguration(BillingConfiguration configuration) {
+        when(billingConfigurationRepository.findById(configurationId)).thenReturn(Optional.of(configuration));
+        when(billingConfigurationRepository.save(any(BillingConfiguration.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    @Test
+    void approve_pendingConfiguration_becomesApprovedActiveAndReconcilesThenPromotesOccurrences() {
+        BillingConfiguration configuration = pendingConfiguration();
+        stubApprovableConfiguration(configuration);
+
+        service.approve(configurationId);
+
+        assertThat(configuration.getApprovalStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(configuration.getBillingStatus())
+                .isEqualTo(com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.ACTIVE);
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(billingOccurrenceService);
+        inOrder.verify(billingOccurrenceService).reconcileOccurrencesOnConfigurationUpdate(configurationId);
+        inOrder.verify(billingOccurrenceService).promoteDueOccurrencesToTaxPending(configurationId);
+    }
+
+    @Test
+    void approve_notPending_isRejectedWithoutTouchingOccurrences() {
+        when(billingConfigurationRepository.findById(configurationId)).thenReturn(Optional.of(draftConfiguration));
+
+        assertThatThrownBy(() -> service.approve(configurationId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Only configurations pending approval can be approved.");
+
+        verifyNoInteractions(billingOccurrenceService);
+    }
+
+    // The reconciliation failure must propagate (rolling the approval back) instead of being
+    // swallowed inside the transaction, which is what produced "marked as rollback-only".
+    @Test
+    void approve_occurrenceConstraintViolation_propagatesAsBusinessErrorInsteadOfBeingSwallowed() {
+        stubApprovableConfiguration(pendingConfiguration());
+        org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "could not execute statement",
+                        new java.sql.SQLException("Duplicate entry for key 'uk_billing_schedule_period'")))
+                .when(billingOccurrenceService).reconcileOccurrencesOnConfigurationUpdate(configurationId);
+
+        assertThatThrownBy(() -> service.approve(configurationId))
+                .isInstanceOf(GlobalExceptionHandler.DuplicateResourceException.class)
+                .hasMessageContaining("could not be approved")
+                .hasMessageContaining("uk_billing_schedule_period");
+
+        verify(billingOccurrenceService, never()).promoteDueOccurrencesToTaxPending(any());
+    }
+
+    @Test
+    void approve_unexpectedReconciliationFailure_propagatesWithRealCause() {
+        stubApprovableConfiguration(pendingConfiguration());
+        org.mockito.Mockito.doThrow(new IllegalStateException("query did not return a unique result"))
+                .when(billingOccurrenceService).reconcileOccurrencesOnConfigurationUpdate(configurationId);
+
+        assertThatThrownBy(() -> service.approve(configurationId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("billing occurrences could not be generated")
+                .hasMessageContaining("query did not return a unique result");
+    }
+
+    @Test
+    void approve_businessValidationFailureFromReconciliation_isPassedThroughUnchanged() {
+        stubApprovableConfiguration(pendingConfiguration());
+        org.mockito.Mockito.doThrow(new GlobalExceptionHandler.ValidationException(
+                        "Billing date is required for all payment entries"))
+                .when(billingOccurrenceService).reconcileOccurrencesOnConfigurationUpdate(configurationId);
+
+        assertThatThrownBy(() -> service.approve(configurationId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Billing date is required for all payment entries");
     }
 
     @Test

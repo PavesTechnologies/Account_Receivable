@@ -32,6 +32,20 @@ public class InvoiceResponseDto {
 
     private UUID clientId;
 
+    /**
+     * {@code true} once an Invoice has been generated and persisted;
+     * {@code false} for a pre-generation preview. Lets a consumer tell
+     * "not yet generated" (invoice number, dates and status are null) apart
+     * from a mapping defect.
+     */
+    private Boolean generated;
+
+    /**
+     * Project code from the billing configuration. Populated on the
+     * pre-generation preview only; the persisted Invoice does not store it.
+     */
+    private String projectCode;
+
     private String clientName;
 
     private String countryCode;

@@ -37,4 +37,11 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
      * no BillingAcquisition record was ever written for an existing snapshot.
      */
     Optional<BillingSnapshot> findFirstByBillingConfigurationIdOrderByCreatedDateDesc(UUID billingConfigurationId);
+
+    /**
+     * Backs the Invoice Generation workspace - snapshots in a given lifecycle
+     * status, newest first.
+     */
+    java.util.List<BillingSnapshot> findAllByStatusOrderByCreatedDateDesc(
+            com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus status);
 }

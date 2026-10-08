@@ -560,6 +560,158 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     @Override
     @Transactional(readOnly = true)
+    public InvoiceResponseDto previewInvoice(UUID billingSnapshotId) {
+
+        BillingSnapshot snapshot =
+                billingSnapshotRepository.findById(billingSnapshotId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "Billing snapshot could not be found."
+                                )
+                        );
+
+        java.util.Optional<Invoice> existing =
+                invoiceRepository.findByBillingSnapshotId(billingSnapshotId);
+
+        if (existing.isPresent()) {
+            return mapToResponse(existing.get());
+        }
+
+        if (snapshot.getStatus() != BillingSnapshotStatus.TAX_COMPLETED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice preview is available only for a billing snapshot that has completed tax calculation."
+            );
+        }
+
+        TaxCalculation taxCalculation =
+                taxCalculationRepository
+                        .findByBillingSnapshotId(billingSnapshotId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler
+                                        .ResourceNotFoundException(
+                                        "No tax calculation has been completed for this billing snapshot."
+                                )
+                        );
+
+        if (taxCalculation.getStatus() != TaxCalculationStatus.CALCULATED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The tax calculation for this billing snapshot has not completed successfully."
+            );
+        }
+
+        validateTaxCalculationConsistency(
+                taxCalculation,
+                "Tax calculation totals are inconsistent for this billing snapshot."
+        );
+
+        BillingConfigurationResponseDto configuration =
+                billingConfigurationService.getBillingConfiguration(
+                        snapshot.getBillingConfigurationId());
+
+        // Seller identity as generation would snapshot it. Unlike generation
+        // this never fails the preview: seller fields stay null when no
+        // active profile exists.
+        CompanyProfileResponseDto companyProfile = null;
+        try {
+            if (companyProfileService != null) {
+                companyProfile = companyProfileService.getActive();
+            }
+        } catch (GlobalExceptionHandler.ResourceNotFoundException ex) {
+            // Seller fields stay null.
+        }
+
+        // One line per snapshot item, amounts copied as-is (never
+        // recomputed or aggregated); ordered by work date, then resource.
+        List<BillingSnapshotItem> snapshotItems =
+                snapshot.getItems().stream()
+                        .sorted(java.util.Comparator
+                                .comparing(
+                                        BillingSnapshotItem::getWorkDate,
+                                        java.util.Comparator.nullsLast(
+                                                java.util.Comparator.<LocalDate>naturalOrder()))
+                                .thenComparing(
+                                        BillingSnapshotItem::getResourceName,
+                                        java.util.Comparator.nullsLast(
+                                                java.util.Comparator.<String>naturalOrder())))
+                        .toList();
+
+        List<InvoiceItemResponseDto> items =
+                java.util.stream.IntStream
+                        .range(0, snapshotItems.size())
+                        .mapToObj(index -> {
+                                BillingSnapshotItem item = snapshotItems.get(index);
+                                return InvoiceItemResponseDto.builder()
+                                        .lineNumber(index + 1)
+                                        .itemType(item.getItemType())
+                                        .itemName(item.getItemName())
+                                        .sourceReferenceId(item.getSourceReferenceId())
+                                        .resourceName(item.getResourceName())
+                                        .quantity(item.getQuantity())
+                                        .rate(item.getRate())
+                                        .amount(item.getAmount())
+                                        .workDate(item.getWorkDate())
+                                        .role(item.getRole())
+                                        .build();
+                        })
+                        .toList();
+
+        List<InvoiceTaxComponentResponseDto> taxComponents =
+                taxCalculation.getComponents().stream()
+                        .map(component ->
+                                InvoiceTaxComponentResponseDto.builder()
+                                        .taxTypeId(component.getTaxTypeId())
+                                        .taxTypeCode(component.getTaxTypeCode())
+                                        .taxTypeName(component.getTaxTypeName())
+                                        .appliedRate(component.getAppliedRate())
+                                        .taxAmount(component.getTaxAmount())
+                                        .applicabilityType(component.getApplicabilityType())
+                                        .build())
+                        .toList();
+
+        return InvoiceResponseDto.builder()
+                .generated(false)
+                .billingSnapshotId(snapshot.getId())
+                .billingSnapshotNumber(snapshot.getSnapshotNumber())
+                .taxCalculationId(taxCalculation.getTaxCalculationId())
+                .clientId(snapshot.getClientId())
+                .clientName(configuration.getClientName())
+                .countryCode(configuration.getCountryCode())
+                .email(configuration.getEmail())
+                .phone(configuration.getPhone())
+                .projectId(snapshot.getProjectId())
+                .projectName(configuration.getProjectName())
+                .projectCode(configuration.getProjectCode())
+                .billingPeriodStart(snapshot.getBillingPeriodStart())
+                .billingPeriodEnd(snapshot.getBillingPeriodEnd())
+                .currencyCode(snapshot.getCurrencyCode())
+                .paymentTermCode(snapshot.getPaymentTermCode())
+                .paymentTermName(snapshot.getPaymentTermName())
+                .sellerLegalName(companyProfile != null ? companyProfile.getLegalName() : null)
+                .sellerAddressLine1(companyProfile != null ? companyProfile.getAddressLine1() : null)
+                .sellerAddressLine2(companyProfile != null ? companyProfile.getAddressLine2() : null)
+                .sellerCity(companyProfile != null ? companyProfile.getCity() : null)
+                .sellerState(companyProfile != null ? companyProfile.getState() : null)
+                .sellerPostalCode(companyProfile != null ? companyProfile.getPostalCode() : null)
+                .sellerCountry(companyProfile != null ? companyProfile.getCountry() : null)
+                .sellerGstin(companyProfile != null ? companyProfile.getGstin() : null)
+                .sellerEmail(companyProfile != null ? companyProfile.getEmail() : null)
+                .sellerPhone(companyProfile != null ? companyProfile.getPhone() : null)
+                .sellerLogoReference(companyProfile != null ? companyProfile.getLogoReference() : null)
+                .taxRegionCode(snapshot.getTaxRegionCode())
+                .sourceTaxJurisdictionCode(snapshot.getSourceTaxJurisdictionCode())
+                .destinationTaxJurisdictionCode(snapshot.getDestinationTaxJurisdictionCode())
+                .items(items)
+                .taxComponents(taxComponents)
+                .subtotal(taxCalculation.getTaxableAmount())
+                .totalTaxAmount(taxCalculation.getTotalTaxAmount())
+                .grandTotal(taxCalculation.getGrandTotal())
+                .correctionRequired(false)
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public InvoiceResponseDto getInvoiceByBillingSnapshotId(
             UUID billingSnapshotId
     ) {
@@ -614,6 +766,155 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .stream()
                 .map(this::mapToSummary)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceResponseDto
+    getInvoiceGenerationWorkspace() {
+
+        List<Invoice> invoices =
+                invoiceRepository.findAllByOrderByGeneratedAtDesc();
+
+        java.util.Set<UUID> invoicedSnapshotIds =
+                invoices.stream()
+                        .map(Invoice::getBillingSnapshotId)
+                        .filter(java.util.Objects::nonNull)
+                        .collect(Collectors.toSet());
+
+        Map<UUID, BillingSnapshot> snapshotsById =
+                billingSnapshotRepository
+                        .findAllById(invoicedSnapshotIds)
+                        .stream()
+                        .collect(Collectors.toMap(
+                                BillingSnapshot::getId, s -> s));
+
+        List<com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto> rows =
+                new java.util.ArrayList<>();
+
+        BigDecimal readyAmount = BigDecimal.ZERO;
+
+        // Candidates: TAX_COMPLETED and no invoice. The invoice check keeps a
+        // snapshot with an existing invoice from being shown as a candidate.
+        for (BillingSnapshot snapshot
+                : billingSnapshotRepository
+                .findAllByStatusOrderByCreatedDateDesc(
+                        BillingSnapshotStatus.TAX_COMPLETED)) {
+
+            if (invoicedSnapshotIds.contains(snapshot.getId())) {
+                continue;
+            }
+
+            var row = mapCandidateToWorkspaceRow(snapshot);
+            rows.add(row);
+
+            if (row.getGrandTotal() != null) {
+                readyAmount = readyAmount.add(row.getGrandTotal());
+            }
+        }
+
+        long readyCount = rows.size();
+        long generated = 0, pending = 0, approved = 0, rejected = 0;
+        BigDecimal invoicedAmount = BigDecimal.ZERO;
+
+        for (Invoice invoice : invoices) {
+
+            rows.add(mapInvoiceToWorkspaceRow(
+                    invoice,
+                    snapshotsById.get(invoice.getBillingSnapshotId())));
+
+            switch (invoice.getStatus()) {
+                case GENERATED -> generated++;
+                case PENDING_APPROVAL -> pending++;
+                case APPROVED -> approved++;
+                case REJECTED -> rejected++;
+            }
+
+            if (invoice.getStatus() != InvoiceStatus.REJECTED
+                    && invoice.getGrandTotal() != null) {
+                invoicedAmount = invoicedAmount.add(invoice.getGrandTotal());
+            }
+        }
+
+        return com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceResponseDto.builder()
+                .summary(
+                        com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceSummaryDto.builder()
+                                .readyForInvoiceCount(readyCount)
+                                .readyForInvoiceAmount(readyAmount)
+                                .generatedCount(generated)
+                                .pendingApprovalCount(pending)
+                                .approvedCount(approved)
+                                .rejectedCount(rejected)
+                                .invoicedCount(invoices.size())
+                                .totalInvoicedAmount(invoicedAmount)
+                                .build())
+                .rows(rows)
+                .build();
+    }
+
+    private com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto
+    mapCandidateToWorkspaceRow(BillingSnapshot snapshot) {
+
+        TaxCalculation tax =
+                taxCalculationRepository
+                        .findByBillingSnapshotId(snapshot.getId())
+                        .orElse(null);
+
+        // Client/project names live on the billing configuration, exactly as
+        // generateInvoice() resolves them. Left null if it cannot be loaded.
+        BillingConfigurationResponseDto configuration = null;
+        try {
+            configuration =
+                    billingConfigurationService.getBillingConfiguration(
+                            snapshot.getBillingConfigurationId());
+        } catch (RuntimeException ex) {
+            // Row is still returned; names are simply unavailable.
+        }
+
+        return com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto.builder()
+                .workspaceStatus(
+                        com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus.READY_FOR_INVOICE)
+                .snapshotId(snapshot.getId())
+                .snapshotNumber(snapshot.getSnapshotNumber())
+                .snapshotStatus(snapshot.getStatus())
+                .clientName(configuration != null ? configuration.getClientName() : null)
+                .projectName(configuration != null ? configuration.getProjectName() : null)
+                .projectCode(configuration != null ? configuration.getProjectCode() : null)
+                .billingType(snapshot.getBillingType())
+                .billingPeriodStart(snapshot.getBillingPeriodStart())
+                .billingPeriodEnd(snapshot.getBillingPeriodEnd())
+                .currencyCode(snapshot.getCurrencyCode())
+                .amount(tax != null ? tax.getTaxableAmount() : snapshot.getTotalAmount())
+                .totalTaxAmount(tax != null ? tax.getTotalTaxAmount() : null)
+                .grandTotal(tax != null ? tax.getGrandTotal() : null)
+                .build();
+    }
+
+    private com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto
+    mapInvoiceToWorkspaceRow(Invoice invoice, BillingSnapshot snapshot) {
+
+        return com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto.builder()
+                .workspaceStatus(
+                        com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus
+                                .valueOf(invoice.getStatus().name()))
+                .snapshotId(invoice.getBillingSnapshotId())
+                .snapshotNumber(invoice.getBillingSnapshotNumber())
+                .snapshotStatus(snapshot != null ? snapshot.getStatus() : null)
+                .clientName(invoice.getClientName())
+                .projectName(invoice.getProjectName())
+                .billingType(snapshot != null ? snapshot.getBillingType() : null)
+                .billingPeriodStart(invoice.getBillingPeriodStart())
+                .billingPeriodEnd(invoice.getBillingPeriodEnd())
+                .currencyCode(invoice.getCurrencyCode())
+                .amount(invoice.getSubtotal())
+                .totalTaxAmount(invoice.getTotalTaxAmount())
+                .grandTotal(invoice.getGrandTotal())
+                .invoiceId(invoice.getInvoiceId())
+                .invoiceNumber(invoice.getInvoiceNumber())
+                .invoiceStatus(invoice.getStatus())
+                .invoiceDate(invoice.getInvoiceDate())
+                .dueDate(invoice.getDueDate())
+                .build();
     }
 
     @Override
@@ -1258,13 +1559,15 @@ public class InvoiceServiceImpl implements InvoiceService {
     ) {
 
         List<InvoiceItemResponseDto> items =
-                invoice.getItems()
-                        .stream()
-                        .map(item ->
-                                InvoiceItemResponseDto.builder()
+                java.util.stream.IntStream
+                        .range(0, invoice.getItems().size())
+                        .mapToObj(index -> {
+                                InvoiceItem item = invoice.getItems().get(index);
+                                return InvoiceItemResponseDto.builder()
                                         .invoiceItemId(
                                                 item.getInvoiceItemId()
                                         )
+                                        .lineNumber(index + 1)
                                         .itemType(item.getItemType())
                                         .itemName(item.getItemName())
                                         .sourceReferenceId(
@@ -1279,8 +1582,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                                         .resourceName(
                                                 item.getResourceName()
                                         )
-                                        .build()
-                        )
+                                        .build();
+                        })
                         .toList();
 
         List<InvoiceTaxComponentResponseDto> taxComponents =
@@ -1326,6 +1629,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 );
 
         return InvoiceResponseDto.builder()
+                .generated(true)
                 .invoiceId(invoice.getInvoiceId())
                 .invoiceNumber(invoice.getInvoiceNumber())
                 .status(invoice.getStatus())

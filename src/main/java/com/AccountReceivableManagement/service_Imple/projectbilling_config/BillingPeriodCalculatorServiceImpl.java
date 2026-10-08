@@ -411,6 +411,8 @@ public class BillingPeriodCalculatorServiceImpl implements BillingPeriodCalculat
                     .isActive(true)
                     .build();
 
+            log.info("[BillingScheduleInsert] source=BillingPeriodCalculatorServiceImpl.generateSchedule configurationId={} periodStart={} periodEnd={}",
+                    configuration.getBillingConfigurationId(), schedule.getPeriodStartDate(), schedule.getPeriodEndDate());
             billingScheduleRepository.save(schedule);
         }
     }

@@ -16,6 +16,9 @@ public class InvoiceItemResponseDto {
 
     private UUID invoiceItemId;
 
+    /** 1-based position of the line within the invoice. */
+    private Integer lineNumber;
+
     private BillingItemType itemType;
 
     private String itemName;
