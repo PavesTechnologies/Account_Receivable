@@ -36,6 +36,12 @@ public class CompanyProfileResponseDto {
 
     private String logoReference;
 
+    private String defaultInvoiceNotes;
+
+    private String defaultTermsAndConditions;
+
+    private String defaultPaymentInstructions;
+
     private Boolean isActive;
 
     private LocalDateTime createdAt;

@@ -105,6 +105,16 @@ public interface BillingScheduleRepository extends JpaRepository<BillingSchedule
             LocalDate periodStartDate,
             LocalDate periodEndDate);
 
+    /**
+     * Active or inactive: {@code uk_billing_schedule_period} spans
+     * (configuration, period start, period end) regardless of {@code isActive},
+     * so duplicate protection must see soft-deleted rows too.
+     */
+    java.util.Optional<BillingSchedule> findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+            BillingConfiguration billingConfiguration,
+            LocalDate periodStartDate,
+            LocalDate periodEndDate);
+
     boolean existsByRecurringConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
             BillingRecurringConfiguration recurringConfiguration,
             LocalDate periodStartDate,

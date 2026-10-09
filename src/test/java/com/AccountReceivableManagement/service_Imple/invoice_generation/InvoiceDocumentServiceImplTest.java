@@ -103,6 +103,41 @@ class InvoiceDocumentServiceImplTest {
         assertThat(new String(pdf, 0, 5)).isEqualTo("%PDF-");
     }
 
+    private String pdfText(byte[] pdf) throws java.io.IOException {
+        try (com.lowagie.text.pdf.PdfReader reader = new com.lowagie.text.pdf.PdfReader(pdf)) {
+            com.lowagie.text.pdf.parser.PdfTextExtractor extractor =
+                    new com.lowagie.text.pdf.parser.PdfTextExtractor(reader);
+            StringBuilder text = new StringBuilder();
+            for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+                text.append(extractor.getTextFromPage(page)).append('\n');
+            }
+            return text.toString();
+        }
+    }
+
+    @Test
+    void generateInvoicePdf_printsSavedNotesTermsAndPaymentInstructions() throws Exception {
+        InvoiceResponseDto invoice = fullInvoice();
+        invoice.setInvoiceNotes("TEST-NOTES-TEXT");
+        invoice.setTermsAndConditions("TEST-TERMS-TEXT");
+        invoice.setPaymentInstructions("TEST-PAYMENT-TEXT");
+
+        String text = pdfText(service.generateInvoicePdf(invoice));
+
+        assertThat(text).contains("Notes", "TEST-NOTES-TEXT")
+                .contains("Payment Instructions", "TEST-PAYMENT-TEXT")
+                .contains("Terms & Conditions", "TEST-TERMS-TEXT");
+    }
+
+    @Test
+    void generateInvoicePdf_noSavedContent_omitsSectionsAndPrintsNoPlaceholder() throws Exception {
+        String text = pdfText(service.generateInvoicePdf(fullInvoice()));
+
+        assertThat(text).doesNotContain("Terms & Conditions")
+                .doesNotContain("Payment Instructions")
+                .doesNotContain("Notes");
+    }
+
     // Missing-data behavior is preserved: a blank seller snapshot (e.g. an
     // invoice generated before this feature existed) must not fail
     // rendering or fabricate placeholder seller text.

@@ -23,6 +23,8 @@
 
         private String countryCode;
 
+        private String countryName;
+
         private String email;
 
         private String phone;

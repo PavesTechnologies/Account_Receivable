@@ -987,6 +987,8 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                             .updatedAt(LocalDateTime.now())
                             .build();
 
+            log.info("[BillingScheduleInsert] source=RecurringBillingServiceImpl.generateBillingSchedule configurationId={} recurringId={} periodStart={} periodEnd={}",
+                    configuration.getBillingConfigurationId(), schedule.getRecurringConfiguration() != null ? schedule.getRecurringConfiguration().getRecurringConfigurationId() : null, schedule.getPeriodStartDate(), schedule.getPeriodEndDate());
             billingScheduleRepository.save(schedule);
         }
 

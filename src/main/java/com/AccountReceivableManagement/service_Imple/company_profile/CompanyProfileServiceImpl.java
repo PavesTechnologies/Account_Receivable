@@ -2,6 +2,8 @@ package com.AccountReceivableManagement.service_Imple.company_profile;
 
 import com.AccountReceivableManagement.dto.company_profile.CompanyProfileRequestDto;
 import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
+import com.AccountReceivableManagement.dto.company_profile.InvoiceContentDefaultsRequestDto;
+import com.AccountReceivableManagement.dto.company_profile.InvoiceContentDefaultsResponseDto;
 import com.AccountReceivableManagement.entity.company_profile.CompanyProfile;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.company_profile.CompanyProfileRepository;
@@ -48,6 +50,9 @@ public class CompanyProfileServiceImpl implements CompanyProfileService {
                         .email(request.getEmail())
                         .phone(request.getPhone())
                         .logoReference(request.getLogoReference())
+                        .defaultInvoiceNotes(blankToNull(request.getDefaultInvoiceNotes()))
+                        .defaultTermsAndConditions(blankToNull(request.getDefaultTermsAndConditions()))
+                        .defaultPaymentInstructions(blankToNull(request.getDefaultPaymentInstructions()))
                         .isActive(true)
                         .build();
 
@@ -78,7 +83,61 @@ public class CompanyProfileServiceImpl implements CompanyProfileService {
         companyProfile.setPhone(request.getPhone());
         companyProfile.setLogoReference(request.getLogoReference());
 
+        // A full profile PUT that omits the invoice-content fields must not
+        // wipe the configured defaults; clearing goes through the
+        // dedicated invoice-content-defaults endpoint.
+        if (request.getDefaultInvoiceNotes() != null) {
+            companyProfile.setDefaultInvoiceNotes(blankToNull(request.getDefaultInvoiceNotes()));
+        }
+        if (request.getDefaultTermsAndConditions() != null) {
+            companyProfile.setDefaultTermsAndConditions(blankToNull(request.getDefaultTermsAndConditions()));
+        }
+        if (request.getDefaultPaymentInstructions() != null) {
+            companyProfile.setDefaultPaymentInstructions(blankToNull(request.getDefaultPaymentInstructions()));
+        }
+
         return mapToResponse(companyProfileRepository.save(companyProfile));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public InvoiceContentDefaultsResponseDto getInvoiceContentDefaults() {
+        return mapToContentDefaults(findActiveEntity());
+    }
+
+    @Override
+    public InvoiceContentDefaultsResponseDto updateInvoiceContentDefaults(
+            InvoiceContentDefaultsRequestDto request
+    ) {
+
+        CompanyProfile companyProfile = findActiveEntity();
+
+        companyProfile.setDefaultInvoiceNotes(blankToNull(request.getInvoiceNotes()));
+        companyProfile.setDefaultTermsAndConditions(blankToNull(request.getTermsAndConditions()));
+        companyProfile.setDefaultPaymentInstructions(blankToNull(request.getPaymentInstructions()));
+
+        return mapToContentDefaults(companyProfileRepository.save(companyProfile));
+    }
+
+    private CompanyProfile findActiveEntity() {
+        return companyProfileRepository.findFirstByIsActiveTrueOrderByCreatedAtAsc()
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
+                        "No active company profile has been configured."
+                ));
+    }
+
+    private InvoiceContentDefaultsResponseDto mapToContentDefaults(CompanyProfile companyProfile) {
+        return InvoiceContentDefaultsResponseDto.builder()
+                .companyProfileId(companyProfile.getCompanyProfileId())
+                .invoiceNotes(companyProfile.getDefaultInvoiceNotes())
+                .termsAndConditions(companyProfile.getDefaultTermsAndConditions())
+                .paymentInstructions(companyProfile.getDefaultPaymentInstructions())
+                .updatedAt(companyProfile.getUpdatedAt())
+                .build();
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     @Override
@@ -122,6 +181,9 @@ public class CompanyProfileServiceImpl implements CompanyProfileService {
                 .email(companyProfile.getEmail())
                 .phone(companyProfile.getPhone())
                 .logoReference(companyProfile.getLogoReference())
+                .defaultInvoiceNotes(companyProfile.getDefaultInvoiceNotes())
+                .defaultTermsAndConditions(companyProfile.getDefaultTermsAndConditions())
+                .defaultPaymentInstructions(companyProfile.getDefaultPaymentInstructions())
                 .isActive(companyProfile.getIsActive())
                 .createdAt(companyProfile.getCreatedAt())
                 .updatedAt(companyProfile.getUpdatedAt())

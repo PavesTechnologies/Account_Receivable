@@ -122,6 +122,9 @@ class InvoiceServiceImplTest {
                 .email("billing@paves.example")
                 .phone("+91 40 1234 5678")
                 .logoReference("logos/paves.png")
+                .defaultInvoiceNotes("TEST-NOTES-V1")
+                .defaultTermsAndConditions("TEST-TERMS-V1")
+                .defaultPaymentInstructions("TEST-PAYMENT-V1")
                 .isActive(true)
                 .build();
     }
@@ -290,6 +293,11 @@ class InvoiceServiceImplTest {
 
         InvoiceResponseDto response = invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId());
 
+        // The number is assigned only here, at generation - a real INV- number, not derived from any id.
+        assertThat(response.getInvoiceNumber()).isNotBlank().startsWith("INV-");
+        assertThat(response.getInvoiceNumber())
+                .doesNotContain(schedule.getBillingScheduleId().toString())
+                .doesNotContain(clientId.toString());
         assertThat(response.getBillingSnapshotId()).isNull();
         assertThat(response.getBillingScheduleId()).isEqualTo(schedule.getBillingScheduleId());
         assertThat(response.getClientId()).isEqualTo(clientId);
@@ -594,6 +602,131 @@ class InvoiceServiceImplTest {
         assertThat(secondInvoice.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd (Renamed)");
         // The first invoice's own response object remains exactly as generated.
         assertThat(firstInvoice.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd");
+    }
+
+    // Invoice content (Notes / Terms / Payment Instructions): copied from the
+    // Company Profile defaults at generation and frozen on the invoice.
+    @Test
+    void generateInvoice_copiesInvoiceContentDefaultsOntoInvoice() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(completedTaxCalculation()));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoice(snapshotId);
+
+        org.mockito.ArgumentCaptor<Invoice> saved = org.mockito.ArgumentCaptor.forClass(Invoice.class);
+        verify(invoiceRepository).save(saved.capture());
+        assertThat(saved.getValue().getInvoiceNotes()).isEqualTo("TEST-NOTES-V1");
+        assertThat(saved.getValue().getTermsAndConditions()).isEqualTo("TEST-TERMS-V1");
+        assertThat(saved.getValue().getPaymentInstructions()).isEqualTo("TEST-PAYMENT-V1");
+
+        assertThat(response.getInvoiceNotes()).isEqualTo("TEST-NOTES-V1");
+        assertThat(response.getTermsAndConditions()).isEqualTo("TEST-TERMS-V1");
+        assertThat(response.getPaymentInstructions()).isEqualTo("TEST-PAYMENT-V1");
+    }
+
+    @Test
+    void generateInvoice_noDefaultsConfigured_leavesInvoiceContentNull() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+
+        when(companyProfileService.getActive()).thenReturn(
+                CompanyProfileResponseDto.builder()
+                        .companyProfileId(UUID.randomUUID())
+                        .legalName("Paves Technologies Pvt Ltd")
+                        .isActive(true)
+                        .build());
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(completedTaxCalculation()));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoice(snapshotId);
+
+        assertThat(response.getInvoiceNotes()).isNull();
+        assertThat(response.getTermsAndConditions()).isNull();
+        assertThat(response.getPaymentInstructions()).isNull();
+    }
+
+    // Changing the defaults afterwards must not alter an already-generated
+    // invoice; only invoices generated afterwards pick up the new values.
+    @Test
+    void generateInvoice_defaultsChangedAfterward_existingInvoiceKeepsSavedContent() {
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(taxCompletedSnapshot()));
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(completedTaxCalculation()));
+        when(invoiceRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto first = invoiceService.generateInvoice(snapshotId);
+
+        when(companyProfileService.getActive()).thenReturn(
+                CompanyProfileResponseDto.builder()
+                        .companyProfileId(UUID.randomUUID())
+                        .legalName("Paves Technologies Pvt Ltd")
+                        .defaultInvoiceNotes("TEST-NOTES-V2")
+                        .defaultTermsAndConditions("TEST-TERMS-V2")
+                        .defaultPaymentInstructions("TEST-PAYMENT-V2")
+                        .isActive(true)
+                        .build());
+
+        // Re-reading the persisted first invoice returns its own saved content.
+        org.mockito.ArgumentCaptor<Invoice> saved = org.mockito.ArgumentCaptor.forClass(Invoice.class);
+        verify(invoiceRepository).save(saved.capture());
+        Invoice firstInvoice = saved.getValue();
+        when(invoiceRepository.findById(any())).thenReturn(Optional.of(firstInvoice));
+        InvoiceResponseDto reread = invoiceService.getInvoiceById(firstInvoice.getInvoiceId());
+
+        assertThat(first.getInvoiceNotes()).isEqualTo("TEST-NOTES-V1");
+        assertThat(reread.getInvoiceNotes()).isEqualTo("TEST-NOTES-V1");
+        assertThat(reread.getTermsAndConditions()).isEqualTo("TEST-TERMS-V1");
+        assertThat(reread.getPaymentInstructions()).isEqualTo("TEST-PAYMENT-V1");
+
+        // A newly generated invoice picks up the new defaults.
+        UUID secondSnapshotId = UUID.randomUUID();
+        BillingSnapshot secondSnapshot = taxCompletedSnapshot();
+        secondSnapshot.setId(secondSnapshotId);
+        when(billingSnapshotRepository.findById(secondSnapshotId)).thenReturn(Optional.of(secondSnapshot));
+        when(taxCalculationRepository.findByBillingSnapshotId(secondSnapshotId)).thenReturn(Optional.of(completedTaxCalculation()));
+        when(invoiceRepository.existsByBillingSnapshotId(secondSnapshotId)).thenReturn(false);
+
+        assertThat(invoiceService.generateInvoice(secondSnapshotId).getInvoiceNotes()).isEqualTo("TEST-NOTES-V2");
+    }
+
+    @Test
+    void generateInvoiceForSchedule_copiesInvoiceContentDefaultsOntoInvoice() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(schedule));
+        when(taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(BillingConfigurationResponseDto.builder()
+                        .clientId(clientId).clientName("Account Management")
+                        .projectId(23L).projectName("Website Redesign")
+                        .currencyCode("USD").build());
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingScheduleRepository.save(any(BillingSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId());
+
+        assertThat(response.getInvoiceNotes()).isEqualTo("TEST-NOTES-V1");
+        assertThat(response.getTermsAndConditions()).isEqualTo("TEST-TERMS-V1");
+        assertThat(response.getPaymentInstructions()).isEqualTo("TEST-PAYMENT-V1");
     }
 
     // Payment term name: frozen from the snapshot's own (frozen) payment term
@@ -1008,6 +1141,484 @@ class InvoiceServiceImplTest {
         verifyNoInteractions(billingSnapshotRepository);
         verifyNoInteractions(taxCalculationRepository);
         verifyNoInteractions(billingConfigurationService);
+    }
+
+    // =====================================================================
+    // Invoice preview — pre-generation, built from real snapshot items
+    // =====================================================================
+
+    private BillingSnapshot tmSnapshotWithThreeTimesheets() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setPaymentTermName("Net 30");
+        snapshot.setBillingType("Time & Material");
+        snapshot.getItems().clear();
+        // Deliberately out of order to prove the preview sorts by work date.
+        for (int day : new int[] {7, 5, 6}) {
+            snapshot.getItems().add(
+                    BillingSnapshotItem.builder()
+                            .billingSnapshotItemId(UUID.randomUUID())
+                            .billingSnapshot(snapshot)
+                            .itemType(BillingItemType.TIME_ENTRY)
+                            .itemName("Bolli Teja")
+                            .resourceName("Bolli Teja")
+                            .sourceReferenceId("TMS-" + day)
+                            .quantity(new BigDecimal("11.00"))
+                            .rate(new BigDecimal("800.00"))
+                            .amount(new BigDecimal("8800.00"))
+                            .workDate(LocalDate.of(2026, 8, day))
+                            .approvalStatus("APPROVED")
+                            .build());
+        }
+        return snapshot;
+    }
+
+    private TaxCalculation tmTaxCalculation() {
+        TaxCalculation calculation = completedTaxCalculation();
+        calculation.setTaxableAmount(new BigDecimal("26400.00"));
+        calculation.setTotalTaxAmount(new BigDecimal("4752.00"));
+        calculation.setGrandTotal(new BigDecimal("31152.00"));
+        calculation.getComponents().forEach(c -> c.setTaxAmount(new BigDecimal("2376.00")));
+        return calculation;
+    }
+
+    private InvoiceResponseDto stubAndPreview() {
+        BillingConfigurationResponseDto configuration = configuration();
+        configuration.setProjectCode("WEB-001");
+        return stubAndPreview(configuration);
+    }
+
+    private InvoiceResponseDto stubAndPreview(BillingConfigurationResponseDto configuration) {
+        BillingSnapshot snapshot = tmSnapshotWithThreeTimesheets();
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(invoiceRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.empty());
+        when(taxCalculationRepository.findByBillingSnapshotId(snapshotId))
+                .thenReturn(Optional.of(tmTaxCalculation()));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration);
+
+        return invoiceService.previewInvoice(snapshotId);
+    }
+
+    // PREVIEW 1+2+3+4 — three timesheets -> three real lines, none fabricated, summing to the subtotal.
+    @Test
+    void previewInvoice_threeTimesheets_returnsThreeRealLinesSummingToSubtotal() {
+        InvoiceResponseDto preview = stubAndPreview();
+
+        assertThat(preview.getItems()).hasSize(3);
+        assertThat(preview.getItems()).extracting(i -> i.getWorkDate().getDayOfMonth())
+                .containsExactly(5, 6, 7);
+        assertThat(preview.getItems()).extracting(i -> i.getLineNumber())
+                .containsExactly(1, 2, 3);
+        preview.getItems().forEach(item -> {
+            assertThat(item.getResourceName()).isEqualTo("Bolli Teja");
+            assertThat(item.getQuantity()).isEqualByComparingTo("11.00");
+            assertThat(item.getRate()).isEqualByComparingTo("800.00");
+            assertThat(item.getAmount()).isEqualByComparingTo("8800.00");
+            assertThat(item.getSourceReferenceId()).isNotNull();
+        });
+
+        BigDecimal lineSum = preview.getItems().stream()
+                .map(i -> i.getAmount()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(lineSum).isEqualByComparingTo("26400.00");
+        assertThat(preview.getSubtotal()).isEqualByComparingTo(lineSum);
+        // no collapsed placeholder: no qty 1, no rate == total, no period-end work date
+        assertThat(preview.getItems()).noneMatch(i -> i.getQuantity().compareTo(BigDecimal.ONE) == 0);
+        assertThat(preview.getItems()).noneMatch(i -> i.getRate().compareTo(new BigDecimal("26400.00")) == 0);
+        assertThat(preview.getItems()).noneMatch(i -> i.getWorkDate().equals(preview.getBillingPeriodEnd()));
+    }
+
+    // PREVIEW 5+6+7+8 — client, project, payment term and seller data mapped; tax stays the persisted tax.
+    @Test
+    void previewInvoice_mapsClientProjectPaymentTermSellerAndPersistedTax() {
+        InvoiceResponseDto preview = stubAndPreview();
+
+        assertThat(preview.getClientName()).isEqualTo("Account Management");
+        assertThat(preview.getCountryCode()).isEqualTo("+91");
+        assertThat(preview.getEmail()).isEqualTo("client@example.com");
+        assertThat(preview.getPhone()).isEqualTo("9876543210");
+        // not stored anywhere in the system - must stay unavailable, not invented
+        assertThat(preview.getBillingAddress()).isNull();
+        assertThat(preview.getGstinOrTaxId()).isNull();
+
+        assertThat(preview.getProjectName()).isEqualTo("Website Redesign");
+        assertThat(preview.getProjectCode()).isEqualTo("WEB-001");
+        assertThat(preview.getPaymentTermName()).isEqualTo("Net 30");
+        assertThat(preview.getPaymentTermCode()).isEqualTo("NET_30");
+
+        assertThat(preview.getSellerLegalName()).isEqualTo("Paves Technologies Pvt Ltd");
+        assertThat(preview.getSellerGstin()).isEqualTo("36AAAAA0000A1Z5");
+
+        assertThat(preview.getTotalTaxAmount()).isEqualByComparingTo("4752.00");
+        assertThat(preview.getGrandTotal()).isEqualByComparingTo("31152.00");
+    }
+
+    // PREVIEW COUNTRY — the client's stored country is exposed; nothing finer-grained is invented.
+    @Test
+    void previewInvoice_clientCountryNameAndCode_areExposed() {
+        BillingConfigurationResponseDto configuration = configuration();
+        configuration.setCountryName("India");
+        configuration.setCountryCode("IN");
+
+        InvoiceResponseDto preview = stubAndPreview(configuration);
+
+        assertThat(preview.getClientCountryName()).isEqualTo("India");
+        assertThat(preview.getClientCountryCode()).isEqualTo("IN");
+        // existing field kept for backward compatibility
+        assertThat(preview.getCountryCode()).isEqualTo("IN");
+    }
+
+    @Test
+    void previewInvoice_clientWithoutCountry_exposesNullNotAnInventedLocation() {
+        BillingConfigurationResponseDto configuration = configuration();
+        configuration.setCountryName(null);
+        configuration.setCountryCode(null);
+
+        InvoiceResponseDto preview = stubAndPreview(configuration);
+
+        assertThat(preview.getClientCountryName()).isNull();
+        assertThat(preview.getClientCountryCode()).isNull();
+        assertThat(preview.getBillingAddress()).isNull();
+    }
+
+    // The seller is in Hyderabad; that must never leak into any client location field.
+    @Test
+    void previewInvoice_sellerHyderabad_isNotClientLocation() {
+        BillingConfigurationResponseDto configuration = configuration();
+        configuration.setCountryName("India");
+        configuration.setCountryCode("IN");
+
+        InvoiceResponseDto preview = stubAndPreview(configuration);
+
+        assertThat(preview.getSellerCity()).isEqualTo("Hyderabad");
+        assertThat(preview.getClientCountryName()).isEqualTo("India");
+        assertThat(preview.getClientCountryCode()).isEqualTo("IN");
+        assertThat(preview.getBillingAddress()).isNull();
+        assertThat(preview.getClientCountryName()).doesNotContain("Hyderabad");
+        // tax-calculation data is untouched and independent of the display country
+        assertThat(preview.getTaxRegionCode()).isEqualTo(tmSnapshotWithThreeTimesheets().getTaxRegionCode());
+        assertThat(preview.getDestinationTaxJurisdictionCode())
+                .isEqualTo(tmSnapshotWithThreeTimesheets().getDestinationTaxJurisdictionCode());
+    }
+
+    // PREVIEW 9 — pre-generation fields are unavailable, not fabricated, and the response says so.
+    @Test
+    void previewInvoice_preGeneration_leavesInvoiceFieldsNullAndPersistsNothing() {
+        InvoiceResponseDto preview = stubAndPreview();
+
+        assertThat(preview.getGenerated()).isFalse();
+        assertThat(preview.getInvoiceId()).isNull();
+        assertThat(preview.getInvoiceNumber()).isNull();
+        assertThat(preview.getStatus()).isNull();
+        assertThat(preview.getInvoiceDate()).isNull();
+        assertThat(preview.getDueDate()).isNull();
+        assertThat(preview.getGeneratedAt()).isNull();
+
+        verify(invoiceRepository, never()).save(any());
+        verify(billingSnapshotRepository, never()).save(any());
+    }
+
+    // PREVIEW 10 — an existing invoice is returned as generated, with numbered lines.
+    @Test
+    void previewInvoice_existingInvoice_returnsGeneratedInvoice() {
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        invoice.getItems().add(InvoiceItem.builder()
+                .itemType(BillingItemType.TIME_ENTRY)
+                .itemName("Bolli Teja")
+                .quantity(new BigDecimal("11.00"))
+                .rate(new BigDecimal("800.00"))
+                .amount(new BigDecimal("8800.00"))
+                .build());
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(taxCompletedSnapshot()));
+        when(invoiceRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(invoice));
+
+        InvoiceResponseDto response = invoiceService.previewInvoice(snapshotId);
+
+        assertThat(response.getGenerated()).isTrue();
+        assertThat(response.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+        assertThat(response.getStatus()).isEqualTo(InvoiceStatus.GENERATED);
+        assertThat(response.getItems()).hasSize(1);
+        assertThat(response.getItems().get(0).getLineNumber()).isEqualTo(1);
+        verifyNoInteractions(taxCalculationRepository);
+    }
+
+    // PREVIEW — a snapshot that has not completed tax calculation has no preview.
+    @Test
+    void previewInvoice_snapshotNotTaxCompleted_isRejected() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setStatus(BillingSnapshotStatus.READY_FOR_TAX);
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(invoiceRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> invoiceService.previewInvoice(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class);
+    }
+
+    // GENERATION — one invoice line per snapshot item, amounts copied unchanged (existing behavior).
+    @Test
+    void generateInvoice_threeTimesheets_createsThreeLinesCopiedFromSnapshotItems() {
+        BillingSnapshot snapshot = tmSnapshotWithThreeTimesheets();
+        TaxCalculation taxCalculation = tmTaxCalculation();
+        stubSnapshotInvoiceGeneration(snapshot, taxCalculation);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(configuration());
+        when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
+        when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceResponseDto response = invoiceService.generateInvoice(snapshotId);
+
+        assertThat(response.getGenerated()).isTrue();
+        assertThat(response.getItems()).hasSize(3);
+        assertThat(response.getItems()).extracting(i -> i.getLineNumber()).containsExactly(1, 2, 3);
+        assertThat(response.getItems().stream().map(i -> i.getAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add)).isEqualByComparingTo("26400.00");
+        assertThat(response.getSubtotal()).isEqualByComparingTo("26400.00");
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("4752.00");
+    }
+
+    // =====================================================================
+    // Invoice Generation workspace — TAX_COMPLETED candidates + invoices
+    // =====================================================================
+
+    private com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceResponseDto
+    workspaceWithCandidate(List<Invoice> invoices) {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        snapshot.setBillingType("Time & Material");
+
+        when(invoiceRepository.findAllByOrderByGeneratedAtDesc()).thenReturn(invoices);
+        when(billingSnapshotRepository.findAllById(any())).thenReturn(List.of());
+        when(billingSnapshotRepository.findAllByStatusOrderByCreatedDateDesc(BillingSnapshotStatus.TAX_COMPLETED))
+                .thenReturn(List.of(snapshot));
+        lenient().when(taxCalculationRepository.findByBillingSnapshotId(snapshotId))
+                .thenReturn(Optional.of(completedTaxCalculation()));
+        lenient().when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(configuration());
+
+        return invoiceService.getInvoiceGenerationWorkspace();
+    }
+
+    // WORKSPACE CASE 1+2 — TAX_COMPLETED snapshot with no invoice is a READY_FOR_INVOICE candidate.
+    @Test
+    void getInvoiceGenerationWorkspace_taxCompletedWithoutInvoice_isReadyForInvoice() {
+        var response = workspaceWithCandidate(List.of());
+
+        assertThat(response.getRows()).hasSize(1);
+        var row = response.getRows().get(0);
+        assertThat(row.getWorkspaceStatus()).isEqualTo(
+                com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus.READY_FOR_INVOICE);
+        assertThat(row.getSnapshotId()).isEqualTo(snapshotId);
+        assertThat(row.getSnapshotStatus()).isEqualTo(BillingSnapshotStatus.TAX_COMPLETED);
+        assertThat(row.getBillingType()).isEqualTo("Time & Material");
+        assertThat(row.getCurrencyCode()).isEqualTo("USD");
+        assertThat(row.getAmount()).isEqualByComparingTo("5500.00");
+        assertThat(row.getTotalTaxAmount()).isEqualByComparingTo("990.00");
+        assertThat(row.getGrandTotal()).isEqualByComparingTo("6490.00");
+        assertThat(row.getInvoiceId()).isNull();
+        assertThat(row.getInvoiceNumber()).isNull();
+    }
+
+    // WORKSPACE CASE 8 — a candidate is never counted as invoiced.
+    @Test
+    void getInvoiceGenerationWorkspace_candidateIsNotCountedAsInvoiced() {
+        var summary = workspaceWithCandidate(List.of()).getSummary();
+
+        assertThat(summary.getReadyForInvoiceCount()).isEqualTo(1);
+        assertThat(summary.getReadyForInvoiceAmount()).isEqualByComparingTo("6490.00");
+        assertThat(summary.getGeneratedCount()).isZero();
+        assertThat(summary.getInvoicedCount()).isZero();
+        assertThat(summary.getTotalInvoicedAmount()).isEqualByComparingTo("0");
+    }
+
+    // WORKSPACE CASE 3 — TAX_COMPLETED snapshot that already has an invoice returns the invoice, not a candidate.
+    @Test
+    void getInvoiceGenerationWorkspace_taxCompletedWithExistingInvoice_returnsInvoiceNotCandidate() {
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+
+        var response = workspaceWithCandidate(List.of(invoice));
+
+        assertThat(response.getRows()).hasSize(1);
+        var row = response.getRows().get(0);
+        assertThat(row.getInvoiceId()).isEqualTo(invoice.getInvoiceId());
+        assertThat(row.getInvoiceNumber()).isEqualTo("INV-20260908170000");
+        assertThat(response.getSummary().getReadyForInvoiceCount()).isZero();
+    }
+
+    // WORKSPACE CASES 4-7 — GENERATED / PENDING_APPROVAL / APPROVED / REJECTED invoices map 1:1; INVOICED snapshot status carried.
+    @Test
+    void getInvoiceGenerationWorkspace_existingInvoices_mapStatusAndCountKpis() {
+        Invoice generated = persistedInvoice("INV-1", "BS-1", UUID.randomUUID(), "A", "P1");
+        Invoice pending = persistedInvoice("INV-2", "BS-2", UUID.randomUUID(), "A", "P2");
+        pending.setStatus(InvoiceStatus.PENDING_APPROVAL);
+        Invoice approved = persistedInvoice("INV-3", "BS-3", UUID.randomUUID(), "A", "P3");
+        approved.setStatus(InvoiceStatus.APPROVED);
+        Invoice rejected = persistedInvoice("INV-4", "BS-4", UUID.randomUUID(), "A", "P4");
+        rejected.setStatus(InvoiceStatus.REJECTED);
+
+        BillingSnapshot invoicedSnapshot = taxCompletedSnapshot();
+        invoicedSnapshot.setId(generated.getBillingSnapshotId());
+        invoicedSnapshot.setStatus(BillingSnapshotStatus.INVOICED);
+
+        when(invoiceRepository.findAllByOrderByGeneratedAtDesc())
+                .thenReturn(List.of(generated, pending, approved, rejected));
+        when(billingSnapshotRepository.findAllById(any())).thenReturn(List.of(invoicedSnapshot));
+        when(billingSnapshotRepository.findAllByStatusOrderByCreatedDateDesc(BillingSnapshotStatus.TAX_COMPLETED))
+                .thenReturn(List.of());
+
+        var response = invoiceService.getInvoiceGenerationWorkspace();
+
+        assertThat(response.getRows()).extracting(r -> r.getWorkspaceStatus().name())
+                .containsExactly("GENERATED", "PENDING_APPROVAL", "APPROVED", "REJECTED");
+        assertThat(response.getRows().get(0).getSnapshotStatus()).isEqualTo(BillingSnapshotStatus.INVOICED);
+        assertThat(response.getRows().get(0).getInvoiceStatus()).isEqualTo(InvoiceStatus.GENERATED);
+
+        var summary = response.getSummary();
+        assertThat(summary.getReadyForInvoiceCount()).isZero();
+        assertThat(summary.getGeneratedCount()).isEqualTo(1);
+        assertThat(summary.getPendingApprovalCount()).isEqualTo(1);
+        assertThat(summary.getApprovedCount()).isEqualTo(1);
+        assertThat(summary.getRejectedCount()).isEqualTo(1);
+        assertThat(summary.getInvoicedCount()).isEqualTo(4);
+        // rejected invoice excluded from the invoiced amount
+        assertThat(summary.getTotalInvoicedAmount()).isEqualByComparingTo("19470.00");
+    }
+
+    // WORKSPACE — strictly read-only: nothing is saved and no snapshot status changes.
+    @Test
+    void getInvoiceGenerationWorkspace_isReadOnly() {
+        workspaceWithCandidate(List.of());
+
+        verify(invoiceRepository, never()).save(any());
+        verify(billingSnapshotRepository, never()).save(any());
+        verify(companyProfileService, never()).getActive();
+    }
+
+    // WORKSPACE — schedule-based (e.g. Recurring) TAX_CALCULATED occurrences have no snapshot and are candidates too.
+    private void stubWorkspace(List<Invoice> invoices, List<BillingSnapshot> taxCompletedSnapshots,
+                               List<BillingSchedule> taxCalculatedSchedules) {
+        when(invoiceRepository.findAllByOrderByGeneratedAtDesc()).thenReturn(invoices);
+        when(billingSnapshotRepository.findAllById(any())).thenReturn(List.of());
+        when(billingSnapshotRepository.findAllByStatusOrderByCreatedDateDesc(BillingSnapshotStatus.TAX_COMPLETED))
+                .thenReturn(taxCompletedSnapshots);
+        when(billingScheduleRepository.findByPeriodStatusAndTaxStatusAndIsActiveTrue(
+                BillingPeriodStatus.TAX_CALCULATED, BillingPeriodStatus.TAX_CALCULATED))
+                .thenReturn(taxCalculatedSchedules);
+        lenient().when(taxCalculationRepository.findByBillingSnapshotId(snapshotId))
+                .thenReturn(Optional.of(completedTaxCalculation()));
+        lenient().when(billingSnapshotRepository
+                .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(any(), any(), any()))
+                .thenReturn(Optional.empty());
+    }
+
+    private BillingSchedule recurringScheduleCandidate(String billingTypeName) {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        lenient().when(taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(completedScheduleTaxCalculation(schedule.getBillingScheduleId())));
+        lenient().when(billingConfigurationService.getBillingConfiguration(
+                schedule.getBillingConfiguration().getBillingConfigurationId()))
+                .thenReturn(BillingConfigurationResponseDto.builder()
+                        .clientName("Aditya Teja").projectName("Card Integration")
+                        .billingTypeName(billingTypeName).currencyCode("USD").build());
+        return schedule;
+    }
+
+    @Test
+    void getInvoiceGenerationWorkspace_tmSnapshotAndRecurringSchedule_bothReadyForInvoice() {
+        BillingSnapshot tm = taxCompletedSnapshot();
+        tm.setBillingType("Time & Material");
+        lenient().when(billingConfigurationService.getBillingConfiguration(any()))
+                .thenReturn(configuration());
+        BillingSchedule recurring = recurringScheduleCandidate("Recurring");
+        stubWorkspace(List.of(), List.of(tm), List.of(recurring));
+
+        var response = invoiceService.getInvoiceGenerationWorkspace();
+
+        assertThat(response.getRows()).hasSize(2);
+        assertThat(response.getRows()).extracting(r -> r.getWorkspaceStatus().name())
+                .containsOnly("READY_FOR_INVOICE");
+        assertThat(response.getRows()).extracting(r -> r.getBillingType())
+                .containsExactlyInAnyOrder("Time & Material", "Recurring");
+        var recurringRow = response.getRows().stream()
+                .filter(r -> r.getBillingScheduleId() != null).findFirst().orElseThrow();
+        assertThat(recurringRow.getBillingScheduleId()).isEqualTo(recurring.getBillingScheduleId());
+        assertThat(recurringRow.getClientName()).isEqualTo("Aditya Teja");
+        assertThat(recurringRow.getGrandTotal()).isEqualByComparingTo("2950.00");
+        assertThat(response.getSummary().getReadyForInvoiceCount()).isEqualTo(2);
+        assertThat(response.getSummary().getReadyForInvoiceAmount()).isEqualByComparingTo("9440.00");
+        assertThat(response.getSummary().getInvoicedCount()).isZero();
+    }
+
+    @Test
+    void getInvoiceGenerationWorkspace_scheduleBillingTypeDoesNotAffectEligibility() {
+        List<BillingSchedule> schedules = List.of(
+                recurringScheduleCandidate("Recurring"),
+                recurringScheduleCandidate("Fixed Price / Milestone"),
+                recurringScheduleCandidate("Retainer / Subscription"));
+        stubWorkspace(List.of(), List.of(), schedules);
+
+        var response = invoiceService.getInvoiceGenerationWorkspace();
+
+        assertThat(response.getRows()).hasSize(3);
+        assertThat(response.getSummary().getReadyForInvoiceCount()).isEqualTo(3);
+    }
+
+    @Test
+    void getInvoiceGenerationWorkspace_scheduleWithExistingInvoice_isNotDuplicatedAsCandidate() {
+        BillingSchedule schedule = recurringScheduleCandidate("Recurring");
+        Invoice invoice = persistedInvoice("INV-9", null, null, "Aditya Teja", "Card Integration");
+        invoice.setBillingScheduleId(schedule.getBillingScheduleId());
+        stubWorkspace(List.of(invoice), List.of(), List.of(schedule));
+
+        var response = invoiceService.getInvoiceGenerationWorkspace();
+
+        assertThat(response.getRows()).hasSize(1);
+        assertThat(response.getRows().get(0).getInvoiceId()).isEqualTo(invoice.getInvoiceId());
+        assertThat(response.getSummary().getReadyForInvoiceCount()).isZero();
+    }
+
+    @Test
+    void getInvoiceGenerationWorkspace_scheduleAlreadyFlaggedInvoiced_isNotACandidate() {
+        BillingSchedule schedule = recurringScheduleCandidate("Recurring");
+        schedule.setIsInvoiced(true);
+        stubWorkspace(List.of(), List.of(), List.of(schedule));
+
+        assertThat(invoiceService.getInvoiceGenerationWorkspace().getRows()).isEmpty();
+    }
+
+    @Test
+    void getInvoiceGenerationWorkspace_scheduleCoveredBySnapshot_isNotDuplicated() {
+        BillingSnapshot tm = taxCompletedSnapshot();
+        BillingSchedule schedule = recurringScheduleCandidate("Time & Material");
+        stubWorkspace(List.of(), List.of(tm), List.of(schedule));
+        when(billingSnapshotRepository
+                .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                        schedule.getBillingConfiguration().getBillingConfigurationId(),
+                        schedule.getPeriodStartDate(), schedule.getPeriodEndDate()))
+                .thenReturn(Optional.of(tm));
+
+        var response = invoiceService.getInvoiceGenerationWorkspace();
+
+        assertThat(response.getRows()).hasSize(1);
+        assertThat(response.getRows().get(0).getSnapshotId()).isEqualTo(snapshotId);
+        assertThat(response.getSummary().getReadyForInvoiceCount()).isEqualTo(1);
+    }
+
+    // Only completed-tax stages are queried; READY_FOR_TAX / UPCOMING / PENDING are never requested.
+    @Test
+    void getInvoiceGenerationWorkspace_queriesOnlyTaxCompletedStages() {
+        stubWorkspace(List.of(), List.of(), List.of());
+
+        invoiceService.getInvoiceGenerationWorkspace();
+
+        verify(billingSnapshotRepository).findAllByStatusOrderByCreatedDateDesc(BillingSnapshotStatus.TAX_COMPLETED);
+        verify(billingSnapshotRepository, never())
+                .findAllByStatusOrderByCreatedDateDesc(BillingSnapshotStatus.READY_FOR_TAX);
+        verify(billingScheduleRepository).findByPeriodStatusAndTaxStatusAndIsActiveTrue(
+                BillingPeriodStatus.TAX_CALCULATED, BillingPeriodStatus.TAX_CALCULATED);
+        verify(billingScheduleRepository, never()).findByPeriodStatusAndTaxStatusAndIsActiveTrue(
+                BillingPeriodStatus.TAX_PENDING, BillingPeriodStatus.TAX_PENDING);
     }
 
     // =====================================================================

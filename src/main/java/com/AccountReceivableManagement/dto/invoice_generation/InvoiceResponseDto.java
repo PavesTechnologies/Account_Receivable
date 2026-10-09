@@ -32,9 +32,33 @@ public class InvoiceResponseDto {
 
     private UUID clientId;
 
+    /**
+     * {@code true} once an Invoice has been generated and persisted;
+     * {@code false} for a pre-generation preview. Lets a consumer tell
+     * "not yet generated" (invoice number, dates and status are null) apart
+     * from a mapping defect.
+     */
+    private Boolean generated;
+
+    /**
+     * Project code from the billing configuration. Populated on the
+     * pre-generation preview only; the persisted Invoice does not store it.
+     */
+    private String projectCode;
+
     private String clientName;
 
     private String countryCode;
+
+    /**
+     * Client country as stored on the Client (the only client location data
+     * available - no city/state/address). Populated on the pre-generation
+     * preview only; display data, never used for tax determination. Not the
+     * seller location.
+     */
+    private String clientCountryName;
+
+    private String clientCountryCode;
 
     private String billingAddress;
 
@@ -85,6 +109,16 @@ public class InvoiceResponseDto {
     private String sellerPhone;
 
     private String sellerLogoReference;
+
+    /**
+     * Saved on the invoice at generation; on a preview (not yet generated)
+     * these show the currently configured defaults that generation will copy.
+     */
+    private String invoiceNotes;
+
+    private String termsAndConditions;
+
+    private String paymentInstructions;
 
     /**
      * Tax context frozen on the invoice at generation - the Tax Region code,

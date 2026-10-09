@@ -55,6 +55,12 @@ class BillingOccurrenceServiceImplTest {
     @Mock
     private BillingOccurrenceTransactionService billingOccurrenceTransactionService;
 
+    @Mock
+    private BillingMilestonePlanRepository billingMilestonePlanRepository;
+
+    @Mock
+    private BillingPaymentEntryRepository billingPaymentEntryRepository;
+
     @InjectMocks
     private BillingOccurrenceServiceImpl billingOccurrenceService;
 
@@ -971,6 +977,212 @@ class BillingOccurrenceServiceImplTest {
 
         verify(billingScheduleRepository, never()).deleteAll(any());
         verify(billingScheduleRepository, never()).saveAll(any());
+    }
+
+    // =========================================================
+    // MILESTONE PLAN - approval-time generation / reconciliation
+    // =========================================================
+
+    private BillingMilestonePlan milestonePlan() {
+        return BillingMilestonePlan.builder()
+                .milestonePlanId(UUID.randomUUID())
+                .billingConfiguration(billingConfiguration)
+                .isActive(true)
+                .build();
+    }
+
+    private BillingPaymentEntry paymentEntry(BillingMilestonePlan plan, int sequence, LocalDate billingDate, String amount) {
+        return BillingPaymentEntry.builder()
+                .paymentEntryId(UUID.randomUUID())
+                .milestonePlan(plan)
+                .sequence(sequence)
+                .amount(new BigDecimal(amount))
+                .billingDate(billingDate)
+                .isActive(true)
+                .build();
+    }
+
+    @Test
+    void milestoneGeneration_newPaymentEntry_createsOneScheduledOccurrence() {
+        BillingMilestonePlan plan = milestonePlan();
+        LocalDate date = LocalDate.of(2026, 10, 15);
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                billingConfiguration, date, date)).thenReturn(Optional.empty());
+
+        billingOccurrenceService.generateOccurrencesForMilestonePlan(
+                billingConfiguration, plan, List.of(paymentEntry(plan, 1, date, "5000")));
+
+        org.mockito.ArgumentCaptor<List<BillingSchedule>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(billingScheduleRepository).saveAll(captor.capture());
+        assertThat(captor.getValue()).hasSize(1);
+        BillingSchedule created = captor.getValue().get(0);
+        assertThat(created.getBillingDate()).isEqualTo(date);
+        assertThat(created.getBillingAmount()).isEqualByComparingTo("5000");
+        assertThat(created.getPeriodStatus()).isEqualTo(BillingPeriodStatus.SCHEDULED);
+        assertThat(created.getTaxStatus()).isEqualTo(BillingPeriodStatus.PENDING);
+        assertThat(created.getIsActive()).isTrue();
+    }
+
+    @Test
+    void milestoneGeneration_activeOccurrenceAlreadyExists_createsNoDuplicate() {
+        BillingMilestonePlan plan = milestonePlan();
+        LocalDate date = LocalDate.of(2026, 10, 15);
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                billingConfiguration, date, date))
+                .thenReturn(Optional.of(BillingSchedule.builder().isActive(true).build()));
+
+        billingOccurrenceService.generateOccurrencesForMilestonePlan(
+                billingConfiguration, plan, List.of(paymentEntry(plan, 1, date, "5000")));
+
+        verify(billingScheduleRepository, never()).saveAll(any());
+        verify(billingScheduleRepository, never()).save(any());
+    }
+
+    // The unique key (config, start, end) also covers soft-deleted rows: reactivate, never insert a second row.
+    @Test
+    void milestoneGeneration_inactiveOccurrenceForSameDate_isReactivatedNotDuplicated() {
+        BillingMilestonePlan plan = milestonePlan();
+        LocalDate date = LocalDate.of(2026, 10, 15);
+        BillingSchedule inactive = BillingSchedule.builder()
+                .billingScheduleId(UUID.randomUUID())
+                .isActive(false)
+                .isInvoiced(false)
+                .periodStatus(BillingPeriodStatus.CANCELLED)
+                .billingAmount(new BigDecimal("1"))
+                .build();
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                billingConfiguration, date, date)).thenReturn(Optional.of(inactive));
+
+        billingOccurrenceService.generateOccurrencesForMilestonePlan(
+                billingConfiguration, plan, List.of(paymentEntry(plan, 2, date, "7500")));
+
+        verify(billingScheduleRepository, never()).saveAll(any());
+        verify(billingScheduleRepository).save(inactive);
+        assertThat(inactive.getIsActive()).isTrue();
+        assertThat(inactive.getPeriodStatus()).isEqualTo(BillingPeriodStatus.SCHEDULED);
+        assertThat(inactive.getTaxStatus()).isEqualTo(BillingPeriodStatus.PENDING);
+        assertThat(inactive.getBillingAmount()).isEqualByComparingTo("7500");
+        assertThat(inactive.getPeriodNumber()).isEqualTo(2);
+    }
+
+    @Test
+    void milestoneGeneration_inactiveInvoicedOccurrence_isRejectedWithBusinessError() {
+        BillingMilestonePlan plan = milestonePlan();
+        LocalDate date = LocalDate.of(2026, 10, 15);
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                billingConfiguration, date, date))
+                .thenReturn(Optional.of(BillingSchedule.builder().isActive(false).isInvoiced(true).build()));
+
+        assertThatThrownBy(() -> billingOccurrenceService.generateOccurrencesForMilestonePlan(
+                billingConfiguration, plan, List.of(paymentEntry(plan, 1, date, "5000"))))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("invoiced billing occurrence already exists");
+
+        verify(billingScheduleRepository, never()).saveAll(any());
+    }
+
+    // Two payment entries on one date are both "new" (nothing persisted yet), so the DB lookup cannot
+    // see the clash. They must be rejected up front, with nothing inserted - not collide on the unique key.
+    @Test
+    void milestoneGeneration_twoEntriesOnSameDate_isRejectedBeforeAnyInsert() {
+        BillingMilestonePlan plan = milestonePlan();
+        LocalDate date = LocalDate.of(2026, 10, 7);
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                billingConfiguration, date, date)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> billingOccurrenceService.generateOccurrencesForMilestonePlan(
+                billingConfiguration, plan,
+                List.of(paymentEntry(plan, 1, date, "5000"), paymentEntry(plan, 2, date, "2500"))))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("2026-10-07")
+                .hasMessageContaining("only one billing occurrence");
+
+        verify(billingScheduleRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void milestoneGeneration_distinctDates_insertsEachOnceAndFlushes() {
+        BillingMilestonePlan plan = milestonePlan();
+        LocalDate d1 = LocalDate.of(2026, 10, 7);
+        LocalDate d2 = LocalDate.of(2026, 11, 7);
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                eq(billingConfiguration), any(), any())).thenReturn(Optional.empty());
+
+        billingOccurrenceService.generateOccurrencesForMilestonePlan(
+                billingConfiguration, plan,
+                List.of(paymentEntry(plan, 1, d1, "5000"), paymentEntry(plan, 2, d2, "2500")));
+
+        org.mockito.ArgumentCaptor<List<BillingSchedule>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(billingScheduleRepository, times(1)).saveAll(captor.capture());
+        assertThat(captor.getValue()).extracting(BillingSchedule::getPeriodStartDate).containsExactly(d1, d2);
+        verify(billingScheduleRepository).flush();
+    }
+
+    @Test
+    void milestoneGeneration_paymentEntryWithoutBillingDate_failsWithBusinessError() {
+        BillingMilestonePlan plan = milestonePlan();
+
+        assertThatThrownBy(() -> billingOccurrenceService.generateOccurrencesForMilestonePlan(
+                billingConfiguration, plan, List.of(paymentEntry(plan, 1, null, "5000"))))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Billing date is required for all payment entries");
+    }
+
+    @Test
+    void milestoneReconcile_reapprovalWithExistingOccurrence_createsNoSecondOccurrence() {
+        billingConfiguration.setBillingType(BillingTypeMaster.builder().billingTypeName("Milestone Plan").build());
+        BillingMilestonePlan plan = milestonePlan();
+        LocalDate date = LocalDate.of(2026, 10, 15);
+        BillingPaymentEntry entry = paymentEntry(plan, 1, date, "5000");
+        BillingSchedule taxPending = BillingSchedule.builder()
+                .isActive(true)
+                .periodStatus(BillingPeriodStatus.TAX_PENDING)
+                .build();
+
+        when(billingConfigurationRepository.findById(billingConfigId)).thenReturn(Optional.of(billingConfiguration));
+        when(billingMilestonePlanRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(plan));
+        when(billingPaymentEntryRepository.findByMilestonePlanAndIsActiveTrueOrderBySequenceAsc(plan))
+                .thenReturn(List.of(entry));
+        when(billingScheduleRepository.findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(billingConfiguration))
+                .thenReturn(List.of(taxPending));
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                billingConfiguration, date, date)).thenReturn(Optional.of(taxPending));
+
+        billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
+
+        verify(billingScheduleRepository, never()).deleteAll(any());
+        verify(billingScheduleRepository, never()).saveAll(any());
+    }
+
+    // =========================================================
+    // APPROVAL - due occurrences become TAX_PENDING atomically
+    // =========================================================
+
+    @Test
+    void promoteDueOccurrences_dueScheduledBecomesTaxPending_futureStaysScheduled() {
+        BillingSchedule due = BillingSchedule.builder()
+                .billingDate(LocalDate.now().minusDays(1))
+                .periodStatus(BillingPeriodStatus.SCHEDULED)
+                .taxStatus(BillingPeriodStatus.PENDING)
+                .build();
+        BillingSchedule future = BillingSchedule.builder()
+                .billingDate(LocalDate.now().plusDays(10))
+                .periodStatus(BillingPeriodStatus.SCHEDULED)
+                .taxStatus(BillingPeriodStatus.PENDING)
+                .build();
+        when(billingConfigurationRepository.findById(billingConfigId)).thenReturn(Optional.of(billingConfiguration));
+        when(billingScheduleRepository.findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(billingConfiguration))
+                .thenReturn(List.of(due, future));
+
+        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
+
+        assertThat(due.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
+        assertThat(due.getTaxStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
+        assertThat(future.getPeriodStatus()).isEqualTo(BillingPeriodStatus.SCHEDULED);
+        assertThat(future.getTaxStatus()).isEqualTo(BillingPeriodStatus.PENDING);
+        verify(billingScheduleRepository, times(1)).save(due);
+        verify(billingScheduleRepository, never()).save(future);
     }
 
     // =========================================================

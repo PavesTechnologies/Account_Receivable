@@ -390,22 +390,47 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
          * 1. For new approvals: generate new occurrences
          * 2. For re-approvals: reconcile existing occurrences with new configuration
          */
+        /*
+         * Mandatory and atomic with the approval. A failure here must never
+         * be swallowed: the failing repository call has already marked this
+         * transaction rollback-only, so catching it would only turn the real
+         * cause into "Transaction silently rolled back..." at commit while
+         * leaving the caller no way to see why. Let it propagate so the
+         * approval and every occurrence change roll back together, and
+         * report the real cause as a business error.
+         */
         try {
             billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(
+                    saved.getBillingConfigurationId());
+
+            billingOccurrenceService.promoteDueOccurrencesToTaxPending(
                     saved.getBillingConfigurationId());
 
             log.info(
                     "Billing occurrences reconciled successfully for configuration {}",
                     saved.getBillingConfigurationId());
 
-        } catch (Exception e) {
+        } catch (ValidationException | ResourceNotFoundException e) {
+            throw e;
+
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
             log.error(
-                    "Failed to reconcile billing occurrences for configuration {}",
+                    "Approval of configuration {} rolled back: data integrity violation while generating billing occurrences: {}",
+                    saved.getBillingConfigurationId(),
+                    e.getMostSpecificCause().getMessage(),
+                    e);
+            throw new GlobalExceptionHandler.DuplicateResourceException(
+                    "Billing Configuration could not be approved because its billing occurrences conflict with existing data: "
+                            + e.getMostSpecificCause().getMessage());
+
+        } catch (RuntimeException e) {
+            log.error(
+                    "Approval of configuration {} rolled back: billing occurrences could not be generated",
                     saved.getBillingConfigurationId(),
                     e);
-
-            // Don't fail the approval - log and continue
-            // The configuration is approved, but occurrence reconciliation failed
+            throw new ValidationException(
+                    "Billing Configuration could not be approved because its billing occurrences could not be generated: "
+                            + e.getMessage());
         }
 
         return mapToResponse(saved);
@@ -503,6 +528,11 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 .countryCode(
                         configuration.getClient() != null
                                 ? configuration.getClient().getCountryCode()
+                                : null)
+
+                .countryName(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getCountryName()
                                 : null)
 
                 .email(

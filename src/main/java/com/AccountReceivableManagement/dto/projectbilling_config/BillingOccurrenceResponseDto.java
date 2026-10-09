@@ -57,6 +57,11 @@ public class BillingOccurrenceResponseDto {
     private String currencyCode;
     private String taxRegionName;
     private String taxRegionCode;
+
+    // Client country as stored on the Client entity (the only client location data).
+    // Display data only - not used for tax determination, never project or seller location.
+    private String clientCountryName;
+    private String clientCountryCode;
     private LocalDate projectStartDate;
     private LocalDate projectEndDate;
 }
