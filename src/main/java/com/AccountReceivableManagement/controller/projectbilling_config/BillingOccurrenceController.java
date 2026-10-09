@@ -235,6 +235,9 @@ public class BillingOccurrenceController {
                         .currencyCode(configDto.getCurrencyCode())
                         .taxRegionName(configDto.getTaxRegionName())
                         .taxRegionCode(configDto.getTaxRegionCode())
+                        // Client.countryName via BillingConfiguration.client
+                        .clientCountryName(configDto.getCountryName())
+                        .clientCountryCode(configDto.getCountryCode())
                         .projectStartDate(configDto.getProjectStartDate())
                         .projectEndDate(configDto.getProjectEndDate());
             } catch (Exception e) {

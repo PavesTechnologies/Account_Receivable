@@ -26,6 +26,9 @@ public class InvoiceGenerationWorkspaceRowDto {
 
     private UUID snapshotId;
 
+    /** Set for candidates that come from a TAX_CALCULATED billing schedule (no snapshot exists for them). */
+    private UUID billingScheduleId;
+
     private String snapshotNumber;
 
     private BillingSnapshotStatus snapshotStatus;

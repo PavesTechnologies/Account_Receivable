@@ -206,6 +206,22 @@ public class Invoice {
     private String sellerLogoReference;
 
     /**
+     * Notes, Terms & Conditions and Payment Instructions frozen at
+     * generation from the Company Profile defaults. Never re-derived, so
+     * later changes to the defaults do not alter an existing invoice. Null
+     * on invoices generated before these columns existed or when no
+     * default was configured.
+     */
+    @Column(name = "invoice_notes", columnDefinition = "TEXT")
+    private String invoiceNotes;
+
+    @Column(name = "terms_and_conditions", columnDefinition = "TEXT")
+    private String termsAndConditions;
+
+    @Column(name = "payment_instructions", columnDefinition = "TEXT")
+    private String paymentInstructions;
+
+    /**
      * Tax context the invoice's tax was calculated under, frozen at
      * generation: the Tax Region code, and the source (supplier) and
      * destination (customer) tax jurisdiction codes whose comparison chose

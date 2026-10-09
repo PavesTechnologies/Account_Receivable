@@ -513,6 +513,11 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 ? configuration.getClient().getCountryCode()
                                 : null)
 
+                .countryName(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getCountryName()
+                                : null)
+
                 .email(
                         configuration.getClient() != null
                                 ? configuration.getClient().getEmail()

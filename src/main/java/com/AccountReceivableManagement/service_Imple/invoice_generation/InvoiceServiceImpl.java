@@ -289,6 +289,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .sellerEmail(companyProfile.getEmail())
                         .sellerPhone(companyProfile.getPhone())
                         .sellerLogoReference(companyProfile.getLogoReference())
+                        .invoiceNotes(companyProfile.getDefaultInvoiceNotes())
+                        .termsAndConditions(companyProfile.getDefaultTermsAndConditions())
+                        .paymentInstructions(companyProfile.getDefaultPaymentInstructions())
                         .taxRegionCode(snapshot.getTaxRegionCode())
                         .sourceTaxJurisdictionCode(
                                 snapshot.getSourceTaxJurisdictionCode()
@@ -546,6 +549,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .sellerEmail(companyProfile.getEmail())
                         .sellerPhone(companyProfile.getPhone())
                         .sellerLogoReference(companyProfile.getLogoReference())
+                        .invoiceNotes(companyProfile.getDefaultInvoiceNotes())
+                        .termsAndConditions(companyProfile.getDefaultTermsAndConditions())
+                        .paymentInstructions(companyProfile.getDefaultPaymentInstructions())
                         // The schedule tax path does not persist the jurisdictions
                         // it compared, so only the Tax Region is frozen here.
                         .taxRegionCode(configuration.getTaxRegionCode())
@@ -727,6 +733,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .clientId(snapshot.getClientId())
                 .clientName(configuration.getClientName())
                 .countryCode(configuration.getCountryCode())
+                .clientCountryName(configuration.getCountryName())
+                .clientCountryCode(configuration.getCountryCode())
                 .email(configuration.getEmail())
                 .phone(configuration.getPhone())
                 .projectId(snapshot.getProjectId())
@@ -748,6 +756,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .sellerEmail(companyProfile != null ? companyProfile.getEmail() : null)
                 .sellerPhone(companyProfile != null ? companyProfile.getPhone() : null)
                 .sellerLogoReference(companyProfile != null ? companyProfile.getLogoReference() : null)
+                .invoiceNotes(companyProfile != null ? companyProfile.getDefaultInvoiceNotes() : null)
+                .termsAndConditions(companyProfile != null ? companyProfile.getDefaultTermsAndConditions() : null)
+                .paymentInstructions(companyProfile != null ? companyProfile.getDefaultPaymentInstructions() : null)
                 .taxRegionCode(snapshot.getTaxRegionCode())
                 .sourceTaxJurisdictionCode(snapshot.getSourceTaxJurisdictionCode())
                 .destinationTaxJurisdictionCode(snapshot.getDestinationTaxJurisdictionCode())
@@ -863,6 +874,45 @@ public class InvoiceServiceImpl implements InvoiceService {
             }
         }
 
+        // Candidates without a snapshot: schedules whose tax calculation is
+        // complete (the schedule-based flow never creates a BillingSnapshot).
+        // Eligibility is the lifecycle stage only - not the billing type.
+        java.util.Set<UUID> invoicedScheduleIds =
+                invoices.stream()
+                        .map(Invoice::getBillingScheduleId)
+                        .filter(java.util.Objects::nonNull)
+                        .collect(Collectors.toSet());
+
+        for (BillingSchedule schedule
+                : billingScheduleRepository
+                .findByPeriodStatusAndTaxStatusAndIsActiveTrue(
+                        BillingPeriodStatus.TAX_CALCULATED,
+                        BillingPeriodStatus.TAX_CALCULATED)) {
+
+            if (Boolean.TRUE.equals(schedule.getIsInvoiced())
+                    || invoicedScheduleIds.contains(schedule.getBillingScheduleId())
+                    || schedule.getBillingConfiguration() == null) {
+                continue;
+            }
+
+            // A schedule that has a snapshot is represented by that snapshot.
+            if (billingSnapshotRepository
+                    .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                            schedule.getBillingConfiguration().getBillingConfigurationId(),
+                            schedule.getPeriodStartDate(),
+                            schedule.getPeriodEndDate())
+                    .isPresent()) {
+                continue;
+            }
+
+            var row = mapScheduleCandidateToWorkspaceRow(schedule);
+            rows.add(row);
+
+            if (row.getGrandTotal() != null) {
+                readyAmount = readyAmount.add(row.getGrandTotal());
+            }
+        }
+
         long readyCount = rows.size();
         long generated = 0, pending = 0, approved = 0, rejected = 0;
         BigDecimal invoicedAmount = BigDecimal.ZERO;
@@ -935,6 +985,40 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .billingPeriodEnd(snapshot.getBillingPeriodEnd())
                 .currencyCode(snapshot.getCurrencyCode())
                 .amount(tax != null ? tax.getTaxableAmount() : snapshot.getTotalAmount())
+                .totalTaxAmount(tax != null ? tax.getTotalTaxAmount() : null)
+                .grandTotal(tax != null ? tax.getGrandTotal() : null)
+                .build();
+    }
+
+    private com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto
+    mapScheduleCandidateToWorkspaceRow(BillingSchedule schedule) {
+
+        TaxCalculation tax =
+                taxCalculationRepository
+                        .findByBillingScheduleId(schedule.getBillingScheduleId())
+                        .orElse(null);
+
+        BillingConfigurationResponseDto configuration = null;
+        try {
+            configuration =
+                    billingConfigurationService.getBillingConfiguration(
+                            schedule.getBillingConfiguration().getBillingConfigurationId());
+        } catch (RuntimeException ex) {
+            // Row is still returned; names are simply unavailable.
+        }
+
+        return com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto.builder()
+                .workspaceStatus(
+                        com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus.READY_FOR_INVOICE)
+                .billingScheduleId(schedule.getBillingScheduleId())
+                .clientName(configuration != null ? configuration.getClientName() : null)
+                .projectName(configuration != null ? configuration.getProjectName() : null)
+                .projectCode(configuration != null ? configuration.getProjectCode() : null)
+                .billingType(configuration != null ? configuration.getBillingTypeName() : null)
+                .billingPeriodStart(schedule.getPeriodStartDate())
+                .billingPeriodEnd(schedule.getPeriodEndDate())
+                .currencyCode(configuration != null ? configuration.getCurrencyCode() : null)
+                .amount(tax != null ? tax.getTaxableAmount() : schedule.getBillingAmount())
                 .totalTaxAmount(tax != null ? tax.getTotalTaxAmount() : null)
                 .grandTotal(tax != null ? tax.getGrandTotal() : null)
                 .build();
@@ -1737,6 +1821,9 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .sellerEmail(invoice.getSellerEmail())
                 .sellerPhone(invoice.getSellerPhone())
                 .sellerLogoReference(invoice.getSellerLogoReference())
+                .invoiceNotes(invoice.getInvoiceNotes())
+                .termsAndConditions(invoice.getTermsAndConditions())
+                .paymentInstructions(invoice.getPaymentInstructions())
                 .taxRegionCode(invoice.getTaxRegionCode())
                 .sourceTaxJurisdictionCode(invoice.getSourceTaxJurisdictionCode())
                 .destinationTaxJurisdictionCode(invoice.getDestinationTaxJurisdictionCode())

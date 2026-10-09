@@ -1,5 +1,7 @@
 package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 
+import com.AccountReceivableManagement.entity.client_entity.Client;
+import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
@@ -240,5 +242,49 @@ class BillingConfigurationServiceImplTest {
 
         assertThatThrownBy(() -> service.deleteBillingConfiguration(configurationId))
                 .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class);
+    }
+
+    // =========================================================
+    // Client country is read from the Client entity
+    // =========================================================
+
+    @Test
+    void getBillingConfiguration_clientCountryComesFromClient_notProjectPrimaryLocation() {
+        draftConfiguration.setClient(Client.builder()
+                .clientId(UUID.randomUUID())
+                .clientName("Aditya Teja")
+                .countryName("India")
+                .countryCode("IN")
+                .build());
+        draftConfiguration.setProject(ProjectMasterReference.builder()
+                .pmsProjectId(23L)
+                .primaryLocation("Domestic")
+                .build());
+        when(billingConfigurationRepository.findById(configurationId))
+                .thenReturn(Optional.of(draftConfiguration));
+
+        var response = service.getBillingConfiguration(configurationId);
+
+        assertThat(response.getCountryName()).isEqualTo("India");
+        assertThat(response.getCountryCode()).isEqualTo("IN");
+    }
+
+    @Test
+    void getBillingConfiguration_clientCountryNull_isNullEvenWhenProjectHasLocation() {
+        draftConfiguration.setClient(Client.builder()
+                .clientId(UUID.randomUUID())
+                .clientName("Aditya Teja")
+                .build());
+        draftConfiguration.setProject(ProjectMasterReference.builder()
+                .pmsProjectId(23L)
+                .primaryLocation("Domestic")
+                .build());
+        when(billingConfigurationRepository.findById(configurationId))
+                .thenReturn(Optional.of(draftConfiguration));
+
+        var response = service.getBillingConfiguration(configurationId);
+
+        assertThat(response.getCountryName()).isNull();
+        assertThat(response.getCountryCode()).isNull();
     }
 }
