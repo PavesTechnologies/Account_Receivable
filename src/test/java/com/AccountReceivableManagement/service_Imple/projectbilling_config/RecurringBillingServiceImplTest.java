@@ -21,6 +21,7 @@ import com.AccountReceivableManagement.service_interface.projectbilling_config.B
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -43,6 +44,7 @@ class RecurringBillingServiceImplTest {
     @Mock private BillingScheduleRepository billingScheduleRepository;
     @Mock private BillingPeriodCalculatorService billingPeriodCalculatorService;
     @Mock private BillingOccurrenceServiceImpl billingOccurrenceService;
+    @Mock private RecordActionLockService recordActionLockService;
 
     private RecurringBillingServiceImpl service;
 
@@ -60,7 +62,8 @@ class RecurringBillingServiceImplTest {
                 billingFrequencyRepository,
                 billingScheduleRepository,
                 billingPeriodCalculatorService,
-                billingOccurrenceService
+                billingOccurrenceService,
+                recordActionLockService
         );
 
         billingConfigurationId = UUID.randomUUID();

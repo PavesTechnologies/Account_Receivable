@@ -23,6 +23,7 @@ import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculationComponent;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingItemType;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
+import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceApprovalAction;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
@@ -35,8 +36,10 @@ import com.AccountReceivableManagement.repo.projectbilling_config.BillingSchedul
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
 import com.AccountReceivableManagement.service_interface.company_profile.CompanyProfileService;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -126,13 +129,16 @@ public class InvoiceServiceImpl implements InvoiceService {
 
         private final CompanyProfileService companyProfileService;
 
+        private final RecordActionLockService recordActionLockService;
+
         public InvoiceServiceImpl(
                         InvoiceRepository invoiceRepository,
                         InvoiceApprovalHistoryRepository invoiceApprovalHistoryRepository,
                         BillingSnapshotRepository billingSnapshotRepository,
                         TaxCalculationRepository taxCalculationRepository,
                         BillingConfigurationService billingConfigurationService,
-                        PaymentTermsMasterRepository paymentTermsMasterRepository
+                        PaymentTermsMasterRepository paymentTermsMasterRepository,
+                        RecordActionLockService recordActionLockService
         ) {
                 this.invoiceRepository = invoiceRepository;
                 this.invoiceApprovalHistoryRepository = invoiceApprovalHistoryRepository;
@@ -142,6 +148,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 this.paymentTermsMasterRepository = paymentTermsMasterRepository;
                 this.billingScheduleRepository = null;
                 this.companyProfileService = null;
+                this.recordActionLockService = recordActionLockService;
         }
 
     @Override
@@ -1129,6 +1136,15 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 )
                         );
 
+        // =========================================================
+        // VALIDATE APPROVAL LOCK
+        // =========================================================
+
+        recordActionLockService.validateLockOwner(
+                LockResourceType.INVOICE,
+                invoiceId
+        );
+
         if (invoice.getStatus()
                 != InvoiceStatus.PENDING_APPROVAL) {
 
@@ -1513,6 +1529,15 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 )
                         );
 
+        // =========================================================
+        // VALIDATE APPROVAL LOCK
+        // =========================================================
+
+        recordActionLockService.validateLockOwner(
+                LockResourceType.INVOICE,
+                invoiceId
+        );
+
         if (invoice.getStatus()
                 != InvoiceStatus.PENDING_APPROVAL) {
 
@@ -1525,6 +1550,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         InvoiceStatus previousStatus = invoice.getStatus();
 
         invoice.setStatus(InvoiceStatus.APPROVED);
+
 
         Invoice saved = invoiceRepository.save(invoice);
 
