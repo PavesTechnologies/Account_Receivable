@@ -9,7 +9,7 @@ import java.util.Map;
 
 /**
  * Lightweight liveness check for load balancers / container health checks.
- * Served at {@code GET /ar/health} (context path is {@code /ar}).
+ * Served at {@code GET /paves/ar/health} (context path is {@code /paves/ar}).
  */
 @RestController
 public class HealthController {
