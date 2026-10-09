@@ -46,4 +46,17 @@ public class CompanyProfileRequestDto {
 
     @Size(max = 500)
     private String logoReference;
+
+    /**
+     * Optional. When null the existing default is left untouched; use the
+     * dedicated invoice-content-defaults endpoint to clear one.
+     */
+    @Size(max = 5000, message = "Invoice notes must not exceed 5000 characters.")
+    private String defaultInvoiceNotes;
+
+    @Size(max = 10000, message = "Terms and conditions must not exceed 10000 characters.")
+    private String defaultTermsAndConditions;
+
+    @Size(max = 5000, message = "Payment instructions must not exceed 5000 characters.")
+    private String defaultPaymentInstructions;
 }

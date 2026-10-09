@@ -50,6 +50,16 @@ public class InvoiceResponseDto {
 
     private String countryCode;
 
+    /**
+     * Client country as stored on the Client (the only client location data
+     * available - no city/state/address). Populated on the pre-generation
+     * preview only; display data, never used for tax determination. Not the
+     * seller location.
+     */
+    private String clientCountryName;
+
+    private String clientCountryCode;
+
     private String billingAddress;
 
     private String gstinOrTaxId;
@@ -99,6 +109,16 @@ public class InvoiceResponseDto {
     private String sellerPhone;
 
     private String sellerLogoReference;
+
+    /**
+     * Saved on the invoice at generation; on a preview (not yet generated)
+     * these show the currently configured defaults that generation will copy.
+     */
+    private String invoiceNotes;
+
+    private String termsAndConditions;
+
+    private String paymentInstructions;
 
     /**
      * Tax context frozen on the invoice at generation - the Tax Region code,

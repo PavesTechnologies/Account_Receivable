@@ -2,6 +2,8 @@ package com.AccountReceivableManagement.service_Imple.company_profile;
 
 import com.AccountReceivableManagement.dto.company_profile.CompanyProfileRequestDto;
 import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
+import com.AccountReceivableManagement.dto.company_profile.InvoiceContentDefaultsRequestDto;
+import com.AccountReceivableManagement.dto.company_profile.InvoiceContentDefaultsResponseDto;
 import com.AccountReceivableManagement.entity.company_profile.CompanyProfile;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.company_profile.CompanyProfileRepository;
@@ -140,5 +142,87 @@ class CompanyProfileServiceImplTest {
         assertThat(response.getEmail()).isEqualTo("updated@example.com");
         // isActive is not exposed on the request DTO - unaffected by an edit.
         assertThat(response.getIsActive()).isTrue();
+    }
+
+    private CompanyProfile activeProfileWithDefaults() {
+        return CompanyProfile.builder()
+                .companyProfileId(UUID.randomUUID())
+                .legalName("Example")
+                .defaultInvoiceNotes("N")
+                .defaultTermsAndConditions("T")
+                .defaultPaymentInstructions("P")
+                .isActive(true)
+                .build();
+    }
+
+    @Test
+    void getInvoiceContentDefaults_returnsConfiguredValues() {
+        when(companyProfileRepository.findFirstByIsActiveTrueOrderByCreatedAtAsc())
+                .thenReturn(Optional.of(activeProfileWithDefaults()));
+
+        InvoiceContentDefaultsResponseDto response = companyProfileService.getInvoiceContentDefaults();
+
+        assertThat(response.getInvoiceNotes()).isEqualTo("N");
+        assertThat(response.getTermsAndConditions()).isEqualTo("T");
+        assertThat(response.getPaymentInstructions()).isEqualTo("P");
+    }
+
+    @Test
+    void getInvoiceContentDefaults_noActiveProfile_throwsResourceNotFoundException() {
+        when(companyProfileRepository.findFirstByIsActiveTrueOrderByCreatedAtAsc())
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(companyProfileService::getInvoiceContentDefaults)
+                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class);
+    }
+
+    @Test
+    void updateInvoiceContentDefaults_replacesValuesAndBlankClears() {
+        when(companyProfileRepository.findFirstByIsActiveTrueOrderByCreatedAtAsc())
+                .thenReturn(Optional.of(activeProfileWithDefaults()));
+        when(companyProfileRepository.save(any(CompanyProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        InvoiceContentDefaultsResponseDto response = companyProfileService.updateInvoiceContentDefaults(
+                InvoiceContentDefaultsRequestDto.builder()
+                        .invoiceNotes("  New notes  ")
+                        .termsAndConditions("   ")
+                        .paymentInstructions(null)
+                        .build());
+
+        assertThat(response.getInvoiceNotes()).isEqualTo("New notes");
+        assertThat(response.getTermsAndConditions()).isNull();
+        assertThat(response.getPaymentInstructions()).isNull();
+    }
+
+    @Test
+    void update_fullProfileWithoutContentFields_keepsExistingDefaults() {
+        CompanyProfile existing = activeProfileWithDefaults();
+        when(companyProfileRepository.findById(existing.getCompanyProfileId()))
+                .thenReturn(Optional.of(existing));
+        when(companyProfileRepository.save(any(CompanyProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        CompanyProfileResponseDto response = companyProfileService.update(
+                existing.getCompanyProfileId(), validRequest());
+
+        assertThat(response.getDefaultInvoiceNotes()).isEqualTo("N");
+        assertThat(response.getDefaultTermsAndConditions()).isEqualTo("T");
+        assertThat(response.getDefaultPaymentInstructions()).isEqualTo("P");
+    }
+
+    @Test
+    void invoiceContentDefaultsRequest_overLengthValues_failBeanValidation() {
+        try (jakarta.validation.ValidatorFactory factory =
+                     jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            var violations = factory.getValidator().validate(
+                    InvoiceContentDefaultsRequestDto.builder()
+                            .invoiceNotes("x".repeat(5001))
+                            .termsAndConditions("x".repeat(10001))
+                            .paymentInstructions("x".repeat(5001))
+                            .build());
+
+            assertThat(violations).hasSize(3);
+        }
     }
 }

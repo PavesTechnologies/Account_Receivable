@@ -73,6 +73,10 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
 
             addTotals(document, invoice);
 
+            addTextSection(document, "Notes", invoice.getInvoiceNotes());
+            addTextSection(document, "Payment Instructions", invoice.getPaymentInstructions());
+            addTextSection(document, "Terms & Conditions", invoice.getTermsAndConditions());
+
             document.close();
 
             return outputStream.toByteArray();
@@ -295,6 +299,22 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
         PdfPCell cell = new PdfPCell(new Phrase(text != null ? text : "-", TABLE_BODY_FONT));
         cell.setPadding(4f);
         table.addCell(cell);
+    }
+
+    /** Printed only when the invoice carries saved content - never a placeholder. */
+    private void addTextSection(
+            Document document,
+            String heading,
+            String text
+    ) throws DocumentException {
+
+        if (text == null || text.isBlank()) {
+            return;
+        }
+
+        document.add(Chunk.NEWLINE);
+        document.add(new Paragraph(heading, SECTION_FONT));
+        document.add(new Paragraph(text, BODY_FONT));
     }
 
     private void addLineIfPresent(Document document, String value) throws DocumentException {

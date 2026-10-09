@@ -3,6 +3,8 @@ package com.AccountReceivableManagement.controller.company_profile;
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
 import com.AccountReceivableManagement.dto.company_profile.CompanyProfileRequestDto;
 import com.AccountReceivableManagement.dto.company_profile.CompanyProfileResponseDto;
+import com.AccountReceivableManagement.dto.company_profile.InvoiceContentDefaultsRequestDto;
+import com.AccountReceivableManagement.dto.company_profile.InvoiceContentDefaultsResponseDto;
 import com.AccountReceivableManagement.service_interface.company_profile.CompanyProfileService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -68,6 +70,28 @@ public class CompanyProfileController {
                 .success(true)
                 .message("Company profile retrieved successfully.")
                 .data(response)
+                .build());
+    }
+
+    @GetMapping("/invoice-content-defaults")
+    public ResponseEntity<ApiResponse<InvoiceContentDefaultsResponseDto>> getInvoiceContentDefaults() {
+
+        return ResponseEntity.ok(ApiResponse.<InvoiceContentDefaultsResponseDto>builder()
+                .success(true)
+                .message("Invoice content defaults retrieved successfully.")
+                .data(companyProfileService.getInvoiceContentDefaults())
+                .build());
+    }
+
+    @PutMapping("/invoice-content-defaults")
+    public ResponseEntity<ApiResponse<InvoiceContentDefaultsResponseDto>> updateInvoiceContentDefaults(
+            @Valid @RequestBody InvoiceContentDefaultsRequestDto request
+    ) {
+
+        return ResponseEntity.ok(ApiResponse.<InvoiceContentDefaultsResponseDto>builder()
+                .success(true)
+                .message("Invoice content defaults updated successfully.")
+                .data(companyProfileService.updateInvoiceContentDefaults(request))
                 .build());
     }
 

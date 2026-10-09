@@ -59,6 +59,20 @@ public class CompanyProfile {
     @Column(name = "logo_reference", length = 500)
     private String logoReference;
 
+    /**
+     * Configurable defaults copied onto each newly generated invoice. Null
+     * until a business user configures them - never populated with
+     * invented wording.
+     */
+    @Column(name = "default_invoice_notes", columnDefinition = "TEXT")
+    private String defaultInvoiceNotes;
+
+    @Column(name = "default_terms_and_conditions", columnDefinition = "TEXT")
+    private String defaultTermsAndConditions;
+
+    @Column(name = "default_payment_instructions", columnDefinition = "TEXT")
+    private String defaultPaymentInstructions;
+
     @Column(name = "is_active", nullable = false)
     @Builder.Default
     private Boolean isActive = true;
