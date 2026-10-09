@@ -26,6 +26,10 @@ public class BillingConfiguration {
     @Column(name = "billing_configuration_id")
     private UUID billingConfigurationId;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(
             name = "client_id",

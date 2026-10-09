@@ -53,6 +53,10 @@ public class Invoice {
     @Column(name = "invoice_id")
     private UUID invoiceId;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     @Column(
             name = "invoice_number",
             nullable = false,

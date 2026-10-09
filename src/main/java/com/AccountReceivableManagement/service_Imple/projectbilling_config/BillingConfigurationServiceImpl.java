@@ -5,6 +5,7 @@ import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
 import com.AccountReceivableManagement.entity.projectbilling_config.*;
 import com.AccountReceivableManagement.entity_enums.client.RecordStatus;
+import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingContext;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
@@ -13,6 +14,7 @@ import com.AccountReceivableManagement.entity_enums.projectbilling_config.Pricin
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.*;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingPeriodCalculatorService;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
@@ -57,6 +59,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingMilestonePlanRepository billingMilestonePlanRepository;
     private final BillingPaymentEntryRepository billingPaymentEntryRepository;
     private final BillingConfigurationChangeTrackingService changeTrackingService;
+    private final RecordActionLockService recordActionLockService;
     private final com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationSnapshotRepository snapshotRepository;
 
     // =========================================================
@@ -327,6 +330,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+        // =========================================================
+        // VALIDATE APPROVAL LOCK
+        // =========================================================
+
+        recordActionLockService.validateLockOwner(
+                LockResourceType.BILLING_CONFIGURATION,
+                id
+        );
+
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.PENDING_APPROVAL) {
 
@@ -415,6 +427,11 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
+
+        recordActionLockService.validateLockOwner(
+                LockResourceType.BILLING_CONFIGURATION,
+                id
+        );
 
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.PENDING_APPROVAL) {
@@ -1081,6 +1098,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+        // =========================================================
+        // VALIDATE EDIT LOCK
+        // This endpoint serves both the new-configuration wizard
+        // (final save before submit, no lock held) and the Edit
+        // session on existing records (EDIT lock held). Only block
+        // when another user holds the BILLING_CONFIGURATION lock;
+        // @Version still guards concurrent writes without a lock.
+        // =========================================================
+
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         Client client =
                 clientRepository.findById(request.getClientId())
@@ -1316,6 +1346,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+        // Block if another user holds the BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
+
         /*
          * Only APPROVED configurations can be manually deactivated.
          */
@@ -1387,6 +1423,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         .orElseThrow(() ->
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Billing configuration not found."));
+
+        // Block if another user holds the BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         // Only allow deletion of drafts
         if (configuration.getApprovalStatus() != ApprovalStatus.DRAFT) {
@@ -1551,6 +1593,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
+
+        // =========================================================
+        // VALIDATE EDIT LOCK
+        // Draft saves are section-level saves (wizard steps, rate
+        // card, etc.) inside the editing session, so only block
+        // when another user holds the BILLING_CONFIGURATION lock.
+        // @Version still guards concurrent writes without a lock.
+        // =========================================================
+
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         // =========================================================
         // VALIDATE EDITABLE STATUS
@@ -1949,6 +2004,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
+
+        // Block if another user holds the BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                id
+        );
 
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.DRAFT) {

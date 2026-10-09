@@ -15,6 +15,8 @@ import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigu
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingPaymentEntryRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingMilestonePlanRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingMilestonePlanService;
+import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -39,6 +41,7 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
     private final BillingConfigurationRepository billingConfigurationRepository;
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
     private final BillingConfigurationChangeTrackingService changeTrackingService;
+    private final RecordActionLockService recordActionLockService;
 
     @Override
     @Transactional
@@ -52,6 +55,12 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Billing Configuration not found."
                                 ));
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         validateBillingConfigurationForMilestonePlan(configuration);
 
@@ -109,6 +118,12 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
                 milestonePlan.getBillingConfiguration();
 
         ApprovalStatus originalApprovalStatus = configuration.getApprovalStatus();
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                configuration.getBillingConfigurationId()
+        );
 
         validateBillingConfigurationForMilestonePlan(configuration);
 
@@ -235,6 +250,12 @@ public class BillingMilestonePlanServiceImpl implements BillingMilestonePlanServ
 
         BillingConfiguration configuration =
                 milestonePlan.getBillingConfiguration();
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                configuration.getBillingConfigurationId()
+        );
 
         validateBillingConfigurationForMilestonePlan(configuration);
 

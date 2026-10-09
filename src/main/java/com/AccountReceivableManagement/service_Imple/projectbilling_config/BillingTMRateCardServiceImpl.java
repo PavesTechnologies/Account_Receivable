@@ -10,6 +10,8 @@ import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionH
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingTMRateCardRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingTMRateCardService;
+import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,7 @@ public class BillingTMRateCardServiceImpl implements BillingTMRateCardService {
 
     private final BillingTMRateCardRepository billingTMRateCardRepository;
     private final BillingConfigurationRepository billingConfigurationRepository;
+    private final RecordActionLockService recordActionLockService;
 
     @Override
     public BillingTMRateCardResponseDto addRateCard(
@@ -39,6 +42,12 @@ public class BillingTMRateCardServiceImpl implements BillingTMRateCardService {
                         .orElseThrow(() ->
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Billing Configuration not found."));
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         validateBillingConfiguration(configuration);
 
@@ -83,6 +92,12 @@ public class BillingTMRateCardServiceImpl implements BillingTMRateCardService {
 
         BillingConfiguration configuration =
                 rateCard.getBillingConfiguration();
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                configuration.getBillingConfigurationId()
+        );
 
         validateBillingConfiguration(configuration);
 
@@ -158,6 +173,12 @@ public class BillingTMRateCardServiceImpl implements BillingTMRateCardService {
         BillingConfiguration configuration =
                 rateCard.getBillingConfiguration();
 
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                configuration.getBillingConfigurationId()
+        );
+
         validateBillingConfiguration(configuration);
 
         rateCard.setIsActive(false);
@@ -177,6 +198,12 @@ public class BillingTMRateCardServiceImpl implements BillingTMRateCardService {
                         .orElseThrow(() ->
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Billing Configuration not found."));
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         validateBillingConfiguration(configuration);
 

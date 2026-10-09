@@ -17,6 +17,8 @@ import com.AccountReceivableManagement.repo.projectbilling_config.BillingSchedul
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingRecurringConfigurationRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingPeriodCalculatorService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.RecurringBillingService;
+import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -50,6 +52,7 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             billingPeriodCalculatorService;
 
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
+    private final RecordActionLockService recordActionLockService;
 
     private void validateConfigurationApproved(BillingConfiguration configuration) {
         log.warn("validateConfigurationApproved() called. Billing Configuration ID: {}, Current status: {}", 
@@ -79,6 +82,12 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                         .orElseThrow(() ->
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Billing Configuration not found."));
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         /*
          * 2. Billing Configuration must be in DRAFT
@@ -344,6 +353,12 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             throw new GlobalExceptionHandler.ValidationException(
                     "Billing Configuration is not associated with this recurring configuration.");
         }
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                configuration.getBillingConfigurationId()
+        );
 
         log.info("Parent billing configuration ID: {}, Current approval status: {}", 
                 configuration.getBillingConfigurationId(), configuration.getApprovalStatus());
@@ -806,6 +821,14 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         BillingConfiguration configuration =
                 recurring.getBillingConfiguration();
 
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        if (configuration != null) {
+            recordActionLockService.validateNotLockedByAnotherUser(
+                    LockResourceType.BILLING_CONFIGURATION,
+                    configuration.getBillingConfigurationId()
+            );
+        }
+
         if (configuration != null &&
                 configuration.getApprovalStatus() == ApprovalStatus.APPROVED) {
 
@@ -1074,6 +1097,12 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             throw new GlobalExceptionHandler.ValidationException(
                     "Billing Configuration is not associated with this recurring configuration.");
         }
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                originalConfiguration.getBillingConfigurationId()
+        );
 
         // Validate renewal eligibility
         validateRenewalEligibility(originalRecurring, originalConfiguration);
