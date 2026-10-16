@@ -4,6 +4,7 @@ import com.AccountReceivableManagement.cdc.entity.CdcInbox;
 import com.AccountReceivableManagement.cdc.payload.CdcEventPayload;
 import com.AccountReceivableManagement.cdc.service.CdcInboxService;
 import com.AccountReceivableManagement.cdc.service.ClientDataProcessor;
+import com.AccountReceivableManagement.cdc.service.MilestoneDataProcessor;
 import com.AccountReceivableManagement.cdc.service.ProjectDataProcessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +21,7 @@ public class InboxEventProcessor {
     private final CdcInboxService cdcInboxService;
     private final ClientDataProcessor clientDataProcessor;
     private final ProjectDataProcessor projectDataProcessor;
+    private final MilestoneDataProcessor milestoneDataProcessor;
 
     /**
      * Process pending CDC events from the inbox.
@@ -98,6 +100,11 @@ public class InboxEventProcessor {
             case "PMS-PROJECTS":
                 log.info("Routing to ProjectDataProcessor");
                 projectDataProcessor.process(payload);
+                break;
+
+            case "PMS-PROJECT_MILESTONES":
+                log.info("Routing to MilestoneDataProcessor");
+                milestoneDataProcessor.process(payload);
                 break;
 
             // Future handlers
