@@ -1301,7 +1301,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         return com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto.builder()
                 .workspaceStatus(
                         com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus
-                                .valueOf(invoice.getStatus().name()))
+                                .of(invoice.getStatus()))
                 .snapshotId(invoice.getBillingSnapshotId())
                 .snapshotNumber(invoice.getBillingSnapshotNumber())
                 .snapshotStatus(snapshot != null ? snapshot.getStatus() : null)
@@ -2210,6 +2210,13 @@ public class InvoiceServiceImpl implements InvoiceService {
             Invoice invoice
     ) {
 
+        // A document is available when its finalized PDF is actually stored,
+        // not merely because the status says so (READY_TO_SEND_WITHOUT_DOCUMENT
+        // is a reconciliation finding precisely because the two can diverge).
+        boolean documentAvailable = invoice.getStatus() == InvoiceStatus.READY_TO_SEND
+                && invoice.getInvoiceId() != null
+                && invoiceDocumentRepository.existsByInvoiceId(invoice.getInvoiceId());
+
         List<InvoiceItemResponseDto> items =
                 java.util.stream.IntStream
                         .range(0, invoice.getItems().size())
@@ -2347,8 +2354,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .lastCorrectedAt(
                         correctionState.lastCorrectedAt()
                 )
-                .documentAvailable(invoice.getStatus() == InvoiceStatus.READY_TO_SEND)
-                .documentUrl(invoice.getStatus() == InvoiceStatus.READY_TO_SEND
+                .documentAvailable(documentAvailable)
+                .documentUrl(documentAvailable
                         ? "/api/v1/invoices/" + invoice.getInvoiceId() + "/document"
                         : null)
                 .build();

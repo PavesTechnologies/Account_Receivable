@@ -1503,6 +1503,42 @@ class InvoiceServiceImplTest {
         assertThat(summary.getTotalInvoicedAmount()).isEqualByComparingTo("19470.00");
     }
 
+    // G-11: a READY_TO_SEND invoice (the normal result of approval) loads in the
+    // workspace instead of failing the whole response, and is counted as such.
+    @Test
+    void getInvoiceGenerationWorkspace_readyToSendInvoice_loadsAndIsCounted() {
+        Invoice approved = persistedInvoice("INV-1", "BS-1", UUID.randomUUID(), "A", "P1");
+        approved.setStatus(InvoiceStatus.APPROVED);
+        Invoice readyToSend = persistedInvoice("INV-2", "BS-2", UUID.randomUUID(), "A", "P2");
+        readyToSend.setStatus(InvoiceStatus.READY_TO_SEND);
+
+        when(invoiceRepository.findAllByOrderByGeneratedAtDesc()).thenReturn(List.of(approved, readyToSend));
+        when(billingSnapshotRepository.findAllById(any())).thenReturn(List.of());
+        when(billingSnapshotRepository.findAllByStatusOrderByCreatedDateDesc(BillingSnapshotStatus.TAX_COMPLETED))
+                .thenReturn(List.of());
+
+        var response = invoiceService.getInvoiceGenerationWorkspace();
+
+        assertThat(response.getRows()).extracting(r -> r.getWorkspaceStatus().name())
+                .containsExactly("APPROVED", "READY_TO_SEND");
+        assertThat(response.getRows().get(1).getInvoiceStatus()).isEqualTo(InvoiceStatus.READY_TO_SEND);
+        assertThat(response.getSummary().getApprovedCount()).isEqualTo(1);
+        assertThat(response.getSummary().getReadyToSendCount()).isEqualTo(1);
+        assertThat(response.getSummary().getInvoicedCount()).isEqualTo(2);
+    }
+
+    // G-11: every persisted invoice status has its own workspace status - none is
+    // folded into another (READY_TO_SEND is not APPROVED, and not "sent").
+    @Test
+    void invoiceWorkspaceStatus_mapsEveryInvoiceStatusToItsOwnValue() {
+        for (InvoiceStatus status : InvoiceStatus.values()) {
+            assertThat(com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus.of(status)
+                    .name()).isEqualTo(status.name());
+        }
+        assertThatThrownBy(() -> com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus
+                .of(null)).isInstanceOf(IllegalStateException.class);
+    }
+
     // WORKSPACE — strictly read-only: nothing is saved and no snapshot status changes.
     @Test
     void getInvoiceGenerationWorkspace_isReadOnly() {

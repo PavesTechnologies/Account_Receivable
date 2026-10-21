@@ -164,8 +164,9 @@ public class InvoiceResponseDto {
     private LocalDateTime lastCorrectedAt;
 
     /**
-     * {@code true} when the invoice's finalized PDF is stored - exactly when
-     * {@code status == READY_TO_SEND}. Derived from the status, never stored.
+     * {@code true} when the invoice is {@code READY_TO_SEND} and its
+     * finalized PDF is actually stored. Says nothing about delivery - an
+     * available document does not mean the invoice was sent.
      */
     private boolean documentAvailable;
 

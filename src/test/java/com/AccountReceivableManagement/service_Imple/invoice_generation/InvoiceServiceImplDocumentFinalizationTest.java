@@ -180,6 +180,13 @@ class InvoiceServiceImplDocumentFinalizationTest {
 
     @Test
     void approvedInvoice_isFinalizedToReadyToSend_withItsDocumentStored() throws Exception {
+        // Like the real repository: once the document is stored, it exists.
+        when(documentRepository.saveAndFlush(org.mockito.ArgumentMatchers.any(InvoiceDocument.class)))
+                .thenAnswer(stored -> {
+                    when(documentRepository.existsByInvoiceId(invoiceId)).thenReturn(true);
+                    return stored.getArgument(0);
+                });
+
         InvoiceResponseDto result = service().finalizeInvoiceDocument(invoiceId);
 
         assertThat(result.getStatus()).isEqualTo(InvoiceStatus.READY_TO_SEND);
@@ -294,6 +301,19 @@ class InvoiceServiceImplDocumentFinalizationTest {
         when(documentRepository.findByInvoiceId(invoiceId)).thenReturn(Optional.of(stored));
 
         assertThat(service().getInvoiceDocument(invoiceId)).isSameAs(stored);
+    }
+
+    // G-11: availability follows the stored document, not the status alone.
+    @Test
+    void readyToSendInvoiceWhoseDocumentIsMissing_reportsNoDocument() {
+        invoice.setStatus(InvoiceStatus.READY_TO_SEND);
+        when(documentRepository.existsByInvoiceId(invoiceId)).thenReturn(false);
+
+        InvoiceResponseDto result = service().getInvoiceById(invoiceId);
+
+        assertThat(result.getStatus()).isEqualTo(InvoiceStatus.READY_TO_SEND);
+        assertThat(result.isDocumentAvailable()).isFalse();
+        assertThat(result.getDocumentUrl()).isNull();
     }
 
     @Test
