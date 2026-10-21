@@ -44,6 +44,10 @@ class TaxRateConfigurationServiceImplTest {
     @Mock
     private TaxTypeMasterRepository taxTypeMasterRepository;
 
+    // TaxConfigurationServiceImpl's 4th constructor dependency (resolveTaxRegime).
+    @Mock
+    private com.AccountReceivableManagement.repo.projectbilling_config.TaxRegimeMasterRepository taxRegimeMasterRepository;
+
     @InjectMocks
     private TaxConfigurationServiceImpl taxConfigurationService;
 

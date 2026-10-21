@@ -32,6 +32,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * to the generic HTTP 500 handler.
  */
 @WebMvcTest(TaxConfigurationController.class)
+// The production filter chain (CSRF disabled, /api/** authenticated), not Boot's default one.
+@org.springframework.context.annotation.Import({com.AccountReceivableManagement.security.SecurityConfig.class,
+        com.AccountReceivableManagement.security.CustomAccessDeniedHandler.class,
+        com.AccountReceivableManagement.security.CustomAuthenticationEntryPoint.class})
 class TaxConfigurationControllerValidationTest {
 
     @Autowired
@@ -42,6 +46,13 @@ class TaxConfigurationControllerValidationTest {
 
     @MockBean
     private TaxConfigurationService taxConfigurationService;
+
+    // SecurityConfig collaborators; the decoder is never called - jwt() authenticates directly.
+    @MockBean
+    private org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
+
+    @MockBean
+    private com.AccountReceivableManagement.security.OperationsReportAccess operationsReportAccess;
 
     private TaxConfigurationComponentRequestDto validComponent() {
         return TaxConfigurationComponentRequestDto.builder()
@@ -62,6 +73,7 @@ class TaxConfigurationControllerValidationTest {
                 .build();
 
         mockMvc.perform(post("/api/v1/tax-rate-configurations")
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
@@ -78,6 +90,7 @@ class TaxConfigurationControllerValidationTest {
                 + "\"components\":[{\"taxTypeId\":\"" + UUID.randomUUID() + "\",\"taxRate\":9}]}";
 
         mockMvc.perform(post("/api/v1/tax-rate-configurations")
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
@@ -93,6 +106,7 @@ class TaxConfigurationControllerValidationTest {
                 + "\"gstRate\":0,\"sgstRate\":0,\"igstRate\":9,\"effectiveFrom\":\"2026-10-01\"}";
 
         mockMvc.perform(post("/api/v1/tax-rate-configurations")
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
@@ -110,6 +124,7 @@ class TaxConfigurationControllerValidationTest {
                 .build();
 
         mockMvc.perform(post("/api/v1/tax-rate-configurations")
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
@@ -128,6 +143,7 @@ class TaxConfigurationControllerValidationTest {
                 .build();
 
         mockMvc.perform(post("/api/v1/tax-rate-configurations")
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
@@ -165,6 +181,7 @@ class TaxConfigurationControllerValidationTest {
                 .thenReturn(response);
 
         mockMvc.perform(post("/api/v1/tax-rate-configurations")
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
