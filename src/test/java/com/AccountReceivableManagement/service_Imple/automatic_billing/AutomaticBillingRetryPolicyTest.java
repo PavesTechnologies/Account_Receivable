@@ -52,6 +52,9 @@ class AutomaticBillingRetryPolicyTest {
         // A concurrent duplicate: the next attempt finds and reuses the winner's record.
         assertThat(policy.isRetryable(new GlobalExceptionHandler.DuplicateResourceException(
                 "An invoice has already been generated for this billing occurrence."))).isTrue();
+        // G-14: Timesheets pending approval are temporary waiting conditions, so they are retryable.
+        assertThat(policy.isRetryable(new com.AccountReceivableManagement.integration.billing_data_acquisition.TimesheetsPendingApprovalException(
+                "Timesheets are not yet approved."))).isTrue();
     }
 
     @Test

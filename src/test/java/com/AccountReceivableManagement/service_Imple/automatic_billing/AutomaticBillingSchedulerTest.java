@@ -275,6 +275,29 @@ class AutomaticBillingSchedulerTest {
     }
 
     @Test
+    void timeAndMaterial_failedSourceAcquisitionFromEarlierDay_isRediscoveredForLateApprovedTimesheets() {
+        LocalDate augStart = LocalDate.of(2026, 8, 15);
+        LocalDate augEnd = LocalDate.of(2026, 9, 14);
+        UUID configurationId = timeAndMaterialConfiguration(List.of(period(augStart, augEnd)));
+        UUID runId = UUID.randomUUID();
+        AutomaticBillingRun failedRun = run(runId, AutomaticBillingRunStatus.FAILED);
+        // Failed yesterday with no snapshot or invoice
+        failedRun.setUpdatedAt(LocalDateTime.now(CLOCK).minusDays(1));
+        when(runRepository.findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                configurationId, augStart, augEnd))
+                .thenReturn(Optional.of(failedRun));
+        when(runService.findOrCreateForTimeAndMaterialPeriod(configurationId, augStart, augEnd))
+                .thenReturn(failedRun);
+        when(orchestrator.processRun(runId)).thenReturn(run(runId, AutomaticBillingRunStatus.PENDING_APPROVAL));
+
+        AutomaticBillingScheduler.TickSummary summary = scheduler.runOnce();
+
+        verify(runService).findOrCreateForTimeAndMaterialPeriod(configurationId, augStart, augEnd);
+        verify(orchestrator).processRun(runId);
+        assertThat(summary.newTimeAndMaterialPeriods()).isEqualTo(1);
+    }
+
+    @Test
     void timeAndMaterial_configurationThatCannotBeResolved_isIsolated() {
         UUID broken = UUID.randomUUID();
         UUID healthy = UUID.randomUUID();

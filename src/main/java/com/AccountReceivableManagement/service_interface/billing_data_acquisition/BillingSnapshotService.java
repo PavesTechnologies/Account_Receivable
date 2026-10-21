@@ -52,4 +52,12 @@ public interface BillingSnapshotService {
      * acquisition validation fails.
      */
     BillingSnapshot rebuildBillingSnapshot(UUID billingSnapshotId);
+
+    /**
+     * Cancels an un-invoiced Billing Snapshot and releases its claimed source
+     * records (clearing billedSourceReferenceId on items). If an invoice
+     * has already been generated from this snapshot, cancellation is prohibited.
+     * Repeated cancellation of an already cancelled snapshot is idempotent.
+     */
+    ApiResponse<Void> cancelBillingSnapshot(UUID billingSnapshotId);
 }

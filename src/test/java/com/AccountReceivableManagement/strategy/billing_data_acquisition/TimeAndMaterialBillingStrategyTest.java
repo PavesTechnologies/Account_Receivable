@@ -154,8 +154,6 @@ class TimeAndMaterialBillingStrategyTest {
                 .thenReturn(List.of(timesheet("TS-1", "Developer", workDate)));
         when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, workDate))
                 .thenReturn(List.of());
-        when(billingTMRateCardRepository.findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(configurationId))
-                .thenReturn(List.of());
 
         BillingAcquisitionResultDto result =
                 strategy.acquire(configuration(PricingModel.STANDARD, new BigDecimal("1200")), request(start, end));
@@ -224,12 +222,83 @@ class TimeAndMaterialBillingStrategyTest {
                 .thenReturn(List.of(timesheet("TS-1", null, workDate)));
         when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, workDate))
                 .thenReturn(List.of(monthly));
-        when(billingTMRateCardRepository.findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(configurationId))
-                .thenReturn(List.of(monthly));
 
         BillingAcquisitionResultDto result = strategy.acquire(
                 configuration(PricingModel.STANDARD, new BigDecimal("1400")), request(start, end));
 
         assertThat(result.getTimesheets().get(0).getHourlyRate()).isEqualByComparingTo("1400");
+    }
+
+    // ================================================================ G-23: Deterministic Standard Rate Selection
+
+    @Test
+    void standard_matchingRoleRateCard_selectsMatchingRoleRate() {
+        LocalDate start = LocalDate.of(2026, 10, 1);
+        LocalDate end = LocalDate.of(2026, 10, 31);
+        LocalDate workDate = LocalDate.of(2026, 10, 6);
+
+        when(timesheetIntegration.getApprovedTimesheets(PROJECT_ID, start, end))
+                .thenReturn(List.of(timesheet("TS-1", "Developer", workDate)));
+        when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, workDate))
+                .thenReturn(List.of(rateCard("Senior Developer", "2200"), rateCard("Developer", "1600")));
+
+        BillingAcquisitionResultDto result = strategy.acquire(
+                configuration(PricingModel.STANDARD, new BigDecimal("1000")), request(start, end));
+
+        assertThat(result.getTimesheets().get(0).getHourlyRate()).isEqualByComparingTo("1600");
+    }
+
+    @Test
+    void standard_unrelatedRoleRateCard_doesNotFallbackToUnrelatedRole() {
+        LocalDate start = LocalDate.of(2026, 10, 1);
+        LocalDate end = LocalDate.of(2026, 10, 31);
+        LocalDate workDate = LocalDate.of(2026, 10, 6);
+
+        when(timesheetIntegration.getApprovedTimesheets(PROJECT_ID, start, end))
+                .thenReturn(List.of(timesheet("TS-1", "Architect", workDate)));
+        when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, workDate))
+                .thenReturn(List.of(rateCard("Developer", "1600")));
+
+        BillingAcquisitionResultDto result = strategy.acquire(
+                configuration(PricingModel.STANDARD, new BigDecimal("1200")), request(start, end));
+
+        // Falls back to configuration hourly rate rather than picking unrelated Developer rate card
+        assertThat(result.getTimesheets().get(0).getHourlyRate()).isEqualByComparingTo("1200");
+    }
+
+    @Test
+    void standard_generalRateCardWithoutRole_isUsedWhenTimesheetHasNoMatchingRole() {
+        LocalDate start = LocalDate.of(2026, 10, 1);
+        LocalDate end = LocalDate.of(2026, 10, 31);
+        LocalDate workDate = LocalDate.of(2026, 10, 6);
+
+        when(timesheetIntegration.getApprovedTimesheets(PROJECT_ID, start, end))
+                .thenReturn(List.of(timesheet("TS-1", "QA Engineer", workDate)));
+        when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, workDate))
+                .thenReturn(List.of(rateCard("Developer", "1600"), rateCard(null, "1450")));
+
+        BillingAcquisitionResultDto result = strategy.acquire(
+                configuration(PricingModel.STANDARD, new BigDecimal("1000")), request(start, end));
+
+        assertThat(result.getTimesheets().get(0).getHourlyRate()).isEqualByComparingTo("1450");
+    }
+
+    @Test
+    void standard_noActiveRateCardOrConfigurationRate_leavesHourlyRateNull() {
+        LocalDate start = LocalDate.of(2026, 10, 1);
+        LocalDate end = LocalDate.of(2026, 10, 31);
+        LocalDate workDate = LocalDate.of(2026, 10, 6);
+
+        when(timesheetIntegration.getApprovedTimesheets(PROJECT_ID, start, end))
+                .thenReturn(List.of(timesheet("TS-1", "Developer", workDate)));
+        when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, workDate))
+                .thenReturn(List.of());
+
+        BillingAcquisitionResultDto result = strategy.acquire(
+                configuration(PricingModel.STANDARD, null), request(start, end));
+
+        assertThat(result.getTimesheets().get(0).getHourlyRate()).isNull();
+        verify(billingTMRateCardRepository, never())
+                .findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(any());
     }
 }

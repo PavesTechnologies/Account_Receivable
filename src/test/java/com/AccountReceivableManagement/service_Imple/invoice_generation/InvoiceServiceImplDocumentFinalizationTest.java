@@ -86,9 +86,20 @@ class InvoiceServiceImplDocumentFinalizationTest {
         }
     }
 
+    /** Permits every action, attributed to an approver who is not the (system) maker. */
+    private static com.AccountReceivableManagement.security.FinancialActionAuthorizer permittingAuthorizer() {
+        com.AccountReceivableManagement.security.FinancialActionAuthorizer authorizer = org.mockito.Mockito.mock(com.AccountReceivableManagement.security.FinancialActionAuthorizer.class);
+        org.mockito.Mockito.lenient().when(authorizer.requirePermission(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+        org.mockito.Mockito.lenient().when(authorizer.currentActor())
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+        return authorizer;
+    }
+
     private InvoiceServiceImpl service(InvoiceDocumentService renderer) {
         return new InvoiceServiceImpl(invoiceRepository, historyRepository, null, null, null, null, null, null,
-                lockService, null, null, renderer, documentRepository, runRepository, runService, null);
+                lockService, null, null, renderer, documentRepository, runRepository, runService,
+                permittingAuthorizer(), null);
     }
 
     private InvoiceServiceImpl service() {
@@ -299,7 +310,7 @@ class InvoiceServiceImplDocumentFinalizationTest {
     void approval_requiresTheApprovalLock_andChangesNothingWithoutIt() {
         invoice.setStatus(InvoiceStatus.PENDING_APPROVAL);
         doThrow(new IllegalStateException("Invoice is locked by another user."))
-                .when(lockService).validateLockOwner(LockResourceType.INVOICE, invoiceId);
+                .when(lockService).validateLockOwner(LockResourceType.INVOICE, invoiceId,com.AccountReceivableManagement.entity_enums.common.LockActionType.APPROVAL);
 
         assertThatThrownBy(() -> service().approveInvoice(invoiceId))
                 .hasMessageContaining("locked by another user");

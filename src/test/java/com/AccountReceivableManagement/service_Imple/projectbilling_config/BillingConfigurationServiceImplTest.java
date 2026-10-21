@@ -40,6 +40,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class BillingConfigurationServiceImplTest {
 
+    @Mock
+    private com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
+
     @Mock private BillingConfigurationRepository billingConfigurationRepository;
     @Mock private ClientRepository clientRepository;
     @Mock private ProjectMasterReferenceRepository projectRepository;
@@ -74,6 +77,11 @@ class BillingConfigurationServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(financialActionAuthorizer.requirePermission(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+        org.mockito.Mockito.lenient().when(financialActionAuthorizer.currentActor())
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+
         service = new BillingConfigurationServiceImpl(
                 billingConfigurationRepository,
                 clientRepository,
@@ -92,6 +100,7 @@ class BillingConfigurationServiceImplTest {
                 billingOccurrenceService,
                 projectEligibilityRepository,
                 billingPeriodCalculatorService,
+                financialActionAuthorizer,
                 billingMilestonePlanRepository,
                 billingPaymentEntryRepository,
                 billingMilestonePlanService,

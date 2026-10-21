@@ -65,8 +65,12 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
 
     private final PlatformTransactionManager transactionManager;
 
+    private final com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
+
     @Override
     public InvoiceDeliveryResponseDto sendInvoice(UUID invoiceId) {
+
+        financialActionAuthorizer.requirePermission(com.AccountReceivableManagement.security.FinancialAction.INVOICE_DELIVERY);
 
         Invoice invoice =
                 invoiceRepository.findById(invoiceId)

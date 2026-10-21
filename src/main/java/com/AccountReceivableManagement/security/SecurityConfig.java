@@ -18,6 +18,7 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@org.springframework.boot.context.properties.EnableConfigurationProperties(FinancialSecurityProperties.class)
 public class SecurityConfig {
 
     @Autowired
@@ -64,6 +65,27 @@ public class SecurityConfig {
                 );
 
         return http.build();
+    }
+
+    /**
+     * The UMS token decoder: signature against the issuer's published keys,
+     * plus {@link JwtTokenValidation}. Resolved on the first request (as
+     * Spring Boot's own issuer-uri decoder is), so startup does not depend on
+     * UMS being reachable.
+     */
+    @org.springframework.context.annotation.Bean
+    public org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String issuerUri,
+            FinancialSecurityProperties securityProperties) {
+        return new org.springframework.security.oauth2.jwt.SupplierJwtDecoder(() -> {
+            org.springframework.security.oauth2.jwt.NimbusJwtDecoder decoder =
+                    (org.springframework.security.oauth2.jwt.NimbusJwtDecoder)
+                            org.springframework.security.oauth2.jwt.JwtDecoders.fromIssuerLocation(issuerUri);
+            decoder.setJwtValidator(JwtTokenValidation.validator(issuerUri,
+                    securityProperties.getJwt().getAudiences()));
+            return decoder;
+        });
     }
 
     private JwtAuthenticationConverter jwtAuthenticationConverter() {

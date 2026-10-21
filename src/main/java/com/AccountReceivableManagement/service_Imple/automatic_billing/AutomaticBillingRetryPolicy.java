@@ -46,6 +46,7 @@ import java.util.concurrent.TimeoutException;
 public class AutomaticBillingRetryPolicy {
 
     private static final Set<Class<? extends Throwable>> RETRYABLE = Set.of(
+            com.AccountReceivableManagement.integration.billing_data_acquisition.TimesheetsPendingApprovalException.class,
             TmsServiceUnavailableException.class,
             ResourceAccessException.class,
             IOException.class,

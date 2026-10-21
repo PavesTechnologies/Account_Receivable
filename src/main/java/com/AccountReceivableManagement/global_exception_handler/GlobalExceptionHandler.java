@@ -36,6 +36,21 @@ public class GlobalExceptionHandler {
                         .build());
     }
 
+    /**
+     * Authenticated, but not permitted (missing authority, maker-checker,
+     * automatic billing attempting a human decision): 403.
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Object>> handleAccessDenied(
+            org.springframework.security.access.AccessDeniedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.builder()
+                        .success(false)
+                        .message(ex.getMessage())
+                        .data(null)
+                        .build());
+    }
+
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ApiResponse<Object>> handleNotFound(
             ResourceNotFoundException ex) {

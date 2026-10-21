@@ -102,6 +102,9 @@ class BillingSnapshotServiceImplTest {
     private com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository
             billingSnapshotItemRepository;
 
+    @Mock
+    private com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository invoiceRepository;
+
     // Real, dependency-free collaborators — using the actual production
     // logic here (not mocks) is what lets these tests prove the acquisition
     // pipeline genuinely attaches/maps source timesheet items, not just
@@ -124,6 +127,13 @@ class BillingSnapshotServiceImplTest {
     void setUp() {
         when(timeAndMaterialStrategy.getSupportedBillingType()).thenReturn(BillingType.TIME_AND_MATERIAL);
 
+        org.mockito.Mockito.lenient().when(currencyMasterRepository.findById(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> Optional.of(com.AccountReceivableManagement.entity.projectbilling_config.CurrencyMaster.builder()
+                        .currencyId(inv.getArgument(0)).currencyCode("USD").build()));
+        org.mockito.Mockito.lenient().when(currencyMasterRepository.findByCurrencyCodeIgnoreCase(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> Optional.of(com.AccountReceivableManagement.entity.projectbilling_config.CurrencyMaster.builder()
+                        .currencyId(UUID.randomUUID()).currencyCode(inv.getArgument(0)).build()));
+
         billingAcquisitionValidator = new BillingAcquisitionValidator(billingSnapshotItemRepository);
 
         service = new BillingSnapshotServiceImpl(
@@ -138,7 +148,8 @@ class BillingSnapshotServiceImplTest {
                 taxRegionMasterRepository,
                 List.of(timeAndMaterialStrategy),
                 billingAcquisitionService,
-                transactionManager);
+                transactionManager,
+                invoiceRepository);
 
         snapshotId = UUID.randomUUID();
         orphanedConfigurationId = UUID.randomUUID();
@@ -1223,5 +1234,147 @@ class BillingSnapshotServiceImplTest {
         assertThat(second.getData().getSnapshotId()).isEqualTo(snapshotId);
         verify(timeAndMaterialStrategy, never()).acquire(any(), any());
         verify(billingSnapshotRepository, never()).saveAndFlush(any());
+    }
+
+    // =========================================================
+    // G-13: Currency Validation Tests
+    // =========================================================
+
+    @Test
+    void createBillingSnapshot_missingCurrency_failsWithActionableError() {
+        BillingSnapshotCreateRequestDto request = newRequest();
+
+        BillingConfigurationResponseDto configuration = BillingConfigurationResponseDto.builder()
+                .billingConfigurationId(NEW_CONFIGURATION_ID)
+                .billingType(BillingType.TIME_AND_MATERIAL)
+                .billingTypeName("Timesheet Based")
+                .taxRegionCode("DOM")
+                .approved(true)
+                .currencyId(null)
+                .currencyCode(null)
+                .build();
+        when(billingConfigurationIntegration.getApprovedBillingConfiguration(PROJECT_ID)).thenReturn(configuration);
+        when(projectMasterReferenceRepository.findBypmsProjectId(PROJECT_ID)).thenReturn(Optional.of(
+                ProjectMasterReference.builder().pmsProjectId(PROJECT_ID).primaryLocation("Domestic").build()));
+        when(taxRegionMasterRepository.findByTaxRegionNameIgnoreCase("Domestic"))
+                .thenReturn(Optional.of(TaxRegionMaster.builder().taxRegionCode("DOM").build()));
+
+        ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getMessage()).contains("Currency configuration is missing");
+        verify(billingSnapshotRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createBillingSnapshot_unsupportedCurrency_failsExplicitly() {
+        BillingSnapshotCreateRequestDto request = newRequest();
+
+        BillingConfigurationResponseDto configuration = BillingConfigurationResponseDto.builder()
+                .billingConfigurationId(NEW_CONFIGURATION_ID)
+                .billingType(BillingType.TIME_AND_MATERIAL)
+                .billingTypeName("Timesheet Based")
+                .taxRegionCode("DOM")
+                .approved(true)
+                .currencyId(UUID.randomUUID())
+                .currencyCode("XYZ")
+                .build();
+        when(billingConfigurationIntegration.getApprovedBillingConfiguration(PROJECT_ID)).thenReturn(configuration);
+        when(projectMasterReferenceRepository.findBypmsProjectId(PROJECT_ID)).thenReturn(Optional.of(
+                ProjectMasterReference.builder().pmsProjectId(PROJECT_ID).primaryLocation("Domestic").build()));
+        when(taxRegionMasterRepository.findByTaxRegionNameIgnoreCase("Domestic"))
+                .thenReturn(Optional.of(TaxRegionMaster.builder().taxRegionCode("DOM").build()));
+        when(currencyMasterRepository.findById(any())).thenReturn(Optional.empty());
+        when(currencyMasterRepository.findByCurrencyCodeIgnoreCase("XYZ")).thenReturn(Optional.empty());
+
+        ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getMessage()).contains("is not a supported active currency");
+        verify(billingSnapshotRepository, never()).saveAndFlush(any());
+    }
+
+    // =========================================================
+    // G-22: Snapshot Cancellation and Claim Release
+    // =========================================================
+
+    @Test
+    void cancelBillingSnapshot_releasesClaims_whenNotInvoiced() {
+        UUID snapId = UUID.randomUUID();
+        BillingSnapshotItem item1 = BillingSnapshotItem.builder()
+                .billingSnapshotItemId(UUID.randomUUID())
+                .sourceReferenceId("TS-101")
+                .billedSourceReferenceId("TS-101")
+                .build();
+        BillingSnapshot snapshot = BillingSnapshot.builder()
+                .id(snapId)
+                .snapshotNumber("BS-101")
+                .status(BillingSnapshotStatus.READY_FOR_TAX)
+                .items(new java.util.ArrayList<>(List.of(item1)))
+                .build();
+
+        when(billingSnapshotRepository.findById(snapId)).thenReturn(Optional.of(snapshot));
+        when(invoiceRepository.existsByBillingSnapshotId(snapId)).thenReturn(false);
+
+        ApiResponse<Void> response = service.cancelBillingSnapshot(snapId);
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(snapshot.getStatus()).isEqualTo(BillingSnapshotStatus.CANCELLED);
+        assertThat(item1.getBilledSourceReferenceId()).isNull();
+        verify(billingSnapshotRepository).save(snapshot);
+    }
+
+    @Test
+    void cancelBillingSnapshot_fails_whenInvoiceExists() {
+        UUID snapId = UUID.randomUUID();
+        BillingSnapshot snapshot = BillingSnapshot.builder()
+                .id(snapId)
+                .snapshotNumber("BS-102")
+                .status(BillingSnapshotStatus.READY_FOR_TAX)
+                .build();
+
+        when(billingSnapshotRepository.findById(snapId)).thenReturn(Optional.of(snapshot));
+        when(invoiceRepository.existsByBillingSnapshotId(snapId)).thenReturn(true);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.cancelBillingSnapshot(snapId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already been generated from it");
+    }
+
+    @Test
+    void cancelBillingSnapshot_idempotent_whenAlreadyCancelled() {
+        UUID snapId = UUID.randomUUID();
+        BillingSnapshot snapshot = BillingSnapshot.builder()
+                .id(snapId)
+                .snapshotNumber("BS-103")
+                .status(BillingSnapshotStatus.CANCELLED)
+                .build();
+
+        when(billingSnapshotRepository.findById(snapId)).thenReturn(Optional.of(snapshot));
+
+        ApiResponse<Void> response = service.cancelBillingSnapshot(snapId);
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getMessage()).contains("already cancelled");
+        verify(billingSnapshotRepository, never()).save(any());
+    }
+
+    // =========================================================
+    // G-16: Transient Persistence Failure Propagation
+    // =========================================================
+
+    @Test
+    void createBillingSnapshot_transientDatabaseFailure_propagatesException() {
+        BillingSnapshotCreateRequestDto request = newRequest();
+
+        BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
+        TimesheetDto timesheet = timesheet(true);
+        stubAcquiredTimesheets(configuration, request, timesheet);
+
+        when(billingSnapshotRepository.saveAndFlush(any()))
+                .thenThrow(new org.springframework.dao.CannotAcquireLockException("Lock timeout"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.createBillingSnapshot(request))
+                .isInstanceOf(org.springframework.dao.TransientDataAccessException.class);
     }
 }

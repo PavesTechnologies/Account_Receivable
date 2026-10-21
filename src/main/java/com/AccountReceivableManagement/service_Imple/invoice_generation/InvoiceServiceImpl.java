@@ -166,6 +166,9 @@ public class InvoiceServiceImpl implements InvoiceService {
 
         private final AutomaticBillingRunService automaticBillingRunService;
 
+        /** Who may approve; the acting user for audit (never a request value). */
+        private final com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
+
         /** Financial checks shared with automatic billing (requireOccurrenceBillable). */
         private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl
                 billingOccurrenceService;
@@ -194,6 +197,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 this.invoiceDocumentRepository = null;
                 this.automaticBillingRunRepository = null;
                 this.automaticBillingRunService = null;
+                this.financialActionAuthorizer = null;
                 this.billingOccurrenceService = null;
         }
 
@@ -1378,6 +1382,9 @@ public class InvoiceServiceImpl implements InvoiceService {
             InvoiceRejectionRequestDto request
     ) {
 
+        com.AccountReceivableManagement.security.Actor approver = financialActionAuthorizer.requirePermission(
+                com.AccountReceivableManagement.security.FinancialAction.INVOICE_APPROVAL);
+
         if (request.getReason() == null
                 || request.getReason().isBlank()) {
 
@@ -1400,10 +1407,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         // VALIDATE APPROVAL LOCK
         // =========================================================
 
-        recordActionLockService.validateLockOwner(
-                LockResourceType.INVOICE,
-                invoiceId
-        );
+        recordActionLockService.validateLockOwner(LockResourceType.INVOICE, invoiceId,
+                com.AccountReceivableManagement.entity_enums.common.LockActionType.APPROVAL);
 
         if (invoice.getStatus()
                 != InvoiceStatus.PENDING_APPROVAL) {
@@ -1780,6 +1785,9 @@ public class InvoiceServiceImpl implements InvoiceService {
             UUID invoiceId
     ) {
 
+        com.AccountReceivableManagement.security.Actor approver = financialActionAuthorizer.requirePermission(
+                com.AccountReceivableManagement.security.FinancialAction.INVOICE_APPROVAL);
+
         Invoice invoice =
                 invoiceRepository.findById(invoiceId)
                         .orElseThrow(() ->
@@ -1793,10 +1801,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         // VALIDATE APPROVAL LOCK
         // =========================================================
 
-        recordActionLockService.validateLockOwner(
-                LockResourceType.INVOICE,
-                invoiceId
-        );
+        recordActionLockService.validateLockOwner(LockResourceType.INVOICE, invoiceId,
+                com.AccountReceivableManagement.entity_enums.common.LockActionType.APPROVAL);
 
         if (invoice.getStatus()
                 != InvoiceStatus.PENDING_APPROVAL) {
@@ -1806,6 +1812,14 @@ public class InvoiceServiceImpl implements InvoiceService {
                     "Only invoices pending approval can be approved."
             );
         }
+
+        // Maker-checker: whoever submitted it for approval cannot approve it.
+        financialActionAuthorizer.requireDifferentFromMaker(
+                invoiceApprovalHistoryRepository
+                        .findTopByInvoiceIdAndActionOrderByActionAtDesc(invoiceId, InvoiceApprovalAction.SUBMITTED)
+                        .map(InvoiceApprovalHistory::getActionByUserId)
+                        .orElse(null),
+                approver, "invoice");
 
         InvoiceStatus previousStatus = invoice.getStatus();
 
@@ -1862,6 +1876,9 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     @Override
     public InvoiceResponseDto finalizeInvoiceDocument(UUID invoiceId) {
+
+        com.AccountReceivableManagement.security.Actor approver = financialActionAuthorizer.requirePermission(
+                com.AccountReceivableManagement.security.FinancialAction.INVOICE_APPROVAL);
 
         // Serializes concurrent approve/finalize requests: the second sees READY_TO_SEND.
         Invoice invoice =
@@ -2386,13 +2403,18 @@ public class InvoiceServiceImpl implements InvoiceService {
             String comment
     ) {
 
+        com.AccountReceivableManagement.security.Actor actor = financialActionAuthorizer != null
+                ? financialActionAuthorizer.currentActor()
+                : com.AccountReceivableManagement.security.Actor.SYSTEM;
+
         InvoiceApprovalHistory history =
                 InvoiceApprovalHistory.builder()
                         .invoiceId(invoiceId)
                         .previousStatus(previousStatus)
                         .newStatus(newStatus)
                         .action(action)
-                        .actionBy(SYSTEM_ACTION_BY)
+                        .actionBy(actor.label())
+                        .actionByUserId(actor.userId())
                         .actionAt(LocalDateTime.now())
                         .comment(comment)
                         .build();

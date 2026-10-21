@@ -68,8 +68,10 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     private final com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository taxRegionMasterRepository;
     private final Map<BillingType, BillingAcquisitionStrategy> strategiesByBillingType;
     private final BillingAcquisitionService billingAcquisitionService;
+    private final com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository invoiceRepository;
     private final TransactionTemplate transactionTemplate;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public BillingSnapshotServiceImpl(BillingSnapshotRepository billingSnapshotRepository,
             BillingConfigurationIntegration billingConfigurationIntegration,
             ProjectMasterDataService projectMasterDataService,
@@ -81,7 +83,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
             com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository taxRegionMasterRepository,
             List<BillingAcquisitionStrategy> strategies,
             BillingAcquisitionService billingAcquisitionService,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository invoiceRepository) {
         this.billingSnapshotRepository = billingSnapshotRepository;
         this.billingConfigurationIntegration = billingConfigurationIntegration;
         this.projectMasterDataService = projectMasterDataService;
@@ -95,6 +98,25 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 .collect(Collectors.toMap(BillingAcquisitionStrategy::getSupportedBillingType, Function.identity()));
         this.billingAcquisitionService = billingAcquisitionService;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.invoiceRepository = invoiceRepository;
+    }
+
+    public BillingSnapshotServiceImpl(BillingSnapshotRepository billingSnapshotRepository,
+            BillingConfigurationIntegration billingConfigurationIntegration,
+            ProjectMasterDataService projectMasterDataService,
+            BillingAcquisitionValidator billingAcquisitionValidator,
+            BillingSnapshotBuilder billingSnapshotBuilder,
+            BillingSnapshotMapper billingSnapshotMapper,
+            com.AccountReceivableManagement.repo.projectbilling_config.CurrencyMasterRepository currencyMasterRepository,
+            com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository projectMasterReferenceRepository,
+            com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository taxRegionMasterRepository,
+            List<BillingAcquisitionStrategy> strategies,
+            BillingAcquisitionService billingAcquisitionService,
+            PlatformTransactionManager transactionManager) {
+        this(billingSnapshotRepository, billingConfigurationIntegration, projectMasterDataService,
+                billingAcquisitionValidator, billingSnapshotBuilder, billingSnapshotMapper,
+                currencyMasterRepository, projectMasterReferenceRepository, taxRegionMasterRepository,
+                strategies, billingAcquisitionService, transactionManager, null);
     }
 
     @Override
@@ -119,17 +141,29 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         // Resolve destination tax jurisdiction from ProjectMasterReference.primaryLocation
         String destinationTaxJurisdictionCode = resolveDestinationTaxJurisdiction(request.getProjectId());
 
-        // Fallback resolution for currencyId if not set in configuration DTO
-        if (configuration.getCurrencyId() == null) {
-            String code = configuration.getCurrencyCode() != null ? configuration.getCurrencyCode() : "INR";
-            currencyMasterRepository.findByCurrencyCodeIgnoreCase(code)
-                    .ifPresent(c -> configuration.setCurrencyId(c.getCurrencyId()));
-
-            if (configuration.getCurrencyId() == null) {
-                currencyMasterRepository.findAll().stream().findFirst()
-                        .ifPresent(c -> configuration.setCurrencyId(c.getCurrencyId()));
-            }
+        // G-13: Validate currency from configuration without silent INR or arbitrary first-row fallback
+        UUID currencyId = configuration.getCurrencyId();
+        String currencyCode = configuration.getCurrencyCode();
+        if (currencyId == null && (currencyCode == null || currencyCode.isBlank())) {
+            return ApiResponse.failure("Currency configuration is missing for billing configuration "
+                    + configuration.getBillingConfigurationId() + ".");
         }
+
+        Optional<com.AccountReceivableManagement.entity.projectbilling_config.CurrencyMaster> currencyOpt = Optional.empty();
+        if (currencyId != null) {
+            currencyOpt = currencyMasterRepository.findById(currencyId);
+        }
+        if (currencyOpt.isEmpty() && currencyCode != null && !currencyCode.isBlank()) {
+            currencyOpt = currencyMasterRepository.findByCurrencyCodeIgnoreCase(currencyCode.trim());
+        }
+
+        if (currencyOpt.isEmpty()) {
+            return ApiResponse.failure("Configured currency (" + (currencyCode != null ? currencyCode : currencyId)
+                    + ") is not a supported active currency.");
+        }
+
+        configuration.setCurrencyId(currencyOpt.get().getCurrencyId());
+        configuration.setCurrencyCode(currencyOpt.get().getCurrencyCode());
 
         BillingAcquisitionStrategy strategy = resolveStrategy(configuration.getBillingType());
         if (strategy == null) {
@@ -202,6 +236,12 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
             // Acquisition-record validation (e.g. configuration not active) - the
             // snapshot was rolled back with it; surface the real message, as the
             // other validation failures in this method do.
+            throw ex;
+        } catch (org.springframework.dao.TransientDataAccessException | org.springframework.transaction.TransactionException ex) {
+            // G-16: Transient database connectivity/lock failures must propagate as retryable exceptions
+            // rather than being converted to permanent ApiResponse.failure
+            log.warn("[BillingSnapshotTransientPersistenceError] Transient failure during snapshot creation for projectId={}: {}",
+                    request.getProjectId(), ex.getMessage());
             throw ex;
         } catch (Exception ex) {
             log.error("[BillingSnapshotPersistenceError] Snapshot creation failed for projectId={}: {}",
@@ -579,10 +619,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         try {
             // Flushed so a unique-key conflict surfaces here, not at commit.
             return billingSnapshotRepository.saveAndFlush(snapshot);
-        } catch (DataIntegrityViolationException ex) {
-            // Left untranslated - the caller distinguishes a lost race from other failures.
-            log.warn("[BillingSnapshotSaveConflict] snapshotNumber={}: {}",
-                    snapshot.getSnapshotNumber(), ex.getMostSpecificCause().getMessage());
+        } catch (DataIntegrityViolationException | org.springframework.dao.TransientDataAccessException | org.springframework.transaction.TransactionException ex) {
+            // Left untranslated - caller and retry policy distinguish races and transient failures.
             throw ex;
         } catch (Exception ex) {
             Throwable rootCause = ex;
@@ -593,5 +631,37 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                     snapshot.getSnapshotNumber(), rootCause.getMessage(), ex);
             throw new IllegalStateException("Database insert error [" + rootCause.getMessage() + "]", ex);
         }
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<Void> cancelBillingSnapshot(UUID billingSnapshotId) {
+        if (billingSnapshotId == null) {
+            return ApiResponse.failure("Snapshot ID is required.");
+        }
+        BillingSnapshot snapshot = billingSnapshotRepository.findById(billingSnapshotId)
+                .orElse(null);
+        if (snapshot == null) {
+            return ApiResponse.failure("Billing Snapshot not found: " + billingSnapshotId);
+        }
+        if (snapshot.getStatus() == BillingSnapshotStatus.CANCELLED) {
+            return ApiResponse.success("Billing Snapshot is already cancelled.", null);
+        }
+
+        if (invoiceRepository != null && invoiceRepository.existsByBillingSnapshotId(billingSnapshotId)) {
+            throw new IllegalStateException("Cannot cancel Billing Snapshot " + billingSnapshotId
+                    + " as an invoice has already been generated from it.");
+        }
+
+        snapshot.setStatus(BillingSnapshotStatus.CANCELLED);
+        if (snapshot.getItems() != null) {
+            for (BillingSnapshotItem item : snapshot.getItems()) {
+                item.setBilledSourceReferenceId(null);
+            }
+        }
+        billingSnapshotRepository.save(snapshot);
+        log.info("[BillingSnapshotCancelled] snapshotId={} snapshotNumber={} claims released.",
+                billingSnapshotId, snapshot.getSnapshotNumber());
+        return ApiResponse.success("Billing Snapshot cancelled and source claims released successfully.", null);
     }
 }

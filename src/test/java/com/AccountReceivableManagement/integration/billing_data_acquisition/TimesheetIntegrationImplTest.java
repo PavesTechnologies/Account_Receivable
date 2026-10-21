@@ -154,7 +154,7 @@ class TimesheetIntegrationImplTest {
     }
 
     @Test
-    void onASchedulerThread_callsWithoutAuthorizationInsteadOfFailingOnTheMissingRequest() throws IOException {
+    void onASchedulerThread_withoutServiceToken_callsWithoutAuthorization() throws IOException {
         TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(200, TWO_TIMESHEETS));
 
         List<TimesheetDto> timesheets = tms.getApprovedTimesheets(7L,
@@ -165,13 +165,34 @@ class TimesheetIntegrationImplTest {
     }
 
     @Test
-    void onASchedulerThread_tmsRefusal_namesTheMissingServiceAuthentication() throws IOException {
+    void onASchedulerThread_withServiceToken_sendsBearerAuthorization() throws IOException {
+        TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(200, TWO_TIMESHEETS), "svc-token-xyz");
+
+        List<TimesheetDto> timesheets = tms.getApprovedTimesheets(7L,
+                LocalDate.of(2026, 10, 5), LocalDate.of(2026, 10, 11));
+
+        assertThat(receivedAuthorization.get()).isEqualTo("Bearer svc-token-xyz");
+        assertThat(timesheets).hasSize(2);
+    }
+
+    @Test
+    void onASchedulerThread_withoutServiceToken_tmsRefusal_namesTheMissingServiceAuthentication() throws IOException {
         TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(401, ""));
 
         assertThatThrownBy(() -> tms.getApprovedTimesheets(7L,
                 LocalDate.of(2026, 10, 5), LocalDate.of(2026, 10, 11)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("service-to-service authentication");
+    }
+
+    @Test
+    void onASchedulerThread_withServiceToken_tmsRefusal_reportsInvalidServiceToken() throws IOException {
+        TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(401, ""), "invalid-svc-token");
+
+        assertThatThrownBy(() -> tms.getApprovedTimesheets(7L,
+                LocalDate.of(2026, 10, 5), LocalDate.of(2026, 10, 11)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("TMS authentication failed: service-to-service token is invalid or expired.");
     }
 
     @Test

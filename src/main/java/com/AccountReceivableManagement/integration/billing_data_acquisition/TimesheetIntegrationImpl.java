@@ -47,9 +47,18 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
     static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(60);
 
     private final RestClient restClient;
+    private final String serviceToken;
 
     public TimesheetIntegrationImpl(String tmsApiBaseUrl) {
-        this(tmsApiBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT);
+        this(tmsApiBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, null);
+    }
+
+    public TimesheetIntegrationImpl(String tmsApiBaseUrl, Duration connectTimeout, Duration readTimeout) {
+        this(tmsApiBaseUrl, connectTimeout, readTimeout, null);
+    }
+
+    public TimesheetIntegrationImpl(String tmsApiBaseUrl, String serviceToken) {
+        this(tmsApiBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, serviceToken);
     }
 
     /**
@@ -58,20 +67,37 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
      * or the automatic billing scheduler thread past its run's claim - for
      * good. A timeout surfaces as {@code ResourceAccessException}, which
      * automatic billing retries.
+     * <p>
+     * Outside interactive user sessions, {@code serviceToken} provides the
+     * configured service-to-service credential.
      */
     @Autowired
     public TimesheetIntegrationImpl(@Value("${tms.api.base-url}") String tmsApiBaseUrl,
             @Value("${tms.api.connect-timeout:PT10S}") Duration connectTimeout,
-            @Value("${tms.api.read-timeout:PT60S}") Duration readTimeout) {
+            @Value("${tms.api.read-timeout:PT60S}") Duration readTimeout,
+            @Value("${tms.api.service-token:${TMS_SERVICE_TOKEN:}}") String serviceToken) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout((int) connectTimeout.toMillis());
         requestFactory.setReadTimeout((int) readTimeout.toMillis());
         this.restClient = RestClient.builder().baseUrl(tmsApiBaseUrl).requestFactory(requestFactory).build();
+        this.serviceToken = serviceToken != null && !serviceToken.isBlank() ? serviceToken.trim() : null;
     }
 
     @Override
     public List<TimesheetDto> getApprovedTimesheets(Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd) {
-        String authorizationHeader = currentAuthorizationHeader();
+        String callerAuth = currentAuthorizationHeader();
+        boolean callerAuthSent = callerAuth != null;
+        boolean serviceTokenSent = false;
+        String resolvedAuthorization = callerAuth;
+
+        if (resolvedAuthorization == null && serviceToken != null) {
+            resolvedAuthorization = serviceToken.startsWith("Bearer ") ? serviceToken : "Bearer " + serviceToken;
+            serviceTokenSent = true;
+        }
+
+        final String authorizationHeader = resolvedAuthorization;
+        final boolean finalCallerAuthSent = callerAuthSent;
+        final boolean finalServiceTokenSent = serviceTokenSent;
 
         TmsTimesheetBillingResponse response;
         try {
@@ -90,7 +116,7 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
                     .body(TmsTimesheetBillingResponse.class);
         } catch (RestClientResponseException ex) {
             Metrics.counter("ar.tms.request.failures", "status", String.valueOf(ex.getStatusCode().value())).increment();
-            throw translateTmsError(ex, authorizationHeader != null);
+            throw translateTmsError(ex, finalCallerAuthSent, finalServiceTokenSent);
         } catch (RestClientException ex) {
             // Unreachable, timed out or unreadable response.
             Metrics.counter("ar.tms.request.failures", "status", "io").increment();
@@ -136,19 +162,23 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
         return header != null && !header.isBlank() ? header : null;
     }
 
-    private RuntimeException translateTmsError(RestClientResponseException ex, boolean callerAuthorizationSent) {
+    private RuntimeException translateTmsError(RestClientResponseException ex, boolean callerAuthorizationSent,
+            boolean serviceTokenSent) {
         HttpStatusCode status = ex.getStatusCode();
 
-        if (!callerAuthorizationSent && (status.value() == 401 || status.value() == 403)) {
+        if (!callerAuthorizationSent && !serviceTokenSent && (status.value() == 401 || status.value() == 403)) {
             return new IllegalStateException("TMS refused the request (status " + status.value() + "): no "
                     + "Authorization was available - background TMS access requires service-to-service "
-                    + "authentication, which is not configured.");
+                    + "authentication (configure tms.api.service-token / TMS_SERVICE_TOKEN).");
         }
 
         if (status.value() == 400) {
             return new IllegalArgumentException("TMS rejected the request: " + ex.getResponseBodyAsString());
         }
         if (status.value() == 401) {
+            if (serviceTokenSent) {
+                return new IllegalStateException("TMS authentication failed: service-to-service token is invalid or expired.");
+            }
             return new IllegalStateException("TMS authentication failed: the JWT is invalid or expired.");
         }
         if (status.value() == 403) {

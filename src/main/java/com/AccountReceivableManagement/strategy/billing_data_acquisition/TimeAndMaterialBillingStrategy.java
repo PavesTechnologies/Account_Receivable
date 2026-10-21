@@ -62,7 +62,7 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
 
             BigDecimal hourlyRate = roleBased
                     ? resolveRoleBasedRate(configId, timesheet.getRole(), workDate)
-                    : resolveStandardRate(configuration, configId, workDate);
+                    : resolveStandardRate(configuration, configId, timesheet.getRole(), workDate);
 
             timesheet.setHourlyRate(hourlyRate);
         }
@@ -100,12 +100,15 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
     }
 
     /**
-     * STANDARD (and configurations without a pricing model): unchanged
-     * resolution order - rate card effective on the work date, then any
-     * active rate card, then the configuration's hourly rate.
+     * STANDARD (and configurations without a pricing model):
+     * Deterministic resolution:
+     * 1. Rate card effective on the work date matching the role (if role is specified).
+     * 2. General rate card effective on the work date (roleName is null or blank).
+     * 3. Fall back to configuration's contract hourly rate.
+     * Never silently fall back to an unrelated role's rate card or an out-of-date active rate card.
      */
     private BigDecimal resolveStandardRate(BillingConfigurationResponseDto configuration, UUID configId,
-            LocalDate workDate) {
+            String role, LocalDate workDate) {
         BigDecimal hourlyRate = null;
 
         if (configId != null) {
@@ -113,12 +116,22 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
                     .findActiveRatesByConfigurationAndDate(configId, workDate));
 
             if (!activeRates.isEmpty()) {
-                hourlyRate = activeRates.get(0).getRate();
-            } else {
-                List<BillingTMRateCard> allActive = hourlyOnly(billingTMRateCardRepository
-                        .findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(configId));
-                if (!allActive.isEmpty()) {
-                    hourlyRate = allActive.get(0).getRate();
+                if (role != null && !role.isBlank()) {
+                    String normRole = role.trim();
+                    for (BillingTMRateCard card : activeRates) {
+                        if (card.getRoleName() != null && card.getRoleName().trim().equalsIgnoreCase(normRole)) {
+                            hourlyRate = card.getRate();
+                            break;
+                        }
+                    }
+                }
+                if (hourlyRate == null) {
+                    for (BillingTMRateCard card : activeRates) {
+                        if (card.getRoleName() == null || card.getRoleName().isBlank()) {
+                            hourlyRate = card.getRate();
+                            break;
+                        }
+                    }
                 }
             }
         }

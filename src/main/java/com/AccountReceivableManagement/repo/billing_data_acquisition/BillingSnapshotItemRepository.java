@@ -35,9 +35,10 @@ public interface BillingSnapshotItemRepository extends JpaRepository<BillingSnap
      * already-billed timesheet check - an item belongs to its snapshot from
      * acquisition onward, so a not-yet-invoiced snapshot still claims it.
      */
-    @Query("SELECT DISTINCT i.sourceReferenceId FROM BillingSnapshotItem i "
+    @Query("SELECT DISTINCT i.billedSourceReferenceId FROM BillingSnapshotItem i "
             + "WHERE i.itemType = :itemType "
-            + "AND i.sourceReferenceId IN :sourceReferenceIds "
+            + "AND i.billedSourceReferenceId IN :sourceReferenceIds "
+            + "AND i.billedSourceReferenceId IS NOT NULL "
             + "AND i.billingSnapshot.status <> :ignoredStatus "
             + "AND (:excludedSnapshotId IS NULL OR i.billingSnapshot.id <> :excludedSnapshotId)")
     List<String> findClaimedSourceReferenceIds(

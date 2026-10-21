@@ -57,6 +57,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
     private final ProjectEligibilityRepository projectEligibilityRepository;
     private final BillingPeriodCalculatorService billingPeriodCalculatorService;
+
+    private final com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
     private final BillingMilestonePlanRepository billingMilestonePlanRepository;
     private final BillingPaymentEntryRepository billingPaymentEntryRepository;
     private final BillingMilestonePlanService billingMilestonePlanService;
@@ -327,6 +329,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     @Transactional
     public BillingConfigurationResponseDto approve(UUID id) {
 
+        com.AccountReceivableManagement.security.Actor approver = financialActionAuthorizer.requirePermission(
+                com.AccountReceivableManagement.security.FinancialAction.BILLING_CONFIGURATION_APPROVAL);
+
         BillingConfiguration configuration =
                 billingConfigurationRepository.findById(id)
                         .orElseThrow(() ->
@@ -337,10 +342,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // VALIDATE APPROVAL LOCK
         // =========================================================
 
-        recordActionLockService.validateLockOwner(
-                LockResourceType.BILLING_CONFIGURATION,
-                id
-        );
+        recordActionLockService.validateLockOwner(LockResourceType.BILLING_CONFIGURATION, id,
+                com.AccountReceivableManagement.entity_enums.common.LockActionType.APPROVAL);
 
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.PENDING_APPROVAL) {
@@ -351,11 +354,16 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         validateEffectiveDates(configuration);
 
+        // Maker-checker: whoever submitted it for approval cannot approve it.
+        financialActionAuthorizer.requireDifferentFromMaker(
+                configuration.getSubmittedByUserId(), approver, "billing configuration");
+
         /*
          * Approval is successful.
          */
         configuration.setApprovalStatus(
                 ApprovalStatus.APPROVED);
+        recordApprovalDecision(configuration, approver);
 
         /*
          * A newly approved configuration must not inherit
@@ -450,16 +458,17 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             UUID id,
             BillingConfigurationRejectRequestDto request) {
 
+        com.AccountReceivableManagement.security.Actor approver = financialActionAuthorizer.requirePermission(
+                com.AccountReceivableManagement.security.FinancialAction.BILLING_CONFIGURATION_APPROVAL);
+
         BillingConfiguration configuration =
                 billingConfigurationRepository.findById(id)
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
-        recordActionLockService.validateLockOwner(
-                LockResourceType.BILLING_CONFIGURATION,
-                id
-        );
+        recordActionLockService.validateLockOwner(LockResourceType.BILLING_CONFIGURATION, id,
+                com.AccountReceivableManagement.entity_enums.common.LockActionType.APPROVAL);
 
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.PENDING_APPROVAL) {
@@ -479,6 +488,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         configuration.setApprovalStatus(
                 ApprovalStatus.REJECTED);
+        recordApprovalDecision(configuration, approver);
 
         /*
          * A renewal awaiting this approval is rejected with it: it stays
@@ -2131,6 +2141,14 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             throw new ValidationException(
                     "Effective To date cannot be before Effective From date.");
         }
+    }
+
+    /** The checker of the last approval decision, from the authenticated identity. */
+    private static void recordApprovalDecision(BillingConfiguration configuration,
+            com.AccountReceivableManagement.security.Actor approver) {
+        configuration.setApprovalDecidedByUserId(approver.userId());
+        configuration.setApprovalDecidedBy(approver.label());
+        configuration.setApprovalDecidedAt(LocalDateTime.now());
     }
 
     private void validateEffectiveDates(

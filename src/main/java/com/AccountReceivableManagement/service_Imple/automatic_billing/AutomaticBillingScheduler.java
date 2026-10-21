@@ -29,6 +29,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -359,12 +360,29 @@ public class AutomaticBillingScheduler {
             if (period.getBillingDate().isAfter(today) || period.getBillingDate().isBefore(earliestBillingDate)) {
                 continue;
             }
-            boolean hasRun = automaticBillingRunRepository
+            Optional<AutomaticBillingRun> existingRunOpt = automaticBillingRunRepository
                     .findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
-                            configurationId, period.getPeriodStartDate(), period.getPeriodEndDate())
-                    .isPresent();
-            if (hasRun) {
-                continue;
+                            configurationId, period.getPeriodStartDate(), period.getPeriodEndDate());
+            if (existingRunOpt.isPresent()) {
+                AutomaticBillingRun existingRun = existingRunOpt.get();
+                boolean isTerminalOrPending = existingRun.getStatus() == AutomaticBillingRunStatus.COMPLETED
+                        || existingRun.getStatus() == AutomaticBillingRunStatus.PENDING_APPROVAL
+                        || existingRun.getStatus() == AutomaticBillingRunStatus.PROCESSING
+                        || existingRun.getStatus() == AutomaticBillingRunStatus.SCHEDULED
+                        || existingRun.getNextRetryAt() != null
+                        || existingRun.getInvoiceId() != null
+                        || existingRun.getBillingSnapshotId() != null;
+                if (isTerminalOrPending) {
+                    continue;
+                }
+                // G-14: If a previous run failed during source acquisition with no financial records created
+                // (e.g. zero hours or unapproved timesheets), it should not be permanently lost.
+                // It can be rediscovered on subsequent days if late-approved timesheets become available.
+                boolean attemptedToday = existingRun.getUpdatedAt() == null
+                        || !existingRun.getUpdatedAt().toLocalDate().isBefore(today);
+                if (attemptedToday) {
+                    continue;
+                }
             }
             boolean alreadyAcquired = billingSnapshotRepository
                     .existsByProjectIdAndBillingPeriodStartLessThanEqualAndBillingPeriodEndGreaterThanEqual(

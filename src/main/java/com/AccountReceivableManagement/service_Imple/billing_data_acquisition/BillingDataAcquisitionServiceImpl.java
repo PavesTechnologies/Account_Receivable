@@ -125,7 +125,7 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
                 .clientName(bc.getClient().getClientName())
                 .billingType(bc.getBillingType().getBillingTypeName())
                 .frequency(bc.getBillingFrequency().getBillingFrequencyName())
-                .currency(bc.getCurrency() != null ? bc.getCurrency().getCurrencyCode() : "INR")
+                .currency(bc.getCurrency() != null ? bc.getCurrency().getCurrencyCode() : null)
                 .billingPeriodStart(billingPeriodStart)
                 .billingPeriodEnd(billingPeriodEnd)
                 .generationMode(generationMode)

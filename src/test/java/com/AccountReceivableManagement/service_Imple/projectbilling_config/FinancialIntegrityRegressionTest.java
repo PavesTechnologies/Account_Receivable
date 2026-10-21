@@ -107,6 +107,9 @@ import static org.mockito.Mockito.when;
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "client-cdc.enabled=false",
         "project-cdc.enabled=false",
+        "ar.security.authorization.configuration-approval-authorities=ROLE_FINANCE_MANAGER",
+        "ar.security.authorization.invoice-approval-authorities=ROLE_FINANCE_MANAGER",
+        "ar.security.authorization.invoice-delivery-authorities=ROLE_FINANCE_MANAGER",
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost/test-issuer"
 })
 @ActiveProfiles("test")
@@ -161,9 +164,7 @@ class FinancialIntegrityRegressionTest {
     void setUp() {
         tx = new TransactionTemplate(transactionManager);
         emptyDatabase();
-        when(currentUserService.getCurrentUser()).thenReturn(new UserDTO(
-                7L, "finance.manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of()));
-        when(currentUserService.getUserId()).thenReturn(7L);
+        actAs(MAKER);
         tx.executeWithoutResult(status -> seedMasterData());
     }
 
@@ -548,11 +549,16 @@ class FinancialIntegrityRegressionTest {
         void rejectedRenewal_staysInactive_andIsNotActivatedByALaterApproval() {
             BillingRecurringConfiguration renewal = renewForFourMonths();
             UUID id = configuration.getBillingConfigurationId();
-            lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
+            actAs(APPROVER);
             try {
-                configurationService.reject(id, new BillingConfigurationRejectRequestDto("Renewal price not agreed."));
+                lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
+                try {
+                    configurationService.reject(id, new BillingConfigurationRejectRequestDto("Renewal price not agreed."));
+                } finally {
+                    lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
+                }
             } finally {
-                lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
+                actAs(MAKER);
             }
             assertThat(recurringRepository.findById(renewal.getRecurringConfigurationId()).orElseThrow()
                     .getRenewalApprovalStatus()).isEqualTo(ApprovalStatus.REJECTED);
@@ -1020,33 +1026,38 @@ class FinancialIntegrityRegressionTest {
                 c.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
             });
             UUID id = configuration.getBillingConfigurationId();
-            lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
-
-            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
-            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
-            List<java.util.concurrent.Future<String>> outcomes = new ArrayList<>();
+            actAs(APPROVER);
             try {
-                for (int i = 0; i < 2; i++) {
-                    outcomes.add(pool.submit(() -> {
-                        go.await();
-                        try {
-                            configurationService.approve(id);
-                            return "approved";
-                        } catch (RuntimeException ex) {
-                            return "refused: " + ex.getClass().getSimpleName();
-                        }
-                    }));
+                lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
+
+                java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+                List<java.util.concurrent.Future<String>> outcomes = new ArrayList<>();
+                try {
+                    for (int i = 0; i < 2; i++) {
+                        outcomes.add(pool.submit(() -> {
+                            go.await();
+                            try {
+                                configurationService.approve(id);
+                                return "approved";
+                            } catch (RuntimeException ex) {
+                                return "refused: " + ex.getClass().getSimpleName();
+                            }
+                        }));
+                    }
+                    go.countDown();
+                    List<String> results = new ArrayList<>();
+                    for (java.util.concurrent.Future<String> outcome : outcomes) {
+                        results.add(outcome.get(60, java.util.concurrent.TimeUnit.SECONDS));
+                    }
+                    System.out.println("[ConcurrentReapproval] outcomes=" + results);
+                    assertThat(results).contains("approved");
+                } finally {
+                    pool.shutdownNow();
+                    lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
                 }
-                go.countDown();
-                List<String> results = new ArrayList<>();
-                for (java.util.concurrent.Future<String> outcome : outcomes) {
-                    results.add(outcome.get(60, java.util.concurrent.TimeUnit.SECONDS));
-                }
-                System.out.println("[ConcurrentReapproval] outcomes=" + results);
-                assertThat(results).contains("approved");
             } finally {
-                pool.shutdownNow();
-                lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
+                actAs(MAKER);
             }
 
             assertThat(approvalStatus(configuration)).isEqualTo(ApprovalStatus.APPROVED);
@@ -1212,14 +1223,30 @@ class FinancialIntegrityRegressionTest {
         });
     }
 
+    /** Approves as the approver (user 8): the maker (user 7) may not approve their own submission. */
     private void approve(BillingConfiguration configuration) {
         UUID id = configuration.getBillingConfigurationId();
-        lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
+        actAs(APPROVER);
         try {
-            configurationService.approve(id);
+            lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
+            try {
+                configurationService.approve(id);
+            } finally {
+                lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
+            }
         } finally {
-            lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
+            actAs(MAKER);
         }
+    }
+
+    private static final UserDTO MAKER = new UserDTO(
+            7L, "finance.executive@example.com", "Finance Executive", List.of("FINANCE_EXECUTIVE"), List.of());
+    private static final UserDTO APPROVER = new UserDTO(
+            8L, "finance.manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of());
+
+    private void actAs(UserDTO user) {
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+        when(currentUserService.getUserId()).thenReturn(user.getId());
     }
 
     /** As an edit of an approved configuration leaves it, then approval again. */

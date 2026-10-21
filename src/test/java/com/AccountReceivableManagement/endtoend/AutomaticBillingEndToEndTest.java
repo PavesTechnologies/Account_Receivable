@@ -119,6 +119,9 @@ import static org.mockito.Mockito.when;
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "client-cdc.enabled=false",
         "project-cdc.enabled=false",
+        "ar.security.authorization.configuration-approval-authorities=ROLE_FINANCE_MANAGER",
+        "ar.security.authorization.invoice-approval-authorities=ROLE_FINANCE_MANAGER",
+        "ar.security.authorization.invoice-delivery-authorities=ROLE_FINANCE_MANAGER",
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost/test-issuer",
         // Enabled, but only ticked by the test itself (the cron never fires during a run).
         "ar.automatic-billing.enabled=true",

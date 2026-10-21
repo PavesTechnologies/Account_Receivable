@@ -181,7 +181,7 @@ class AutomaticBillingOrchestratorTest {
                         .billingConfigurationId(configuration.getBillingConfigurationId())
                         .projectId(PROJECT_ID)
                         .billingType(type)
-                        .billingTypeName(type.name())
+                        .billingTypeName(type != null ? type.name() : "CUSTOM_UNKNOWN")
                         .approved(approved)
                         .invoiceGenerationType(generation)
                         .build());
@@ -367,6 +367,34 @@ class AutomaticBillingOrchestratorTest {
         assertThat(result.getFailureStep()).isEqualTo(AutomaticBillingStep.SOURCE_DATA_ACQUISITION);
         assertThat(result.getFailureReason()).contains("No timesheets were acquired");
         verifyNoInteractions(taxService);
+    }
+
+    @Test
+    void unknownBillingType_failsFastWithoutDefaultingToTimeAndMaterial() {
+        configurationIs(null, true, InvoiceGenerationType.AUTOMATIC);
+        UUID runId = timeAndMaterialRun(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
+
+        AutomaticBillingRun result = orchestrator.processRun(runId);
+
+        assertThat(result.getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+        assertThat(result.getFailureReason()).contains("unsupported or unknown billing type");
+        verifyNoInteractions(snapshotService, taxService, invoiceService);
+    }
+
+    @Test
+    void timeAndMaterial_timesheetsPendingApproval_recordsRetryableFailure() {
+        configurationIs(BillingType.TIME_AND_MATERIAL);
+        when(snapshotService.createBillingSnapshot(any()))
+                .thenReturn(ApiResponse.failure("Timesheet [TS-101] is not approved."));
+        UUID runId = timeAndMaterialRun(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
+
+        AutomaticBillingRun result = orchestrator.processRun(runId);
+
+        assertThat(result.getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+        assertThat(result.getFailureStep()).isEqualTo(AutomaticBillingStep.SOURCE_DATA_ACQUISITION);
+        assertThat(result.getFailureReason()).contains("Billing data acquisition pending: Timesheet [TS-101] is not approved.");
+        assertThat(result.getNextRetryAt()).isNotNull();
+        verifyNoInteractions(taxService, invoiceService);
     }
 
     @Test
@@ -961,7 +989,7 @@ class AutomaticBillingOrchestratorTest {
     void validationFailure_isNotScheduledForRetry() {
         configurationIs(BillingType.TIME_AND_MATERIAL);
         when(snapshotService.createBillingSnapshot(any()))
-                .thenReturn(ApiResponse.failure("Timesheet [TS-9] is not approved."));
+                .thenReturn(ApiResponse.failure("No active hourly rate found for billing configuration X."));
         UUID runId = timeAndMaterialRun(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
 
         AutomaticBillingRun result = orchestrator.processRun(runId);

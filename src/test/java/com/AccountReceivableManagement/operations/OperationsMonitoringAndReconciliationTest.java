@@ -127,6 +127,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "client-cdc.enabled=false",
         "project-cdc.enabled=false",
+        "ar.security.authorization.configuration-approval-authorities=ROLE_FINANCE_MANAGER",
+        "ar.security.authorization.invoice-approval-authorities=ROLE_FINANCE_MANAGER",
+        "ar.security.authorization.invoice-delivery-authorities=ROLE_FINANCE_MANAGER",
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost/test-issuer",
         // Ticked by the test only.
         "ar.automatic-billing.enabled=true",

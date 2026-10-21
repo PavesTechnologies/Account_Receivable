@@ -28,12 +28,22 @@ public class RecordActionLockServiceImpl implements RecordActionLockService {
 
     private final CurrentUserService currentUserService;
 
+    private final com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
+
     @Override
     @Transactional
     public RecordLockResponse acquireLock(
             LockResourceType resourceType,
             UUID resourceId,
             LockActionType actionType) {
+
+        // An approval lock is only for those who may approve: it never grants the
+        // permission itself, and an unauthorized user cannot hold the record.
+        if (actionType == LockActionType.APPROVAL) {
+            financialActionAuthorizer.requirePermission(resourceType == LockResourceType.INVOICE
+                    ? com.AccountReceivableManagement.security.FinancialAction.INVOICE_APPROVAL
+                    : com.AccountReceivableManagement.security.FinancialAction.BILLING_CONFIGURATION_APPROVAL);
+        }
 
         UserDTO currentUser = currentUserService.getCurrentUser();
 
@@ -315,6 +325,21 @@ public class RecordActionLockServiceImpl implements RecordActionLockService {
      */
     @Override
     @Transactional(readOnly = true)
+    public void validateLockOwner(
+            LockResourceType resourceType,
+            UUID resourceId,
+            LockActionType requiredAction) {
+
+        validateLockOwner(resourceType, resourceId);
+        RecordActionLock lock = lockRepository.findByResourceTypeAndResourceId(resourceType, resourceId)
+                .orElseThrow(() -> new RecordLockedException("You do not have an active lock for this record."));
+        if (lock.getActionType() != requiredAction) {
+            throw new RecordLockedException("Open this record for " + requiredAction.name().toLowerCase()
+                    + " before taking this action.");
+        }
+    }
+
+    @Override
     public void validateLockOwner(
             LockResourceType resourceType,
             UUID resourceId) {

@@ -118,7 +118,10 @@ public class AutomaticBillingOrchestrator {
         // Correlation for every line logged while this run is processed - here and in
         // the billing services it calls (logging.pattern.level prints [run=...]).
         try (MDC.MDCCloseable runId = MDC.putCloseable(MDC_RUN_ID, automaticBillingRunId.toString())) {
-            AutomaticBillingRun result = processRunInContext(automaticBillingRunId);
+            // Automatic billing acts as the system: what it records is attributed to the
+            // system, and it can never take a decision reserved for an authorized person.
+            AutomaticBillingRun result = com.AccountReceivableManagement.security.ActorContext.callAsSystem(
+                    () -> processRunInContext(automaticBillingRunId));
             logOutcome(result);
             return result;
         } finally {
@@ -245,6 +248,12 @@ public class AutomaticBillingOrchestrator {
                     "Billing Configuration " + configurationId + " no longer uses AUTOMATIC invoice generation.");
         }
 
+        if (configuration.getBillingType() == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Configuration " + configurationId + " has unsupported or unknown billing type: "
+                            + configuration.getBillingTypeName());
+        }
+
         MDC.put(MDC_BILLING_TYPE, String.valueOf(configuration.getBillingType()));
         boolean timeAndMaterial = configuration.getBillingType() == BillingType.TIME_AND_MATERIAL;
 
@@ -298,11 +307,14 @@ public class AutomaticBillingOrchestrator {
 
         if (response == null || !response.isSuccess() || response.getData() == null
                 || response.getData().getSnapshotId() == null) {
+            String message = response != null && response.getMessage() != null ? response.getMessage() : "";
+            if (message.contains("not approved") || message.contains("pending approval")) {
+                throw new com.AccountReceivableManagement.integration.billing_data_acquisition.TimesheetsPendingApprovalException(
+                        "Billing data acquisition pending: " + message);
+            }
             throw new GlobalExceptionHandler.ValidationException(
                     "Billing data acquisition failed: "
-                            + (response != null && response.getMessage() != null
-                                    ? response.getMessage()
-                                    : "no Billing Snapshot was returned."));
+                            + (!message.isBlank() ? message : "no Billing Snapshot was returned."));
         }
         if (response.getData().getStatus() == BillingSnapshotStatus.CANCELLED) {
             // An existing snapshot of this period was reused, but it no longer bills anything.

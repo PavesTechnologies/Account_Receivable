@@ -54,6 +54,9 @@ class InvoiceDeliveryServiceImplTest {
     private static final byte[] STORED_PDF = {37, 80, 68, 70, 1, 2, 3};
 
     @Mock
+    private com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
+
+    @Mock
     private InvoiceRepository invoiceRepository;
 
     @Mock
@@ -84,6 +87,11 @@ class InvoiceDeliveryServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(financialActionAuthorizer.requirePermission(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+        org.mockito.Mockito.lenient().when(financialActionAuthorizer.currentActor())
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+
         // sendInvoice registers an after-commit callback; stand in for the
         // @Transactional boundary that is absent in a plain unit test.
         TransactionSynchronizationManager.initSynchronization();

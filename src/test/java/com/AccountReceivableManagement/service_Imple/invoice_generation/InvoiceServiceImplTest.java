@@ -65,6 +65,9 @@ import static org.mockito.Mockito.*;
 class InvoiceServiceImplTest {
 
     @Mock
+    private com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
+
+    @Mock
     private com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl billingOccurrenceService;
 
     @Mock
@@ -91,6 +94,9 @@ class InvoiceServiceImplTest {
         @Mock
         private CompanyProfileService companyProfileService;
 
+    @Mock
+    private com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService recordActionLockService;
+
     @InjectMocks
     private InvoiceServiceImpl invoiceService;
 
@@ -100,6 +106,15 @@ class InvoiceServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(financialActionAuthorizer.requirePermission(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+        org.mockito.Mockito.lenient().when(financialActionAuthorizer.currentActor())
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+        org.mockito.Mockito.lenient().doNothing().when(recordActionLockService).validateLockOwner(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.lenient().doNothing().when(recordActionLockService).validateLockOwner(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+
         snapshotId = UUID.randomUUID();
         clientId = UUID.randomUUID();
         paymentTermId = UUID.randomUUID();
@@ -1670,7 +1685,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.GENERATED);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
         assertThat(history.getActionAt()).isNotNull();
     }
 
@@ -1766,7 +1781,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
     }
 
     // REJECT CASE 1 — PENDING_APPROVAL invoice rejects successfully and records history.
@@ -1809,7 +1824,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.REJECTED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
         assertThat(history.getActionAt()).isNotNull();
         assertThat(history.getComment())
                 .isEqualTo("Billing hours are incorrect for the selected period.");
@@ -2016,7 +2031,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.APPROVED);
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.APPROVED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
     }
 
     // APPROVE CASE 2 — Invoice not found.
@@ -3065,7 +3080,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.CORRECTED);
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
         assertThat(history.getComment()).isEqualTo("Non-financial invoice correction completed.");
     }
 
