@@ -3,6 +3,9 @@ package com.AccountReceivableManagement.config;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -39,6 +42,24 @@ public class CorsConfig {
     }
 
     @Bean
+    public CorsConfigurationSource corsConfigurationSource(@Value("${ar.cors.allowed-origins:}") String allowedOrigins) {
+        List<String> origins = trustedOrigins(allowedOrigins);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        if (origins.isEmpty()) {
+            return source;
+        }
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(origins);
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setExposedHeaders(List.of("Authorization", "Content-Disposition", "X-Total-Count"));
+        config.setAllowCredentials(true);
+        config.setMaxAge(3600L);
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+    @Bean
     public WebMvcConfigurer corsConfigurer(@Value("${ar.cors.allowed-origins:}") String allowedOrigins) {
         List<String> origins = trustedOrigins(allowedOrigins);
         return new WebMvcConfigurer() {
@@ -55,8 +76,10 @@ public class CorsConfig {
                                 "PUT",
                                 "PATCH",
                                 "DELETE",
-                                "OPTIONS")
-                        .allowedHeaders("Authorization", "Content-Type", "Accept", "X-Requested-With")
+                                "OPTIONS",
+                                "HEAD")
+                        .allowedHeaders("*")
+                        .exposedHeaders("Authorization", "Content-Disposition", "X-Total-Count")
                         .allowCredentials(true)
                         .maxAge(3600);
             }
