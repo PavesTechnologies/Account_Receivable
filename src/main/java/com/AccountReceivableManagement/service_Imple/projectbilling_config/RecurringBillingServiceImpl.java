@@ -695,8 +695,6 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
 
         var project = configuration.getProject();
 
-        LocalDate projectStart = project.getStartDate();
-        LocalDate projectEnd = project.getEndDate();
 
         if (effectiveFrom != null &&
                 effectiveTo != null &&
@@ -705,6 +703,14 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             throw new GlobalExceptionHandler.ValidationException(
                     "Effective From date cannot be after Effective To date.");
         }
+
+        // A configuration without a project (PRODUCT_SERVICE) has no project
+        // window to check against.
+        if (project == null) {
+            return;
+        }
+        LocalDate projectStart = project.getStartDate();
+        LocalDate projectEnd = project.getEndDate();
 
         if (projectStart == null || projectEnd == null) {
             return;
