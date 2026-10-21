@@ -511,9 +511,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         BigDecimal totalTax = BigDecimal.ZERO;
 
-        log.info("Tax Calculation Diagnostics for BillingSchedule: {}", billingScheduleId);
-        log.info("Tax Configuration ID: {}", taxConfiguration.getTaxConfigurationId());
-        log.info("Tax Configuration Components Size: {}", taxConfiguration.getComponents().size());
+        log.debug("Tax Calculation Diagnostics for BillingSchedule: {}", billingScheduleId);
+        log.debug("Tax Configuration ID: {}", taxConfiguration.getTaxConfigurationId());
+        log.debug("Tax Configuration Components Size: {}", taxConfiguration.getComponents().size());
         log.info("Transaction Applicability: {}", transactionApplicability);
 
         for (TaxConfigurationComponent configuredComponent
@@ -525,7 +525,7 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                     transactionApplicability
             );
 
-            log.info("Component: {} | active={} | rate={} | applicability={} | applicable={}",
+            log.debug("Component: {} | active={} | rate={} | applicability={} | applicable={}",
                     configuredComponent.getTaxType() != null ? configuredComponent.getTaxType().getTaxTypeCode() : "NULL",
                     isActive,
                     configuredComponent.getTaxRate(),
@@ -751,7 +751,7 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                     .orElse(null);
         }
 
-        log.info("Jurisdiction Resolution for Schedule {}: source (TaxRegion code)={}, destination (resolved from Project Location)={}",
+        log.debug("Jurisdiction Resolution for Schedule {}: source (TaxRegion code)={}, destination (resolved from Project Location)={}",
                 schedule.getBillingScheduleId(), source, destination);
 
         /*
@@ -765,11 +765,11 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
         }
 
         if (source.equalsIgnoreCase(destination)) {
-            log.info("Jurisdictions are SAME: {} == {}", source, destination);
+            log.debug("Jurisdictions are SAME: {} == {}", source, destination);
             return TaxApplicabilityType.SAME_JURISDICTION;
         }
 
-        log.info("Jurisdictions are DIFFERENT: {} != {}", source, destination);
+        log.debug("Jurisdictions are DIFFERENT: {} != {}", source, destination);
         return TaxApplicabilityType.DIFFERENT_JURISDICTION;
     }
 

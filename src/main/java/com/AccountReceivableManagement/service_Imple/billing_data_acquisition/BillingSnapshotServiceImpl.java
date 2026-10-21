@@ -593,28 +593,13 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     }
 
     private BillingSnapshot persistSnapshot(BillingSnapshot snapshot) {
-        log.info(
-                "[BillingSnapshotPreSave] snapshotNumber={}, billingConfigurationId={}, clientId={}, projectId={}, billingTypeId={}, billingType={}, currencyId={}, currencyCode={}, paymentTermId={}, paymentTermCode={}, billingFrequencyId={}, billingFrequency={}, taxRegionId={}, taxRegionCode={}, billingPeriodStart={}, billingPeriodEnd={}, status={}, subtotal={}, expenseAmount={}, totalAmount={}",
+        // Identifiers only - amounts and client/project details stay out of routine logs (G-31).
+        log.info("[BillingSnapshotPreSave] snapshotNumber={}, billingConfigurationId={}, billingPeriod={}..{}, status={}",
                 snapshot.getSnapshotNumber(),
                 snapshot.getBillingConfigurationId(),
-                snapshot.getClientId(),
-                snapshot.getProjectId(),
-                snapshot.getBillingTypeId(),
-                snapshot.getBillingType(),
-                snapshot.getCurrencyId(),
-                snapshot.getCurrencyCode(),
-                snapshot.getPaymentTermId(),
-                snapshot.getPaymentTermCode(),
-                snapshot.getBillingFrequencyId(),
-                snapshot.getBillingFrequency(),
-                snapshot.getTaxRegionId(),
-                snapshot.getTaxRegionCode(),
                 snapshot.getBillingPeriodStart(),
                 snapshot.getBillingPeriodEnd(),
-                snapshot.getStatus(),
-                snapshot.getSubtotal(),
-                snapshot.getExpenseAmount(),
-                snapshot.getTotalAmount());
+                snapshot.getStatus());
 
         try {
             // Flushed so a unique-key conflict surfaces here, not at commit.

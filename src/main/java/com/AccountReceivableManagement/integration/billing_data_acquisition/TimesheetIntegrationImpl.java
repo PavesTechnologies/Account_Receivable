@@ -173,7 +173,10 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
         }
 
         if (status.value() == 400) {
-            return new IllegalArgumentException("TMS rejected the request: " + ex.getResponseBodyAsString());
+            // The response body can echo employee and timesheet details; it becomes
+            // the run's stored failure reason, so only its size is kept (G-31).
+            return new IllegalArgumentException("TMS rejected the request (status 400, "
+                    + ex.getResponseBodyAsString().length() + "-character response body not recorded).");
         }
         if (status.value() == 401) {
             if (serviceTokenSent) {

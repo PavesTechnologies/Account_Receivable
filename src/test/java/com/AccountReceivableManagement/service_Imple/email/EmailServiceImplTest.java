@@ -92,4 +92,35 @@ class EmailServiceImplTest {
         assertThat(messageId).isNotBlank();
         verify(mailSender).send(mimeMessage);
     }
+
+    // G-31: the failure log names the recipient domain only, never the address -
+    // provider messages can list it (e.g. "Invalid Addresses").
+    @Test
+    void sendEmailWithAttachment_failure_logsNoRecipientAddress() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(EmailServiceImpl.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captured =
+                new ch.qos.logback.core.read.ListAppender<>();
+        captured.start();
+        logger.addAppender(captured);
+        try {
+            MimeMessage mimeMessage = realMimeMessage();
+            when(mailSender.createMimeMessage()).thenReturn(mimeMessage);
+            doThrow(new MailSendException("Invalid Addresses: ap.team@client.example"))
+                    .when(mailSender).send(any(MimeMessage.class));
+
+            assertThatThrownBy(() -> emailService.sendEmailWithAttachment("ap.team@client.example",
+                    "Invoice INV-1", "Body", new byte[]{1}, "invoice.pdf", "application/pdf"))
+                    .isInstanceOf(EmailDeliveryException.class)
+                    .hasMessageNotContaining("ap.team");
+
+            assertThat(captured.list).isNotEmpty();
+            assertThat(captured.list).allSatisfy(event -> {
+                assertThat(event.getFormattedMessage()).doesNotContain("ap.team");
+                assertThat(event.getFormattedMessage()).contains("@client.example");
+            });
+        } finally {
+            logger.detachAppender(captured);
+        }
+    }
 }

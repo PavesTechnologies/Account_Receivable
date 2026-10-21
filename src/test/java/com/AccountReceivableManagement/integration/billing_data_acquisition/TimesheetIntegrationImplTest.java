@@ -214,6 +214,21 @@ class TimesheetIntegrationImplTest {
                 .hasMessage("TMS service failed with status 503.");
     }
 
+    // G-31: a TMS 400 body can echo employee/timesheet details; it becomes the
+    // run's stored failure reason, so it is not copied into the message.
+    @Test
+    void tmsBadRequest_bodyIsNotCopiedIntoTheFailureMessage() throws IOException {
+        TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(400,
+                "{\"error\":\"invalid employee Asha Rao asha.rao@paves.example\"}"));
+
+        assertThatThrownBy(() -> tms.getApprovedTimesheets(7L,
+                LocalDate.of(2026, 10, 5), LocalDate.of(2026, 10, 11)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("TMS rejected the request (status 400")
+                .hasMessageNotContaining("Asha")
+                .hasMessageNotContaining("@paves.example");
+    }
+
     @Test
     void malformedTmsResponse_isPropagatedNotTreatedAsNoTimesheets() throws IOException {
         TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(200, "{\"timesheets\": [ {"));

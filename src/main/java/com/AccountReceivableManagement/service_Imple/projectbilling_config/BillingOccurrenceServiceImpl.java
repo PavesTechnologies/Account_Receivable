@@ -1914,8 +1914,8 @@ public class BillingOccurrenceServiceImpl {
         if (schedule.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING) {
             taxCalculationRepository.deleteByBillingScheduleId(schedule.getBillingScheduleId());
         }
-        log.info("Billing amount of occurrence {} ({} to {}) set to {}", schedule.getBillingScheduleId(),
-                schedule.getPeriodStartDate(), schedule.getPeriodEndDate(), amount);
+        log.info("Billing amount of occurrence {} ({} to {}) changed", schedule.getBillingScheduleId(),
+                schedule.getPeriodStartDate(), schedule.getPeriodEndDate());
     }
 
     /** Tax calculated or invoiced: its amount is final and never re-allocated by reconciliation. */
