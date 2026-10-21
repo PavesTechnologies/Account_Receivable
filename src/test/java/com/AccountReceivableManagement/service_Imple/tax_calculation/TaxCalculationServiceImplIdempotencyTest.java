@@ -43,6 +43,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class TaxCalculationServiceImplIdempotencyTest {
 
+    @Mock
+    private com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl billingOccurrenceService;
+
     @Mock private TaxCalculationRepository taxCalculationRepository;
     @Mock private BillingSnapshotRepository billingSnapshotRepository;
     @Mock private BillingScheduleRepository billingScheduleRepository;

@@ -64,6 +64,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class InvoiceServiceImplScheduleInvoiceTest {
 
+    @Mock
+    private com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl billingOccurrenceService;
+
     @Mock private InvoiceRepository invoiceRepository;
     @Mock private InvoiceApprovalHistoryRepository invoiceApprovalHistoryRepository;
     @Mock private BillingSnapshotRepository billingSnapshotRepository;

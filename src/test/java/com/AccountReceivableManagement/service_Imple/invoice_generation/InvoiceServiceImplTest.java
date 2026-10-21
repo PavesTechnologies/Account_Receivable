@@ -65,6 +65,9 @@ import static org.mockito.Mockito.*;
 class InvoiceServiceImplTest {
 
     @Mock
+    private com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl billingOccurrenceService;
+
+    @Mock
     private InvoiceRepository invoiceRepository;
 
     @Mock

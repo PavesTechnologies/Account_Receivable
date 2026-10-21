@@ -211,7 +211,9 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 billingScheduleRepository,
                 taxConfigurationRepository,
                 taxRegionMasterRepository,
-                billingConfigurationRepository);
+                billingConfigurationRepository,
+                org.mockito.Mockito.mock(
+                        com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl.class));
 
         invoiceService = new InvoiceServiceImpl(
                 invoiceRepository,

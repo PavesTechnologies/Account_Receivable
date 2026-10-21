@@ -166,6 +166,10 @@ public class InvoiceServiceImpl implements InvoiceService {
 
         private final AutomaticBillingRunService automaticBillingRunService;
 
+        /** Financial checks shared with automatic billing (requireOccurrenceBillable). */
+        private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl
+                billingOccurrenceService;
+
         public InvoiceServiceImpl(
                         InvoiceRepository invoiceRepository,
                         InvoiceApprovalHistoryRepository invoiceApprovalHistoryRepository,
@@ -190,6 +194,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 this.invoiceDocumentRepository = null;
                 this.automaticBillingRunRepository = null;
                 this.automaticBillingRunService = null;
+                this.billingOccurrenceService = null;
         }
 
     @Override
@@ -548,6 +553,21 @@ public class InvoiceServiceImpl implements InvoiceService {
                 taxCalculation,
                 "Tax calculation totals are inconsistent for this billing occurrence. Invoice cannot be generated."
         );
+
+        // The same financial checks as tax calculation and automatic billing, so
+        // a direct call cannot invoice an occurrence they would refuse.
+        billingOccurrenceService.requireOccurrenceBillable(billingScheduleId);
+
+        // The invoice is built from the tax calculation; the occurrence must still
+        // carry the amount that was taxed.
+        if (schedule.getBillingAmount() == null || taxCalculation.getTaxableAmount() == null
+                || schedule.getBillingAmount().compareTo(taxCalculation.getTaxableAmount()) != 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice cannot be generated because the billing occurrence amount "
+                            + schedule.getBillingAmount() + " no longer equals the taxable amount "
+                            + taxCalculation.getTaxableAmount() + " of its tax calculation."
+            );
+        }
 
         BillingConfigurationResponseDto configuration =
                 billingConfigurationService.getBillingConfiguration(

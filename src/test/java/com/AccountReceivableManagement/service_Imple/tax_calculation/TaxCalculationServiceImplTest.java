@@ -46,6 +46,9 @@ import static org.mockito.Mockito.*;
 class TaxCalculationServiceImplTest {
 
     @Mock
+    private com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl billingOccurrenceService;
+
+    @Mock
     private TaxCalculationRepository taxCalculationRepository;
 
     @Mock

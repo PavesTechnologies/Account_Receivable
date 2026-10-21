@@ -70,6 +70,10 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
     private final BillingConfigurationRepository billingConfigurationRepository;
 
+    /** Financial checks shared with invoicing and automatic billing (requireOccurrenceBillable). */
+    private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl
+            billingOccurrenceService;
+
 //    private final BillingConfigurationService billingConfigurationService;
 
     @Override
@@ -420,6 +424,11 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                     "Tax calculation cannot be started because this billing schedule is inactive."
             );
         }
+
+        // The same financial checks automatic billing applies: approved
+        // configuration and the billing type's contract / payment-entry /
+        // term rules - so the manual endpoint cannot tax what automation refuses.
+        billingOccurrenceService.requireOccurrenceBillable(billingScheduleId);
 
         // Never taxed as zero: a missing or negative amount would otherwise
         // flow on into a zero-value (or negative) invoice.

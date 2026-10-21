@@ -88,7 +88,7 @@ class InvoiceServiceImplDocumentFinalizationTest {
 
     private InvoiceServiceImpl service(InvoiceDocumentService renderer) {
         return new InvoiceServiceImpl(invoiceRepository, historyRepository, null, null, null, null, null, null,
-                lockService, null, null, renderer, documentRepository, runRepository, runService);
+                lockService, null, null, renderer, documentRepository, runRepository, runService, null);
     }
 
     private InvoiceServiceImpl service() {
