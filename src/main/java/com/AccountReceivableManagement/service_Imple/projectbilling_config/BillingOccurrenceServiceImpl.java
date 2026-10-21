@@ -364,6 +364,7 @@ public class BillingOccurrenceServiceImpl {
                 configuration,
                 null,
                 frequency,
+                effectiveFrom,
                 generationStartDate,
                 effectiveTo,
                 // Only what the retained billed periods have not already billed.
@@ -469,6 +470,7 @@ public class BillingOccurrenceServiceImpl {
                 configuration,
                 recurring,
                 frequency,
+                effectiveFrom,
                 generationStartDate,
                 effectiveTo,
                 // Only what the retained billed periods have not already billed.
@@ -687,7 +689,7 @@ public class BillingOccurrenceServiceImpl {
         int periodNumber = 1;
 
         while (!currentStart.isAfter(lastStart)) {
-            LocalDate fullPeriodEnd = calculatePeriodEndDate(currentStart, frequency);
+            LocalDate fullPeriodEnd = calculatePeriodEndDate(rangeStart, currentStart, frequency);
             LocalDate currentEnd = rangeEnd != null && fullPeriodEnd.isAfter(rangeEnd) ? rangeEnd : fullPeriodEnd;
 
             periods.add(billingPeriod(periodNumber, currentStart, currentEnd, !currentEnd.isEqual(fullPeriodEnd)));
@@ -757,6 +759,7 @@ public class BillingOccurrenceServiceImpl {
             BillingConfiguration configuration,
             BillingRecurringConfiguration recurring,
             BillingFrequencyMaster frequency,
+            LocalDate anchor,
             LocalDate startDate,
             LocalDate endDate,
             BigDecimal totalContractValue,
@@ -771,13 +774,10 @@ public class BillingOccurrenceServiceImpl {
         boolean isFixedPrice = (recurring == null);
 
         while (!currentStart.isAfter(endDate)) {
-            LocalDate currentEnd = calculatePeriodEndDate(currentStart, frequency);
+            LocalDate fullPeriodEnd = calculatePeriodEndDate(anchor, currentStart, frequency);
+            LocalDate currentEnd = fullPeriodEnd.isAfter(endDate) ? endDate : fullPeriodEnd;
 
-            if (currentEnd.isAfter(endDate)) {
-                currentEnd = endDate;
-            }
-
-            boolean isPartial = !calculatePeriodEndDate(currentStart, frequency).isEqual(currentEnd);
+            boolean isPartial = !fullPeriodEnd.isEqual(currentEnd);
             boolean isLastPeriod = currentEnd.isEqual(endDate);
 
             BigDecimal periodAmount;
@@ -787,6 +787,7 @@ public class BillingOccurrenceServiceImpl {
                 // This is handled by counting periods before the loop
                 periodAmount = calculateFixedPricePeriodAmount(
                         totalContractValue, 
+                        anchor,
                         startDate, 
                         endDate, 
                         frequency, 
@@ -848,6 +849,7 @@ public class BillingOccurrenceServiceImpl {
      */
     private BigDecimal calculateFixedPricePeriodAmount(
             BigDecimal totalContractValue,
+            LocalDate anchor,
             LocalDate startDate,
             LocalDate endDate,
             BillingFrequencyMaster frequency,
@@ -855,7 +857,7 @@ public class BillingOccurrenceServiceImpl {
             boolean isLastPeriod) {
         
         // Count total number of periods
-        int totalPeriods = countPeriods(startDate, endDate, frequency);
+        int totalPeriods = countPeriods(anchor, startDate, endDate, frequency);
         
         if (totalPeriods <= 0) {
             return totalContractValue;
@@ -882,12 +884,13 @@ public class BillingOccurrenceServiceImpl {
      * @param frequency Billing frequency
      * @return Number of periods
      */
-    private int countPeriods(LocalDate startDate, LocalDate endDate, BillingFrequencyMaster frequency) {
+    private int countPeriods(LocalDate anchor, LocalDate startDate, LocalDate endDate,
+            BillingFrequencyMaster frequency) {
         int count = 0;
         LocalDate currentStart = startDate;
         
         while (!currentStart.isAfter(endDate)) {
-            LocalDate currentEnd = calculatePeriodEndDate(currentStart, frequency);
+            LocalDate currentEnd = calculatePeriodEndDate(anchor, currentStart, frequency);
             if (currentEnd.isAfter(endDate)) {
                 currentEnd = endDate;
             }
@@ -944,6 +947,41 @@ public class BillingOccurrenceServiceImpl {
                     ? lastDayOfMonth(startDate.plusYears(durationValue))
                     : startDate.plusYears(durationValue).minusDays(1);
         };
+    }
+
+    /**
+     * Last day of the period starting on {@code periodStart} in a schedule
+     * whose first period started on {@code anchor} (its Effective From).
+     * Periods are inclusive and contiguous: each ends the day before the next
+     * starts, and the billing date is the period end.
+     * <ul>
+     *   <li>End-of-month anchor (the last day of its month): periods end on
+     *       month ends - 31 Jan - 28/29 Feb, then calendar months
+     *       ({@link #calculatePeriodEndDate(LocalDate, BillingFrequencyMaster)}).</li>
+     *   <li>Fixed day-of-month anchor: every period starts on the anchor day,
+     *       clamped to the last day of a shorter month and restored afterwards
+     *       (30 Jan, 28/29 Feb, 30 Mar). The next start is always derived from
+     *       the original anchor, never from a clamped date, so the day cannot
+     *       drift.</li>
+     *   <li>Day-based frequencies are fixed-length.</li>
+     * </ul>
+     * A {@code periodStart} that is not on the anchor's cycle (a regenerated
+     * schedule) runs to the next anchor date.
+     */
+    LocalDate calculatePeriodEndDate(LocalDate anchor, LocalDate periodStart, BillingFrequencyMaster frequency) {
+        RenewalDurationUnit unit = frequency.getDurationUnit();
+        Integer durationValue = frequency.getDurationValue();
+        if (anchor == null || unit == RenewalDurationUnit.DAYS || durationValue == null || durationValue <= 0
+                || anchor.getDayOfMonth() == anchor.lengthOfMonth()) {
+            return calculatePeriodEndDate(periodStart, frequency);
+        }
+        LocalDate nextStart = anchor;
+        for (long cycle = 1; !nextStart.isAfter(periodStart); cycle++) {
+            nextStart = unit == RenewalDurationUnit.MONTHS
+                    ? anchor.plusMonths(cycle * durationValue)
+                    : anchor.plusYears(cycle * durationValue);
+        }
+        return nextStart.minusDays(1);
     }
 
     private static LocalDate lastDayOfMonth(LocalDate date) {
@@ -1885,7 +1923,7 @@ public class BillingOccurrenceServiceImpl {
         if (frequency.getDurationUnit() == null || frequency.getDurationValue() == null) {
             return List.of();
         }
-        return calculateAndCreateSchedules(configuration, null, frequency, from, to, contractValue,
+        return calculateAndCreateSchedules(configuration, null, frequency, from, from, to, contractValue,
                 BillingScheduleType.PRIMARY, 1);
     }
 
@@ -1902,7 +1940,7 @@ public class BillingOccurrenceServiceImpl {
                 || frequency.getDurationUnit() == null || frequency.getDurationValue() == null) {
             return List.of();
         }
-        return calculateAndCreateSchedules(configuration, recurring, frequency, from, to, contractValue,
+        return calculateAndCreateSchedules(configuration, recurring, frequency, from, from, to, contractValue,
                 BillingScheduleType.PRIMARY, 1);
     }
 

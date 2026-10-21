@@ -331,7 +331,9 @@ class BillingOccurrenceServiceImplTest {
                         .build()
         );
 
-        assertThat(result).isEqualTo(LocalDate.of(2024, 3, 31));
+        // 28 Feb 2024 is not a month end (2024 is a leap year): a fixed-day anchor on the 28th,
+        // so the period ends the day before 28 Mar - not on a month end (anchor policy C2/C4).
+        assertThat(result).isEqualTo(LocalDate.of(2024, 3, 27));
     }
 
     @Test

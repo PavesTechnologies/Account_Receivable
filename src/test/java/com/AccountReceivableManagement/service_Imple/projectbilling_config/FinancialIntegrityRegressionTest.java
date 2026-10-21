@@ -550,6 +550,92 @@ class FinancialIntegrityRegressionTest {
                     .isEqualTo(LocalDate.of(2029, 2, 28));
         }
 
+        /** The end of the period starting on {@code start} in a schedule anchored on {@code anchor}. */
+        private LocalDate end(LocalDate anchor, LocalDate start, BillingFrequencyMaster frequency) {
+            return occurrenceService.calculatePeriodEndDate(anchor, start, frequency);
+        }
+
+        @Test
+        void fixedDayAnchors_clampInShortMonths_andRestoreTheOriginalDay() {
+            // 30 Jan 2027 (non-leap): 30 Jan - 27 Feb, 28 Feb - 29 Mar, 30 Mar - 29 Apr.
+            LocalDate jan30 = LocalDate.of(2027, 1, 30);
+            assertThat(end(jan30, jan30, monthly)).isEqualTo(LocalDate.of(2027, 2, 27));
+            assertThat(end(jan30, LocalDate.of(2027, 2, 28), monthly)).isEqualTo(LocalDate.of(2027, 3, 29));
+            assertThat(end(jan30, LocalDate.of(2027, 3, 30), monthly)).isEqualTo(LocalDate.of(2027, 4, 29));
+            // 30 Jan 2028 (leap): Feb starts on the 29th.
+            LocalDate jan30Leap = LocalDate.of(2028, 1, 30);
+            assertThat(end(jan30Leap, jan30Leap, monthly)).isEqualTo(LocalDate.of(2028, 2, 28));
+            assertThat(end(jan30Leap, LocalDate.of(2028, 2, 29), monthly)).isEqualTo(LocalDate.of(2028, 3, 29));
+            // 29 Jan 2027 (non-leap): 28 Feb, then back to the 29th.
+            LocalDate jan29 = LocalDate.of(2027, 1, 29);
+            assertThat(end(jan29, jan29, monthly)).isEqualTo(LocalDate.of(2027, 2, 27));
+            assertThat(end(jan29, LocalDate.of(2027, 2, 28), monthly)).isEqualTo(LocalDate.of(2027, 3, 28));
+            // 29 Jan 2028 (leap): 29 Feb exists.
+            LocalDate jan29Leap = LocalDate.of(2028, 1, 29);
+            assertThat(end(jan29Leap, jan29Leap, monthly)).isEqualTo(LocalDate.of(2028, 2, 28));
+            assertThat(end(jan29Leap, LocalDate.of(2028, 2, 29), monthly)).isEqualTo(LocalDate.of(2028, 3, 28));
+            // Quarterly and annual keep the anchor day too.
+            assertThat(end(jan30, jan30, quarterly)).isEqualTo(LocalDate.of(2027, 4, 29));
+            assertThat(end(jan30, LocalDate.of(2027, 4, 30), quarterly)).isEqualTo(LocalDate.of(2027, 7, 29));
+            assertThat(end(jan30, jan30, yearly)).isEqualTo(LocalDate.of(2028, 1, 29));
+        }
+
+        @Test
+        void februaryStarts_onlyAGenuineMonthEndIsAMonthEndAnchor() {
+            // 28 Feb 2024 is not the last day of February in a leap year: a fixed-day anchor.
+            LocalDate feb28Leap = LocalDate.of(2024, 2, 28);
+            assertThat(end(feb28Leap, feb28Leap, monthly)).isEqualTo(LocalDate.of(2024, 3, 27));
+            // 29 Feb 2024 and 28 Feb 2026 are month ends.
+            assertThat(end(LocalDate.of(2024, 2, 29), LocalDate.of(2024, 2, 29), monthly))
+                    .isEqualTo(LocalDate.of(2024, 3, 31));
+            assertThat(end(LocalDate.of(2026, 2, 28), LocalDate.of(2026, 2, 28), monthly))
+                    .isEqualTo(LocalDate.of(2026, 3, 31));
+            // 30 Apr is a genuine month end.
+            assertThat(end(LocalDate.of(2026, 4, 30), LocalDate.of(2026, 4, 30), monthly))
+                    .isEqualTo(LocalDate.of(2026, 5, 31));
+        }
+
+        @Test
+        void scheduleFromThe30th_keepsItsAnchor_isContiguous_andIsStableAcrossReapproval() {
+            LocalDate anchor = LocalDate.of(today.getYear() + 1, 1, 30);
+            BillingConfiguration configuration = fixedPrice("400000.00", monthly, anchor, anchor.plusMonths(4).minusDays(1));
+
+            List<BillingSchedule> periods = active(configuration);
+            assertThat(periods).extracting(BillingSchedule::getPeriodStartDate).containsExactly(
+                    anchor, anchor.plusMonths(1), anchor.plusMonths(2), anchor.plusMonths(3));
+            assertContiguous(periods);
+            Map<UUID, BigDecimal> before = amountsById(configuration);
+
+            reapprove(configuration);
+
+            assertThat(amountsById(configuration)).isEqualTo(before);
+        }
+
+        @Test
+        void regenerationAfterABilledPeriod_keepsTheOriginalAnchor() {
+            LocalDate anchor = LocalDate.of(today.getYear() + 1, 1, 30);
+            BillingConfiguration configuration = fixedPrice("300000.00", monthly, anchor, anchor.plusMonths(3).minusDays(1));
+            markInvoiced(active(configuration).get(0));
+
+            // Regeneration restarts after the billed period (in February); the anchor stays the 30th.
+            updateConfiguration(configuration, c -> c.setEffectiveTo(anchor.plusMonths(5).minusDays(1)));
+            reapprove(configuration);
+
+            List<BillingSchedule> periods = active(configuration);
+            assertThat(periods).extracting(BillingSchedule::getPeriodStartDate).containsExactly(
+                    anchor, anchor.plusMonths(1), anchor.plusMonths(2), anchor.plusMonths(3), anchor.plusMonths(4));
+            assertContiguous(periods);
+            assertThat(sum(amountsById(configuration))).isEqualByComparingTo("300000.00");
+        }
+
+        private void assertContiguous(List<BillingSchedule> periods) {
+            for (int i = 1; i < periods.size(); i++) {
+                assertThat(periods.get(i).getPeriodStartDate()).as("period %d follows period %d", i + 1, i)
+                        .isEqualTo(periods.get(i - 1).getPeriodEndDate().plusDays(1));
+            }
+            assertThat(periods).allSatisfy(p -> assertThat(p.getBillingDate()).isEqualTo(p.getPeriodEndDate()));
+        }
+
         @Test
         void otherStarts_keepTheirConfiguredCycle() {
             assertThat(occurrenceService.calculatePeriodEndDate(LocalDate.of(2026, 9, 1), monthly))
