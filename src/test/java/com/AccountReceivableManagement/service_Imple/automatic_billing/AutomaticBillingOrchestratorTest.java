@@ -290,6 +290,25 @@ class AutomaticBillingOrchestratorTest {
         verifyNoInteractions(taxService, occurrenceTransitions);
     }
 
+    // G-32: retention/advance are not applied by billing yet (Finance decision
+    // pending) - automation does not issue such an invoice on its own.
+    @Test
+    void fixedPriceWithUndecidedRetentionOrAdvance_isNotBilledAutomatically() {
+        configurationIs(BillingType.FIXED_PRICE);
+        org.mockito.Mockito.when(occurrenceService.undecidedFixedPriceTerms(any()))
+                .thenReturn(java.util.List.of("retention 5.00%"));
+        UUID runId = occurrenceRun(occurrence(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31),
+                BillingPeriodStatus.TAX_PENDING));
+
+        AutomaticBillingRun result = orchestrator.processRun(runId);
+
+        assertThat(result.getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+        assertThat(result.getFailureReason()).contains("retention 5.00%").contains("bill it manually");
+        assertThat(result.getFailureStep()).isEqualTo(AutomaticBillingStep.SOURCE_DATA_ACQUISITION);
+        assertThat(result.getNextRetryAt()).isNull();
+        verifyNoInteractions(taxService, invoiceService);
+    }
+
     @Test
     void billingTypeThatDoesNotMatchTheRun_isNotProcessed() {
         configurationIs(BillingType.TIME_AND_MATERIAL);

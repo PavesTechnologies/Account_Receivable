@@ -1369,6 +1369,35 @@ public class BillingOccurrenceServiceImpl {
      *
      * @throws GlobalExceptionHandler.ValidationException naming what is wrong
      */
+    /**
+     * G-32: Fixed Price terms that billing does not apply yet. Retention and
+     * advance received are captured and validated on the configuration, but
+     * no Finance rule says how they change an invoice (deduct, withhold,
+     * release, offset), so occurrences bill the full amount. Automatic
+     * billing must not issue such invoices on its own: it stops for a person
+     * (BUSINESS_DECISIONS.md BD-01/BD-02). Manual billing is unchanged.
+     *
+     * @return the undecided terms in force (empty when none)
+     */
+    @Transactional(readOnly = true)
+    public List<String> undecidedFixedPriceTerms(UUID billingConfigurationId) {
+        BillingConfiguration configuration = billingConfigurationRepository.findById(billingConfigurationId)
+                .orElse(null);
+        if (configuration == null) {
+            return List.of();
+        }
+        List<String> terms = new ArrayList<>();
+        billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(configuration).ifPresent(fixedPrice -> {
+            if (fixedPrice.getRetentionPercentage() != null && fixedPrice.getRetentionPercentage().signum() > 0) {
+                terms.add("retention " + fixedPrice.getRetentionPercentage() + "%");
+            }
+            if (fixedPrice.getAdvanceReceived() != null && fixedPrice.getAdvanceReceived().signum() > 0) {
+                terms.add("advance received");
+            }
+        });
+        return terms;
+    }
+
     @Transactional(readOnly = true)
     public void requireOccurrenceBillable(UUID billingScheduleId) {
         BillingSchedule occurrence = loadOccurrenceForBilling(billingScheduleId);

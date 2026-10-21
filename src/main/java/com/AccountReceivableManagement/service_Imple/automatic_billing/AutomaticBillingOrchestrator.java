@@ -173,6 +173,7 @@ public class AutomaticBillingOrchestrator {
 
         if (!isCompleted(run, AutomaticBillingStep.SOURCE_DATA_ACQUISITION)) {
             startStep(runId, claimToken, AutomaticBillingStep.SOURCE_DATA_ACQUISITION);
+            requireNoUndecidedFinanceTerms(run, source);
             UUID snapshotId = source.timeAndMaterial()
                     ? acquireTimeAndMaterialSnapshot(run, source)
                     : prepareOccurrenceForTax(source);
@@ -285,6 +286,25 @@ public class AutomaticBillingOrchestrator {
                     "Billing Occurrence " + run.getBillingScheduleId() + " is no longer active.");
         }
         return new BillingSource(false, configuration.getBillingType(), configuration.getProjectId(), occurrence);
+    }
+
+    /**
+     * G-32: a Fixed Price configuration with retention or an advance is not
+     * billed automatically while Finance has not decided how those terms
+     * change the invoice - nothing is created; the run fails permanently and
+     * waits for a person (bill manually, or re-queue once decided).
+     */
+    private void requireNoUndecidedFinanceTerms(AutomaticBillingRun run, BillingSource source) {
+        if (source.timeAndMaterial() || source.billingType() != BillingType.FIXED_PRICE) {
+            return;
+        }
+        java.util.List<String> undecided = billingOccurrenceService.undecidedFixedPriceTerms(
+                run.getBillingConfiguration().getBillingConfigurationId());
+        if (undecided != null && !undecided.isEmpty()) {
+            throw new GlobalExceptionHandler.ValidationException("Fixed Price configuration has "
+                    + String.join(" and ", undecided) + ", which billing does not apply yet (Finance decision "
+                    + "pending); it is not billed automatically - bill it manually after review.");
+        }
     }
 
     // ================================================================ source data

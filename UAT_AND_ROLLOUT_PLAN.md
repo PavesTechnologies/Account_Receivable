@@ -2,6 +2,8 @@
 
 Audience: Finance (billing operations, Finance Managers), release approvers, AR support.
 Status: **UAT not yet executed by Finance. No sign-off has been given. Nothing has been deployed.**
+Updated 2026-10-21 for Batches 4–6 (recovery, delivery safety, tax inputs): §10 lists the UAT scenarios with the
+fields Finance must record; open Finance policies are in `BUSINESS_DECISIONS.md`.
 This pack contains what Finance needs to run UAT, the evidence already produced by automated
 business-scenario tests, the defects found so far, and the rollout plan. Operational detail
 (configuration keys, SQL, incident steps) is in `AUTOMATIC_BILLING_RUNBOOK.md`.
@@ -112,15 +114,18 @@ Severity per this plan's categories (replace with the organization's policy if o
 
 | ID | Area / type | Description | Impact | Sev. | Status | Evidence |
 |---|---|---|---|---|---|---|
-| **UAT-D1** | Authorization, all types | Invoice approve/reject and configuration approve are open to **any authenticated user** holding the record lock. JWT roles/permissions reach Spring Security (`ROLE_<role>`, permissions) and method security is enabled, but no endpoint checks them. | Unauthorized approvals possible | **Critical** | **Open — needs the UMS role/permission that authorizes Finance Manager approval** (implementation is small once named) | `SecurityConfig`, no `@PreAuthorize` anywhere |
+| **UAT-D1** | Authorization, all types | Invoice approve/reject and configuration approve were open to any authenticated user. | Unauthorized approvals possible | **Critical** | **Code fixed (G-08, efb234f): services enforce configurable UMS authorities + maker-checker; empty = nobody. Open until the UMS role/permission names are configured per environment (BD-09).** | `FinancialActionAuthorizer`, `SecurityConfigurationTest` |
 | UAT-D2 | T&M, amounts | Subtotal = rounded Σ of unrounded lines; lines rounded separately → invoice lines ≠ subtotal by a paisa per line; tax on the wrong base | Incorrect invoice totals | Critical | **Fixed** — lines rounded once (HALF_UP, 2 dp), subtotal = Σ rounded lines (`BillingSnapshotBuilder.lineAmount`, `BillingSnapshotServiceImpl.calculateAmounts`) | `uat_timeAndMaterial_fractionalHoursAndRates_reconcileToThePaisa` fails before, passes after |
 | **UAT-D3** | T&M, integration | No service-to-service TMS authentication: scheduled T&M has no JWT → TMS 401, run FAILED (not retried) | Automatic T&M impossible; other types unaffected | **High** | **Open — needs the UMS/TMS service-token mechanism** | Phase 6/12 |
 | UAT-D4 | Fixed Price / Recurring, manual flow | Regenerating a schedule after some periods were billed spreads the **full** contract again (over-allocation). Automation refuses such occurrences; the manual flow does not | Manual over-billing risk | High | Open — business decision on reconciliation rule | Phase 7/9 tests |
 | UAT-D5 | Compliance | Invoice numbers are 25 characters (`INV-yyyyMMddHHmmss-XXXXXX`; previously 18) — GST invoice numbers are limited to 16 characters | E-invoicing / GST filing | High (compliance) | Open — numbering scheme to be decided by Finance/tax | Phase 12 |
 | UAT-D6 | Configuration | No time zone set; in UTC containers "due today" starts 05:30 IST | Billing a few hours late/early around midnight | Medium | Open — deployment decision (`TZ`) | Phase 12 |
-| UAT-D7 | Frontend | CORS allows only `http://localhost:5173` | Production frontend blocked unless same-origin | Medium | Open — deployment decision | Phase 12 |
+| UAT-D7 | Frontend | CORS allowed only `http://localhost:5173` | Production frontend blocked unless same-origin | Medium | **Code fixed (G-25): `AR_CORS_ALLOWED_ORIGINS` per environment, wildcards refused.** Open until the production origin is configured | `SecurityConfigurationTest` |
 | UAT-D8 | T&M, precision | Line quantity is stored with 2 decimals; if TMS sends more (e.g. 7.333 h) the printed quantity × rate differs from the line amount | Document readability | Low | Open — confirm TMS hour precision | code review |
-| UAT-D9 | Quality gate | 58 legacy tests in 8 classes fail (outdated tests; some business-rule disagreements in occurrence generation) | CI gate cannot be blocking yet | Medium | Open | Phase 12 report |
+| UAT-D9 | Quality gate | Legacy tests in 8 classes failed | CI gate cannot be blocking yet | Medium | **40 of 41 resolved (G-26), incl. 4 production defects fixed. 1 remains: it encodes undecided policy BD-05.** | commits e51d267, d218e4f, a47b70d |
+| UAT-D10 | Delivery | The same invoice could be emailed repeatedly; SMTP ran inside a DB transaction | Duplicate client emails; email without a record | High | **Fixed (G-19/G-20)**: one ordinary delivery per invoice, SMTP outside transactions, `UNCERTAIN` outcomes resolved by operations | `InvoiceDeliveryPersistenceTest` |
+| UAT-D11 | Fixed Price | Retention % and advance received are captured but not applied to invoices | Possible over-invoicing | High | **Open — Finance decision BD-01/BD-02.** Automatic billing refuses such configurations | `AutomaticBillingOrchestratorTest` |
+| UAT-D12 | MySQL | All automated evidence ran on H2 | DB-specific behaviour unverified | High | Open — run `MySqlIntegrationTest` with Docker | runbook §7 |
 
 No financial-integrity defect is waived. D1 and D3 must be closed (or, for D3, T&M explicitly excluded from the
 pilot) before production rollout.
@@ -150,9 +155,17 @@ Every configuration listed must be either an approved pilot configuration or swi
 
 | Stage | Entry criteria | Settings | Exit / stop criteria |
 |---|---|---|---|
-| 1. Pre-production acceptance | Automated suites green for the changed areas; Finance UAT scenarios §2 executed and accepted; D1 closed; D3 closed or T&M excluded; migrations V6–V9 applied (runbook §7); probes updated in `intranet-devops` | UAT environment, internal mailboxes only | Finance + technical sign-off (§8) |
+| 1. Pre-production acceptance | Automated suites green for the changed areas; `MySqlIntegrationTest` passed (Docker agent); Finance UAT scenarios §2 and §10 executed and accepted; D1 closed (authorities configured); D3 closed or T&M excluded; BD-01/02/05/09/10 decided; migrations V6–V14 applied or Flyway-adopted (runbook §7); image deployed by commit SHA; probes updated in `intranet-devops` | UAT environment, internal mailboxes only | Finance + technical sign-off (§9) |
 | 2. Pilot | Sign-off; inventory query reviewed; pilot configurations approved by Finance | `ENABLED=true`, small batch size, backfill window agreed (e.g. only the pilot's current period) | Every pilot run, tax and invoice reviewed by Finance before approval. **Stop** (`ENABLED=false`, runbook §3) on any wrong amount, duplicate, or unauthorized action |
 | 3. Expansion | Pilot results reviewed against the agreed criteria; sign-off for the next group | More configurations set to AUTOMATIC, group by group | Same stop rule; continue monitoring (runbook §4) |
+
+**Deployment order (each environment):** (1) back up the database; (2) apply/verify migrations V12–V14 (or adopt
+Flyway, runbook §7); (3) deploy the image by commit SHA with `AR_AUTOMATIC_BILLING_ENABLED=false`; (4) check
+readiness `UP`, `GET /api/v1/operations/reconciliation` = no findings, recovery gauges 0; (5) only then enable
+automation for the stage's configurations. **Rollback:** disable automation, redeploy the previous SHA (runbook §6;
+resolve `UNCERTAIN` deliveries first). **Post-release verification:** after the first ticks and daily during the
+pilot — `billing-summary`, `reconciliation`, `ar.invoice.deliveries.unknown_outcome`,
+`ar.receivables.sent_without_receivable`, `ar.automatic_billing.runs.needs_intervention`.
 
 Numerical acceptance thresholds (e.g. tolerated failure rate, review sample size) are **to be agreed** by Finance
 and the release approvers; none is set here.
@@ -202,3 +215,38 @@ No permissions are granted by this plan.
 | Finance Manager | | Pending | |
 | AR engineering lead | | Pending | |
 | Operations / platform | | Pending | |
+
+---
+
+## 10. UAT scenarios — Batches 4–6 (to be executed by Finance)
+
+How to record: fill *Result* (Pass/Fail), *Defect* (UAT-Dn) and *Reviewer / date* per row; attach the invoice PDF,
+delivery history and receivable for every financial scenario. Use test clients and projects only — no production
+customer data. "Automated" says whether an automated test covers the same rule (it does not replace Finance UAT).
+
+| ID | Scenario | Preconditions / test data | Steps | Expected amounts and state transitions | Expected persisted records | Automated | Result | Defect | Reviewer / date |
+|---|---|---|---|---|---|---|---|---|---|
+| TM-5 | Time & Material, monthly | Approved AUTOMATIC T&M configuration (KA→KA), rate card Developer 1500/h; approved timesheets 8 h + 5 h × 2000 for the month | Wait for the tick after period end (or enable automation in UAT) | Lines 12000.00 + 10000.00; subtotal 22000.00; CGST 9% 1980.00 + SGST 9% 1980.00; total 25960.00; run → PENDING_APPROVAL | 1 snapshot, 1 tax calculation (currency recorded), 1 invoice GENERATED→PENDING_APPROVAL | Yes | | | |
+| TM-6 | Late-approved timesheets | As TM-5 but one timesheet unapproved at period end | Tick; approve timesheet next day; next day's tick | First attempt FAILED at SOURCE_DATA_ACQUISITION ("not approved"); next day invoiced with all hours | 1 run (failure history), 1 snapshot, 1 invoice | Yes | | | |
+| FP-4 | Fixed Price, monthly split | Contract 100000.00, 4 months, no retention/advance | Approve configuration; ticks per month | 25000.00 per occurrence (HALF_EVEN split, remainder on last); IGST 18% for KA→MH | 4 occurrences, 1 invoice each | Yes | | | |
+| FP-5 | Fixed Price with retention or advance | Retention 5% or advance 10000.00 | Approve; tick | Automatic run FAILED "retention … bill it manually"; no invoice. Finance bills manually per their practice | 1 FAILED run, nothing else | Yes | | BD-01/02 | |
+| MS-3 | Milestone / installment | 3 installments 30/30/40 % of 90000.00 | Approve; ticks on installment dates | 27000.00, 27000.00, 36000.00 | 3 occurrences, 3 invoices | Yes | | | |
+| RC-3 | Recurring / retainer | Monthly 50000.00, start mid-month | Approve; ticks | First period prorated by days (HALF_EVEN); then 50000.00 | Occurrence per term period | Yes | | BD-04 | |
+| MAN-1 | Manual billing | MANUAL configuration | Finance generates tax and invoice manually | Same amounts as automatic; automation never touches it | No automatic run | Yes | | | |
+| CFG-3 | Configuration approval | Edited APPROVED configuration | Approve as a different user; try approving as the submitter | Submitter refused (maker-checker, 403); other approver succeeds | Approval actor recorded | Yes | | | |
+| WF-5 | Invoice approval / rejection | Invoice PENDING_APPROVAL | Reject with reason; refresh after correction; resubmit; approve | REJECTED→(refresh)→PENDING_APPROVAL→APPROVED→READY_TO_SEND; resubmission without refresh refused | History: REJECTED, CORRECTED, SUBMITTED, APPROVED with actors | Yes | | | |
+| DOC-1 | Document generation | Approved invoice | Open the invoice; download PDF | `documentAvailable=true` only when stored; PDF totals = invoice totals | 1 invoice_document | Yes | | | |
+| DEL-1 | Manual send | READY_TO_SEND invoice with client email | Send; send again | First SENT; second refused "already been sent"; exactly one email received | 1 delivery SENT (requester recorded), 1 receivable = grand total | Yes | | | |
+| DEL-2 | Uncertain delivery | Simulate SMTP timeout in UAT (block port 587 after DATA) or use the test seam | Send; check mailbox; resolve as SENT/FAILED via recovery API | UNCERTAIN; resend blocked; after resolve SENT → receivable; FAILED → send allowed | Delivery with resolvedBy/reason | Partly | | | |
+| REC-5 | Missing receivable recovery | SENT invoice whose receivable creation failed (UAT: delete receivable row in a test DB) | Wait ≤ 15 min or call recovery endpoint | Exactly one receivable recreated, no email | 1 receivable | Yes | | | |
+| RUN-1 | Failed run re-queue | Run FAILED on missing tax configuration | Add tax configuration; re-queue with reason | Processed next tick; failure kept in events | Run event REQUEUED (actor, reason) | Yes | | | |
+| RUN-2 | Approval callback lost | Invoice approved while the run's completion fails (UAT: approve during a DB blip, or the test seam) | Next tick | Run COMPLETED by reconciliation; no new invoice/document | Run event APPROVAL_RECONCILED | Yes | | | |
+| DUP-3 | Duplicate prevention | Two users send / approve / re-queue concurrently | Concurrent clicks | One effect only | 1 email, 1 receivable, 1 event | Yes (H2) | | | |
+| TAX-3 | Tax and currency correctness | Configuration whose currency or tax region is changed after tax was calculated | Re-approve; try invoicing | Invoicing refused (currency/tax region changed) | No invoice | Yes | | BD-07 | |
+| TAX-4 | Jurisdiction cannot be determined | Project location not a known tax region, configuration with ALL + CGST/SGST/IGST components | Calculate tax | Refused (jurisdictions undetermined) — not taxed with ALL only | No tax calculation | Yes | | | |
+| AMD-1 | Contract amendment | Change contract value after one occurrence billed | Edit and re-approve | Refused (billed occurrences) without partial changes | Unchanged occurrences | Yes | | | |
+| AMD-2 | Effective From after an invoiced period | Move Effective From past an INVOICED occurrence | Edit and re-approve | **Policy undecided** | — | Red test | | BD-05 | |
+| CAL-1 | Month-end / short month | Monthly periods across Feb 2027, anchor 31st | Generate | Periods follow the original anchor (28 Feb, 31 Mar) | Occurrences | Yes | | | |
+| AUTH-2 | Unauthorized actions | User without the configured authorities | Approve, send, re-queue | 403 each; nothing changes | — | Yes | | | |
+
+Finance sign-off (§9) requires every row Pass or an accepted, recorded exception.
