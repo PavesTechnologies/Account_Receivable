@@ -439,6 +439,34 @@ class OperationsMonitoringAndReconciliationTest {
         assertThat(alertCount(OperationsAlertCondition.RUNS_NEEDING_INTERVENTION)).isEqualTo(before + 1);
     }
 
+    // ================================================================ recovery conditions (E3/E4)
+
+    @Test
+    void recoveryConditions_areMeasured_andRaisedAgainstTheirThresholds() {
+        Pipeline pipeline = billFixedPriceAndProcessInvoices();
+        properties.getAlerts().getThresholds().put(OperationsAlertCondition.DELIVERIES_UNKNOWN_OUTCOME, 0L);
+        properties.getAlerts().getThresholds().put(OperationsAlertCondition.RUNS_APPROVED_NOT_COMPLETED, 0L);
+
+        Map<OperationsAlertCondition, OperationsAlertDto> clean = new EnumMap<>(OperationsAlertCondition.class);
+        reportService.evaluateAlerts().forEach(alert -> clean.put(alert.condition(), alert));
+        assertThat(clean.get(OperationsAlertCondition.DELIVERIES_UNKNOWN_OUTCOME).value()).isZero();
+        assertThat(clean.get(OperationsAlertCondition.RUNS_APPROVED_NOT_COMPLETED).raised()).isFalse();
+
+        // A delivery whose outcome is unknown (SMTP timeout) blocks its invoice until resolved.
+        jdbc.update("INSERT INTO invoice_delivery (invoice_delivery_id, invoice_id, recipient_email, status, "
+                        + "retry_count, created_at) VALUES (?, ?, ?, 'UNCERTAIN', 0, ?)",
+                java.util.UUID.randomUUID(), pipeline.readyToSend.getInvoiceId(), "ap@client.example",
+                java.time.LocalDateTime.now());
+
+        Map<OperationsAlertCondition, OperationsAlertDto> evaluated = new EnumMap<>(OperationsAlertCondition.class);
+        reportService.evaluateAlerts().forEach(alert -> evaluated.put(alert.condition(), alert));
+        assertThat(evaluated.get(OperationsAlertCondition.DELIVERIES_UNKNOWN_OUTCOME).value()).isEqualTo(1);
+        assertThat(evaluated.get(OperationsAlertCondition.DELIVERIES_UNKNOWN_OUTCOME).raised()).isTrue();
+        assertThat(meterRegistry.get("ar.invoice.deliveries.unknown_outcome").gauge().value()).isEqualTo(1.0);
+        assertThat(meterRegistry.get("ar.receivables.sent_without_receivable").gauge().value()).isZero();
+        assertThat(meterRegistry.get("ar.automatic_billing.runs.approved_not_completed").gauge().value()).isZero();
+    }
+
     // ================================================================ read-only
 
     @Test

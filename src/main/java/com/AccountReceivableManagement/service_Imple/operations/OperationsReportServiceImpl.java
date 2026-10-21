@@ -58,6 +58,9 @@ public class OperationsReportServiceImpl implements OperationsReportService {
     private final AutomaticBillingSchedulerProperties schedulerProperties;
     private final Clock clock = Clock.systemDefaultZone();
 
+    @org.springframework.beans.factory.annotation.Value("${ar.invoice-delivery.pending-timeout:PT10M}")
+    private java.time.Duration deliveryPendingTimeout = java.time.Duration.ofMinutes(10);
+
     // ================================================================ summary
 
     @Override
@@ -291,6 +294,9 @@ public class OperationsReportServiceImpl implements OperationsReportService {
                 case DOCUMENTS_MISSING -> summary.invoices().approvedWithoutDocument();
                 case DELIVERIES_FAILED -> summary.invoices().deliveryFailedNotSent();
                 case SENT_WITHOUT_RECEIVABLE -> summary.receivables().sentWithoutReceivable();
+                case DELIVERIES_UNKNOWN_OUTCOME -> queries.countDeliveriesWithUnknownOutcome(
+                        LocalDateTime.now(clock).minus(deliveryPendingTimeout));
+                case RUNS_APPROVED_NOT_COMPLETED -> queries.countRunsAwaitingCompletionOfApprovedInvoice();
                 case RECONCILIATION_EXCEPTIONS -> Objects.requireNonNull(reconciliationExceptions);
             };
             alerts.add(new OperationsAlertDto(condition, value, threshold, value > threshold));

@@ -164,6 +164,29 @@ public class OperationsReportRepository {
         return rows("SELECT r.status, COUNT(r) FROM Receivable r GROUP BY r.status", Map.of());
     }
 
+    /**
+     * Deliveries whose outcome is unknown: UNCERTAIN, or PENDING since before
+     * {@code pendingBefore} (no longer in flight). They block resending until
+     * an operator resolves them (G-19/G-20).
+     */
+    public long countDeliveriesWithUnknownOutcome(LocalDateTime pendingBefore) {
+        return count("SELECT COUNT(d) FROM InvoiceDelivery d WHERE d.status = :uncertain "
+                        + "OR (d.status = :pending AND d.createdAt < :pendingBefore)",
+                Map.of("uncertain", InvoiceDeliveryStatus.UNCERTAIN, "pending", InvoiceDeliveryStatus.PENDING,
+                        "pendingBefore", pendingBefore));
+    }
+
+    /**
+     * PENDING_APPROVAL runs whose invoice is already approved - completion
+     * after approval was not recorded; the scheduler reconciles them (G-18).
+     */
+    public long countRunsAwaitingCompletionOfApprovedInvoice() {
+        return count("SELECT COUNT(r) FROM AutomaticBillingRun r, "
+                        + "com.AccountReceivableManagement.entity.invoice_generation.Invoice i "
+                        + "WHERE r.status = :pendingApproval AND i.invoiceId = r.invoiceId AND i.status IN :approved",
+                Map.of("pendingApproval", AutomaticBillingRunStatus.PENDING_APPROVAL, "approved", APPROVED_STATUSES));
+    }
+
     public long countSentInvoices(boolean withReceivable) {
         return count("SELECT COUNT(DISTINCT d.invoiceId) FROM InvoiceDelivery d WHERE d.status = :sent AND "
                 + (withReceivable ? "" : "NOT ")

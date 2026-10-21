@@ -32,6 +32,15 @@ public enum OperationsAlertCondition {
     /** Invoices with a SENT delivery but no receivable. */
     SENT_WITHOUT_RECEIVABLE,
 
+    /**
+     * Deliveries whose outcome is unknown (UNCERTAIN, or PENDING past the
+     * in-flight timeout) - each blocks its invoice until resolved.
+     */
+    DELIVERIES_UNKNOWN_OUTCOME,
+
+    /** PENDING_APPROVAL runs whose invoice is already approved and that reconciliation has not completed. */
+    RUNS_APPROVED_NOT_COMPLETED,
+
     /** Reconciliation findings of HIGH or CRITICAL severity. */
     RECONCILIATION_EXCEPTIONS
 }

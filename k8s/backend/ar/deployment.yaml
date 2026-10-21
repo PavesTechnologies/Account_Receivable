@@ -24,7 +24,13 @@ spec:
       serviceAccountName: paves-service-account
       containers:
         - name: ar
-          image: 743737183908.dkr.ecr.ap-south-1.amazonaws.com/paves/ar-dev:latest
+          # E1: an immutable reference - the image tag is the reviewed commit's full
+          # git SHA (or pin @sha256:<digest>). Never ':latest': it is mutable, so the
+          # running build could not be tied to a reviewed commit, and with
+          # IfNotPresent a node keeps whatever ':latest' it pulled first. The
+          # pipeline (paves-shared-lib deployToDev/deployToProd) must push and set
+          # this tag; ArgoCD deploys intranet-devops k8s/backend/ar - mirror it there.
+          image: 743737183908.dkr.ecr.ap-south-1.amazonaws.com/paves/ar-dev:REPLACE_WITH_RELEASE_COMMIT_SHA
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
