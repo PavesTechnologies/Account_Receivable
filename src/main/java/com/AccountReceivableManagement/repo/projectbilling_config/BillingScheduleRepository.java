@@ -27,6 +27,9 @@ public interface BillingScheduleRepository extends JpaRepository<BillingSchedule
     List<BillingSchedule> findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
             BillingConfiguration billingConfiguration);
 
+    /** Every occurrence of the configuration, active or not. */
+    List<BillingSchedule> findByBillingConfiguration(BillingConfiguration billingConfiguration);
+
     List<BillingSchedule> findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
             BillingRecurringConfiguration recurringConfiguration);
 

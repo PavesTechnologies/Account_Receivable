@@ -106,7 +106,8 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
                 .build();
     }
 
-    private static BillingType toBillingTypeEnum(String billingTypeName) {
+    /** Billing type of a master name, as automatic billing classifies it. */
+    public static BillingType toBillingTypeEnum(String billingTypeName) {
         if (billingTypeName == null || billingTypeName.isBlank()) {
             return null;
         }

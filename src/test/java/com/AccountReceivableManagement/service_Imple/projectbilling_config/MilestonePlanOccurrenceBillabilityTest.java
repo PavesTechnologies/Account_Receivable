@@ -42,6 +42,9 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class MilestonePlanOccurrenceBillabilityTest {
 
+    @Mock
+    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
+
     @Mock private BillingScheduleRepository scheduleRepository;
     @Mock private BillingMilestonePlanRepository milestonePlanRepository;
     @Mock private BillingPaymentEntryRepository paymentEntryRepository;

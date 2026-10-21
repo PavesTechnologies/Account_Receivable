@@ -50,6 +50,9 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class RecurringOccurrenceBillabilityTest {
 
+    @Mock
+    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
+
     @Mock private BillingScheduleRepository scheduleRepository;
     @Mock private BillingRecurringConfigurationRepository recurringRepository;
     @Mock private BillingConfigurationRepository configurationRepository;

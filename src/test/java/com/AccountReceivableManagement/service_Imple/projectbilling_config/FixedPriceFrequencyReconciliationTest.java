@@ -51,6 +51,9 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class FixedPriceFrequencyReconciliationTest {
 
+    @Mock
+    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
+
     @Mock private BillingConfigurationRepository configurationRepository;
     @Mock private BillingFixedPriceRepository fixedPriceRepository;
     @Mock private BillingScheduleRepository scheduleRepository;
@@ -118,12 +121,13 @@ class FixedPriceFrequencyReconciliationTest {
 
         service.reconcileOccurrencesOnConfigurationUpdate(configuration.getBillingConfigurationId());
 
-        ArgumentCaptor<Iterable<BillingSchedule>> deleted = ArgumentCaptor.forClass(Iterable.class);
-        verify(scheduleRepository).deleteAll(deleted.capture());
-        assertThat(deleted.getValue()).hasSize(6);
-        ArgumentCaptor<Collection<BillingSchedule>> regenerated = ArgumentCaptor.forClass(Collection.class);
-        verify(scheduleRepository).saveAll(regenerated.capture());
-        assertThat(regenerated.getValue()).extracting(BillingSchedule::getPeriodEndDate)
+        // First the six monthly occurrences are retired (deactivated, not deleted),
+        // then the two quarterly periods are inserted.
+        ArgumentCaptor<Iterable<BillingSchedule>> saved = ArgumentCaptor.forClass(Iterable.class);
+        verify(scheduleRepository, org.mockito.Mockito.times(2)).saveAll(saved.capture());
+        assertThat(saved.getAllValues().get(0)).hasSize(6)
+                .allSatisfy(retired -> assertThat(retired.getIsActive()).isFalse());
+        assertThat(saved.getAllValues().get(1)).extracting(BillingSchedule::getPeriodEndDate)
                 .containsExactly(LocalDate.of(2026, 3, 31), LocalDate.of(2026, 6, 30));
     }
 
@@ -135,7 +139,7 @@ class FixedPriceFrequencyReconciliationTest {
 
         service.reconcileOccurrencesOnConfigurationUpdate(configuration.getBillingConfigurationId());
 
-        verify(scheduleRepository, never()).deleteAll(any());
+        verify(scheduleRepository, never()).saveAll(any());
     }
 
     @Test

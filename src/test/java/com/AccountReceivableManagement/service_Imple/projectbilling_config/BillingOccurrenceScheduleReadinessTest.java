@@ -62,6 +62,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class BillingOccurrenceScheduleReadinessTest {
 
+    @Mock
+    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
+
     @Mock private BillingScheduleRepository billingScheduleRepository;
     @Mock private BillingFixedPriceRepository billingFixedPriceRepository;
     @Mock private BillingRecurringConfigurationRepository billingRecurringConfigurationRepository;

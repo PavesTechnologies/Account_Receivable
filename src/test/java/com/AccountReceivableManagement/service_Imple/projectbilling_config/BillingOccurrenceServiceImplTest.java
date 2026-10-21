@@ -29,6 +29,9 @@ import static org.mockito.Mockito.*;
 class BillingOccurrenceServiceImplTest {
 
     @Mock
+    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
+
+    @Mock
     private BillingScheduleRepository billingScheduleRepository;
 
     @Mock
@@ -372,10 +375,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
+            return retiresOccurrences(scheduleList) && scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
 
         verify(billingScheduleRepository).saveAll(argThat(schedules -> {
@@ -429,10 +432,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 2 &&
+            return retiresOccurrences(scheduleList) && scheduleList.size() == 2 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -469,11 +472,8 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
-            List<BillingSchedule> scheduleList = new ArrayList<>();
-            schedules.forEach(scheduleList::add);
-            return scheduleList.isEmpty();
-        }));
+        verify(billingScheduleRepository, never()).saveAll(
+                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
     }
 
     // =========================================================
@@ -661,7 +661,8 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).deleteAll(any());
+        verify(billingScheduleRepository, never()).saveAll(
+                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
     }
 
     @Test
@@ -673,7 +674,8 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).deleteAll(any());
+        verify(billingScheduleRepository, never()).saveAll(
+                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
     }
 
     // =========================================================
@@ -793,10 +795,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 1 &&
+            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -834,11 +836,8 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
-            List<BillingSchedule> scheduleList = new ArrayList<>();
-            schedules.forEach(scheduleList::add);
-            return scheduleList.isEmpty();
-        }));
+        verify(billingScheduleRepository, never()).saveAll(
+                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
     }
 
     // =========================================================
@@ -885,10 +884,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 1 &&
+            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -977,7 +976,8 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).deleteAll(any());
+        verify(billingScheduleRepository, never()).saveAll(
+                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
         verify(billingScheduleRepository, never()).saveAll(any());
     }
 
@@ -992,7 +992,8 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).deleteAll(any());
+        verify(billingScheduleRepository, never()).saveAll(
+                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
         verify(billingScheduleRepository, never()).saveAll(any());
     }
 
@@ -1168,7 +1169,8 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).deleteAll(any());
+        verify(billingScheduleRepository, never()).saveAll(
+                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
         verify(billingScheduleRepository, never()).saveAll(any());
     }
 
@@ -1240,10 +1242,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 1 &&
+            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1411,10 +1413,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 1 &&
+            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1458,10 +1460,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 1 &&
+            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1505,10 +1507,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 1 &&
+            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1679,10 +1681,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 1 &&
+            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1714,8 +1716,8 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).save(argThat(schedule ->
-                schedule.getBillingAmount().compareTo(new BigDecimal("15000")) == 0
+        verify(billingScheduleRepository).save(argThat(schedule ->  // 15000 is the term (1 Sep - 31 Dec) total: September takes its 30/122 share (audit G-01)
+                schedule.getBillingAmount().compareTo(new BigDecimal("3688.52")) == 0
         ));
     }
 
@@ -1747,9 +1749,19 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).save(argThat(schedule ->
-                schedule.getBillingAmount().compareTo(new BigDecimal("15000")) == 0
+        verify(billingScheduleRepository).save(argThat(schedule ->  // 15000 is the term (1 Sep - 31 Dec) total: September takes its 30/122 share (audit G-01)
+                schedule.getBillingAmount().compareTo(new BigDecimal("3688.52")) == 0
         ));
         verify(taxCalculationRepository).deleteByBillingScheduleId(existingSchedules.get(0).getBillingScheduleId());
+    }
+    /**
+     * A saveAll that retires occurrences: reconciliation deactivates the
+     * SCHEDULED occurrences it replaces instead of deleting them, so a
+     * regenerated period keeps its occurrence (and automatic billing run).
+     */
+    private static boolean retiresOccurrences(Iterable<BillingSchedule> schedules) {
+        List<BillingSchedule> list = new ArrayList<>();
+        schedules.forEach(list::add);
+        return !list.isEmpty() && list.stream().noneMatch(s -> Boolean.TRUE.equals(s.getIsActive()));
     }
 }

@@ -41,6 +41,9 @@ class FixedPriceOccurrenceBillabilityTest {
 
     private static final BigDecimal CONTRACT_VALUE = new BigDecimal("1000000.00");
 
+    @Mock
+    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
+
     @Mock private BillingScheduleRepository scheduleRepository;
     @Mock private BillingFixedPriceRepository fixedPriceRepository;
     @InjectMocks private BillingOccurrenceServiceImpl service;
