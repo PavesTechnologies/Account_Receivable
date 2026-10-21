@@ -22,6 +22,9 @@ public interface AutomaticBillingRunRepository extends JpaRepository<AutomaticBi
     /** Runs that created or reused the invoice (idx_automatic_billing_run_invoice). */
     java.util.List<AutomaticBillingRun> findAllByInvoiceId(UUID invoiceId);
 
+    /** Every run of a configuration - T&amp;M discovery reads them once per tick (G-29). */
+    java.util.List<AutomaticBillingRun> findAllByBillingConfiguration_BillingConfigurationId(UUID billingConfigurationId);
+
     /** The run of an occurrence-based billing event (at most one - uk_automatic_billing_run_schedule). */
     Optional<AutomaticBillingRun> findByBillingScheduleId(UUID billingScheduleId);
 

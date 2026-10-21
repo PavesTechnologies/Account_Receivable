@@ -278,6 +278,47 @@ class AutomaticBillingSchedulerPersistenceTest {
                 .containsExactly(timesheet.getBillingConfigurationId());
     }
 
+    // G-29: configurations that cannot have a period due in the window are not scanned.
+    @Test
+    void timeAndMaterialWindowQuery_skipsConfigurationsEndedBeforeOrStartingAfterTheWindow() {
+        BillingConfiguration open = configuration("Time & Material", ApprovalStatus.APPROVED,
+                InvoiceGenerationType.AUTOMATIC, false);
+        BillingConfiguration endedInWindow = configuration("Time and Material", ApprovalStatus.APPROVED,
+                InvoiceGenerationType.AUTOMATIC, false);
+        BillingConfiguration endedBefore = configuration("Timesheet Based", ApprovalStatus.APPROVED,
+                InvoiceGenerationType.AUTOMATIC, false);
+        BillingConfiguration startsLater = configuration("TIME & MATERIAL", ApprovalStatus.APPROVED,
+                InvoiceGenerationType.AUTOMATIC, false);
+        tx.executeWithoutResult(status -> {
+            setDates(open, LocalDate.of(2026, 1, 1), null);
+            setDates(endedInWindow, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 10, 15));
+            setDates(endedBefore, LocalDate.of(2025, 1, 1), LocalDate.of(2026, 5, 31));
+            setDates(startsLater, LocalDate.of(2026, 12, 1), null);
+        });
+
+        assertThat(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNamesDueBetween(
+                ApprovalStatus.APPROVED, InvoiceGenerationType.AUTOMATIC,
+                BillingOccurrenceServiceImpl.TIME_AND_MATERIAL_BILLING_TYPE_NAMES,
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 11, 1)))
+                .containsExactlyInAnyOrder(open.getBillingConfigurationId(), endedInWindow.getBillingConfigurationId());
+
+        // Unlimited backfill keeps every historical configuration discoverable.
+        assertThat(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNamesDueBetween(
+                ApprovalStatus.APPROVED, InvoiceGenerationType.AUTOMATIC,
+                BillingOccurrenceServiceImpl.TIME_AND_MATERIAL_BILLING_TYPE_NAMES,
+                AutomaticBillingScheduler.UNBOUNDED_EARLIEST_BILLING_DATE, LocalDate.of(2026, 11, 1)))
+                .contains(endedBefore.getBillingConfigurationId())
+                .doesNotContain(startsLater.getBillingConfigurationId());
+    }
+
+    private void setDates(BillingConfiguration configuration, LocalDate from, LocalDate to) {
+        BillingConfiguration managed = configurationRepository.findById(configuration.getBillingConfigurationId())
+                .orElseThrow();
+        managed.setEffectiveFrom(from);
+        managed.setEffectiveTo(to);
+        configurationRepository.save(managed);
+    }
+
     @Test
     void overlappingSnapshotQuery_detectsAnyOverlapForTheProject() {
         BillingConfiguration configuration = automaticFixedPrice();

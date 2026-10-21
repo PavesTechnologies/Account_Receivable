@@ -389,18 +389,20 @@ public class AutomaticBillingScheduler {
      */
     private List<DueTimeAndMaterialPeriod> findDueTimeAndMaterialPeriods(LocalDate today,
             LocalDate earliestBillingDate, int limit, TickSummary summary) {
-        List<DueTimeAndMaterialPeriod> due = new ArrayList<>();
-        List<UUID> configurationIds = billingConfigurationRepository.findAutomaticConfigurationIdsByBillingTypeNames(
-                ApprovalStatus.APPROVED, InvoiceGenerationType.AUTOMATIC,
-                BillingOccurrenceServiceImpl.TIME_AND_MATERIAL_BILLING_TYPE_NAMES);
+        // G-29: only configurations that can have a period due in the window; each
+        // is read with a fixed number of queries, however long its history.
+        List<UUID> configurationIds = billingConfigurationRepository
+                .findAutomaticConfigurationIdsByBillingTypeNamesDueBetween(
+                        ApprovalStatus.APPROVED, InvoiceGenerationType.AUTOMATIC,
+                        BillingOccurrenceServiceImpl.TIME_AND_MATERIAL_BILLING_TYPE_NAMES,
+                        earliestBillingDate, today);
 
+        List<DueTimeAndMaterialPeriod> fresh = new ArrayList<>();
+        List<DueTimeAndMaterialPeriod> rediscovered = new ArrayList<>();
         for (UUID configurationId : configurationIds) {
-            if (due.size() >= limit) {
-                break;
-            }
             try {
-                due.addAll(readOnly.execute(status -> duePeriodsOf(configurationId, today, earliestBillingDate,
-                        limit - due.size())));
+                readOnly.executeWithoutResult(status -> duePeriodsOf(configurationId, today, earliestBillingDate,
+                        fresh, rediscovered));
             } catch (RuntimeException ex) {
                 summary.errors++;
                 log.warn("[AutomaticBillingScheduler] billing periods of T&M configuration {} could not be "
@@ -408,30 +410,47 @@ public class AutomaticBillingScheduler {
                         AutomaticBillingRunServiceImpl.sanitizeFailureReason(ex.getMessage()));
             }
         }
-        return due;
-    }
 
-    private List<DueTimeAndMaterialPeriod> duePeriodsOf(UUID configurationId, LocalDate today,
-            LocalDate earliestBillingDate, int limit) {
-        BillingConfiguration configuration = billingConfigurationRepository.findById(configurationId).orElse(null);
-        if (configuration == null || configuration.getProject() == null) {
-            return List.of();
-        }
-        Long projectId = configuration.getProject().getPmsProjectId();
-
-        List<DueTimeAndMaterialPeriod> due = new ArrayList<>();
-        for (BillingPeriodDto period : billingOccurrenceService.resolveTimeAndMaterialBillingPeriods(configurationId, today)) {
+        // Oldest billing date first across all configurations; periods never
+        // attempted before those re-attempted daily, so old failures cannot
+        // starve new work.
+        java.util.Comparator<DueTimeAndMaterialPeriod> oldestFirst =
+                java.util.Comparator.comparing(DueTimeAndMaterialPeriod::end)
+                        .thenComparing(period -> period.configurationId().toString());
+        fresh.sort(oldestFirst);
+        rediscovered.sort(oldestFirst);
+        List<DueTimeAndMaterialPeriod> due = new ArrayList<>(fresh.subList(0, Math.min(limit, fresh.size())));
+        for (DueTimeAndMaterialPeriod period : rediscovered) {
             if (due.size() >= limit) {
                 break;
             }
+            due.add(period);
+        }
+        return due;
+    }
+
+    private void duePeriodsOf(UUID configurationId, LocalDate today, LocalDate earliestBillingDate,
+            List<DueTimeAndMaterialPeriod> fresh, List<DueTimeAndMaterialPeriod> rediscovered) {
+        BillingConfiguration configuration = billingConfigurationRepository.findById(configurationId).orElse(null);
+        if (configuration == null || configuration.getProject() == null) {
+            return;
+        }
+        Long projectId = configuration.getProject().getPmsProjectId();
+
+        Map<String, AutomaticBillingRun> runsByPeriod = new java.util.HashMap<>();
+        for (AutomaticBillingRun run : automaticBillingRunRepository
+                .findAllByBillingConfiguration_BillingConfigurationId(configurationId)) {
+            runsByPeriod.put(run.getBillingPeriodStart() + ".." + run.getBillingPeriodEnd(), run);
+        }
+        List<Object[]> snapshotPeriods = null; // read only if a period needs it
+
+        for (BillingPeriodDto period : billingOccurrenceService.resolveTimeAndMaterialBillingPeriods(configurationId, today)) {
             if (period.getBillingDate().isAfter(today) || period.getBillingDate().isBefore(earliestBillingDate)) {
                 continue;
             }
-            Optional<AutomaticBillingRun> existingRunOpt = automaticBillingRunRepository
-                    .findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
-                            configurationId, period.getPeriodStartDate(), period.getPeriodEndDate());
-            if (existingRunOpt.isPresent()) {
-                AutomaticBillingRun existingRun = existingRunOpt.get();
+            AutomaticBillingRun existingRun = runsByPeriod.get(period.getPeriodStartDate() + ".."
+                    + period.getPeriodEndDate());
+            if (existingRun != null) {
                 boolean isTerminalOrPending = existingRun.getStatus() == AutomaticBillingRunStatus.COMPLETED
                         || existingRun.getStatus() == AutomaticBillingRunStatus.PENDING_APPROVAL
                         || existingRun.getStatus() == AutomaticBillingRunStatus.PROCESSING
@@ -451,16 +470,29 @@ public class AutomaticBillingScheduler {
                     continue;
                 }
             }
-            boolean alreadyAcquired = billingSnapshotRepository
-                    .existsByProjectIdAndBillingPeriodStartLessThanEqualAndBillingPeriodEndGreaterThanEqual(
-                            projectId, period.getPeriodEndDate(), period.getPeriodStartDate());
-            if (alreadyAcquired) {
+            if (snapshotPeriods == null) {
+                snapshotPeriods = billingSnapshotRepository.findPeriodsByProjectIdEndingOnOrAfter(projectId,
+                        earliestBillingDate);
+            }
+            if (overlapsAnySnapshot(snapshotPeriods, period)) {
                 continue;
             }
-            due.add(new DueTimeAndMaterialPeriod(configurationId, period.getPeriodStartDate(),
-                    period.getPeriodEndDate()));
+            (existingRun == null ? fresh : rediscovered).add(new DueTimeAndMaterialPeriod(configurationId,
+                    period.getPeriodStartDate(), period.getPeriodEndDate()));
         }
-        return due;
+    }
+
+    /** Any snapshot of the project overlapping the period - its timesheets are billed there. */
+    private static boolean overlapsAnySnapshot(List<Object[]> snapshotPeriods, BillingPeriodDto period) {
+        for (Object[] snapshot : snapshotPeriods) {
+            LocalDate start = (LocalDate) snapshot[0];
+            LocalDate end = (LocalDate) snapshot[1];
+            if (start != null && end != null && !start.isAfter(period.getPeriodEndDate())
+                    && !end.isBefore(period.getPeriodStartDate())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ================================================================ summary

@@ -60,4 +60,16 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
      */
     boolean existsByProjectIdAndBillingPeriodStartLessThanEqualAndBillingPeriodEndGreaterThanEqual(
             Long projectId, LocalDate periodEnd, LocalDate periodStart);
+
+    /**
+     * [billingPeriodStart, billingPeriodEnd] of every snapshot of the project
+     * ending on or after {@code from} - T&amp;M discovery checks overlaps in
+     * memory instead of one query per period (G-29).
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT s.billingPeriodStart, s.billingPeriodEnd FROM BillingSnapshot s "
+                    + "WHERE s.projectId = :projectId AND s.billingPeriodEnd >= :from")
+    java.util.List<Object[]> findPeriodsByProjectIdEndingOnOrAfter(
+            @org.springframework.data.repository.query.Param("projectId") Long projectId,
+            @org.springframework.data.repository.query.Param("from") LocalDate from);
 }

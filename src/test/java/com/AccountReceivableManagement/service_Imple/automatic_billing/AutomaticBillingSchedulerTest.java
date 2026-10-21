@@ -77,8 +77,9 @@ class AutomaticBillingSchedulerTest {
         lenient().when(runRepository.findRunIdsByStatus(any(), any())).thenReturn(List.of());
         lenient().when(scheduleRepository.findDueOccurrenceIdsWithoutAutomaticRun(any(), any(), any(), any(), any(), any()))
                 .thenReturn(List.of());
-        lenient().when(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNames(any(), any(), any()))
-                .thenReturn(List.of());
+        lenient().when(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNamesDueBetween(
+                any(), any(), any(), any(), any())).thenReturn(List.of());
+        lenient().when(snapshotRepository.findPeriodsByProjectIdEndingOnOrAfter(any(), any())).thenReturn(List.of());
     }
 
     private AutomaticBillingRun run(UUID id, AutomaticBillingRunStatus status) {
@@ -218,9 +219,9 @@ class AutomaticBillingSchedulerTest {
 
     private UUID timeAndMaterialConfiguration(List<BillingPeriodDto> periods) {
         UUID configurationId = UUID.randomUUID();
-        when(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNames(
-                ApprovalStatus.APPROVED, InvoiceGenerationType.AUTOMATIC,
-                BillingOccurrenceServiceImpl.TIME_AND_MATERIAL_BILLING_TYPE_NAMES))
+        when(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNamesDueBetween(
+                eq(ApprovalStatus.APPROVED), eq(InvoiceGenerationType.AUTOMATIC),
+                eq(BillingOccurrenceServiceImpl.TIME_AND_MATERIAL_BILLING_TYPE_NAMES), any(), eq(TODAY)))
                 .thenReturn(List.of(configurationId));
         when(configurationRepository.findById(configurationId)).thenReturn(Optional.of(BillingConfiguration.builder()
                 .billingConfigurationId(configurationId)
@@ -261,11 +262,14 @@ class AutomaticBillingSchedulerTest {
         LocalDate sepStart = LocalDate.of(2026, 9, 15);
         LocalDate sepEnd = LocalDate.of(2026, 10, 14);
         UUID configurationId = timeAndMaterialConfiguration(List.of(period(augStart, augEnd), period(sepStart, sepEnd)));
-        when(runRepository.findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
-                configurationId, augStart, augEnd))
-                .thenReturn(Optional.of(run(UUID.randomUUID(), AutomaticBillingRunStatus.FAILED)));
-        when(snapshotRepository.existsByProjectIdAndBillingPeriodStartLessThanEqualAndBillingPeriodEndGreaterThanEqual(
-                23L, sepEnd, sepStart)).thenReturn(true);
+        AutomaticBillingRun augustRun = run(UUID.randomUUID(), AutomaticBillingRunStatus.FAILED);
+        augustRun.setBillingPeriodStart(augStart);
+        augustRun.setBillingPeriodEnd(augEnd);
+        augustRun.setUpdatedAt(LocalDateTime.now(CLOCK)); // attempted today
+        when(runRepository.findAllByBillingConfiguration_BillingConfigurationId(configurationId))
+                .thenReturn(List.of(augustRun));
+        when(snapshotRepository.findPeriodsByProjectIdEndingOnOrAfter(eq(23L), any()))
+                .thenReturn(List.<Object[]>of(new Object[]{sepStart.plusDays(3), sepStart.plusDays(10)}));
 
         AutomaticBillingScheduler.TickSummary summary = scheduler.runOnce();
 
@@ -283,9 +287,10 @@ class AutomaticBillingSchedulerTest {
         AutomaticBillingRun failedRun = run(runId, AutomaticBillingRunStatus.FAILED);
         // Failed yesterday with no snapshot or invoice
         failedRun.setUpdatedAt(LocalDateTime.now(CLOCK).minusDays(1));
-        when(runRepository.findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
-                configurationId, augStart, augEnd))
-                .thenReturn(Optional.of(failedRun));
+        failedRun.setBillingPeriodStart(augStart);
+        failedRun.setBillingPeriodEnd(augEnd);
+        when(runRepository.findAllByBillingConfiguration_BillingConfigurationId(configurationId))
+                .thenReturn(List.of(failedRun));
         when(runService.findOrCreateForTimeAndMaterialPeriod(configurationId, augStart, augEnd))
                 .thenReturn(failedRun);
         when(orchestrator.processRun(runId)).thenReturn(run(runId, AutomaticBillingRunStatus.PENDING_APPROVAL));
@@ -297,12 +302,69 @@ class AutomaticBillingSchedulerTest {
         assertThat(summary.newTimeAndMaterialPeriods()).isEqualTo(1);
     }
 
+    // G-29: oldest first across configurations, never-attempted periods before
+    // daily re-attempts, a fixed number of queries per configuration.
+    @Test
+    void timeAndMaterial_oldestFirstAcrossConfigurations_newWorkBeforeRediscoveries_boundedQueries() {
+        properties.setBatchSize(2);
+        UUID older = UUID.randomUUID();
+        UUID newer = UUID.randomUUID();
+        when(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNamesDueBetween(
+                any(), any(), any(), any(), any())).thenReturn(List.of(newer, older));
+        for (UUID id : List.of(older, newer)) {
+            when(configurationRepository.findById(id)).thenReturn(Optional.of(BillingConfiguration.builder()
+                    .billingConfigurationId(id)
+                    .project(ProjectMasterReference.builder().pmsProjectId(23L).build()).build()));
+        }
+        // "newer" has many historical periods: one failed yesterday (rediscovery) and one never attempted.
+        List<BillingPeriodDto> newerPeriods = new java.util.ArrayList<>();
+        for (int month = 1; month <= 9; month++) {
+            newerPeriods.add(period(LocalDate.of(2026, month, 1), LocalDate.of(2026, month, 1).plusMonths(1).minusDays(1)));
+        }
+        when(occurrenceService.resolveTimeAndMaterialBillingPeriods(newer, TODAY)).thenReturn(newerPeriods);
+        java.util.List<AutomaticBillingRun> newerRuns = new java.util.ArrayList<>();
+        for (int month = 1; month <= 8; month++) {
+            AutomaticBillingRun done = run(UUID.randomUUID(), AutomaticBillingRunStatus.COMPLETED);
+            done.setBillingPeriodStart(LocalDate.of(2026, month, 1));
+            done.setBillingPeriodEnd(LocalDate.of(2026, month, 1).plusMonths(1).minusDays(1));
+            newerRuns.add(done);
+        }
+        AutomaticBillingRun failedJanuary = newerRuns.get(0);
+        failedJanuary.setStatus(AutomaticBillingRunStatus.FAILED);
+        failedJanuary.setUpdatedAt(LocalDateTime.now(CLOCK).minusDays(1));
+        when(runRepository.findAllByBillingConfiguration_BillingConfigurationId(newer)).thenReturn(newerRuns);
+        // "older" has one never-attempted period ending before the newer one's September.
+        when(occurrenceService.resolveTimeAndMaterialBillingPeriods(older, TODAY))
+                .thenReturn(List.of(period(LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31))));
+        when(runService.findOrCreateForTimeAndMaterialPeriod(any(), any(), any()))
+                .thenAnswer(invocation -> run(UUID.randomUUID(), AutomaticBillingRunStatus.SCHEDULED));
+        when(orchestrator.processRun(any())).thenAnswer(invocation ->
+                run(invocation.getArgument(0), AutomaticBillingRunStatus.PENDING_APPROVAL));
+
+        scheduler.runOnce();
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(runService);
+        order.verify(runService).findOrCreateForTimeAndMaterialPeriod(older,
+                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31));
+        order.verify(runService).findOrCreateForTimeAndMaterialPeriod(newer,
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30));
+        // Batch of 2 is full of never-attempted work; January's daily re-attempt waits.
+        verify(runService, never()).findOrCreateForTimeAndMaterialPeriod(newer,
+                LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31));
+        // One run query per configuration, whatever its number of periods.
+        verify(runRepository, times(1)).findAllByBillingConfiguration_BillingConfigurationId(newer);
+        verify(runRepository, never()).findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                any(), any(), any());
+        verify(snapshotRepository, never()).existsByProjectIdAndBillingPeriodStartLessThanEqualAndBillingPeriodEndGreaterThanEqual(
+                any(), any(), any());
+    }
+
     @Test
     void timeAndMaterial_configurationThatCannotBeResolved_isIsolated() {
         UUID broken = UUID.randomUUID();
         UUID healthy = UUID.randomUUID();
-        when(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNames(any(), any(), any()))
-                .thenReturn(List.of(broken, healthy));
+        when(configurationRepository.findAutomaticConfigurationIdsByBillingTypeNamesDueBetween(
+                any(), any(), any(), any(), any())).thenReturn(List.of(broken, healthy));
         when(configurationRepository.findById(broken)).thenReturn(Optional.of(BillingConfiguration.builder()
                 .billingConfigurationId(broken)
                 .project(ProjectMasterReference.builder().pmsProjectId(1L).build()).build()));
