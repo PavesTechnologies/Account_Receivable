@@ -301,4 +301,98 @@ class TimeAndMaterialBillingStrategyTest {
         verify(billingTMRateCardRepository, never())
                 .findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(any());
     }
+
+    @Test
+    void competingEligibleRateCards_picksFirstRateInDeterministicOrder() {
+        LocalDate start = LocalDate.of(2026, 10, 1);
+        LocalDate end = LocalDate.of(2026, 10, 31);
+        LocalDate workDate = LocalDate.of(2026, 10, 15);
+
+        // Suppose repository returned two competing active cards for "Developer":
+        // 1. Revised rate 1800 (effectiveFrom 2026-10-01)
+        // 2. Baseline rate 1500 (effectiveFrom NULL or older)
+        BillingTMRateCard newerCard = BillingTMRateCard.builder()
+                .rateCardId(UUID.randomUUID())
+                .roleName("Developer")
+                .rate(new BigDecimal("1800"))
+                .ratePeriod(BillingRatePeriod.HOURLY)
+                .effectiveFrom(LocalDate.of(2026, 10, 1))
+                .isActive(true)
+                .build();
+        BillingTMRateCard olderCard = BillingTMRateCard.builder()
+                .rateCardId(UUID.randomUUID())
+                .roleName("Developer")
+                .rate(new BigDecimal("1500"))
+                .ratePeriod(BillingRatePeriod.HOURLY)
+                .effectiveFrom(null)
+                .isActive(true)
+                .build();
+
+        when(timesheetIntegration.getApprovedTimesheets(PROJECT_ID, start, end))
+                .thenReturn(List.of(timesheet("TS-1", "Developer", workDate)));
+        when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, workDate))
+                .thenReturn(List.of(newerCard, olderCard));
+
+        BillingAcquisitionResultDto result = strategy.acquire(
+                configuration(PricingModel.ROLE_BASED, null), request(start, end));
+
+        assertThat(result.getTimesheets().get(0).getHourlyRate()).isEqualByComparingTo("1800");
+    }
+
+    @Test
+    void competingRateCards_nonHourlyCardFilteredOut_hourlyCardSelected() {
+        LocalDate start = LocalDate.of(2026, 10, 1);
+        LocalDate end = LocalDate.of(2026, 10, 31);
+        LocalDate workDate = LocalDate.of(2026, 10, 15);
+
+        BillingTMRateCard monthlyCard = BillingTMRateCard.builder()
+                .rateCardId(UUID.randomUUID())
+                .roleName("Developer")
+                .rate(new BigDecimal("160000"))
+                .ratePeriod(BillingRatePeriod.MONTHLY)
+                .isActive(true)
+                .build();
+        BillingTMRateCard hourlyCard = BillingTMRateCard.builder()
+                .rateCardId(UUID.randomUUID())
+                .roleName("Developer")
+                .rate(new BigDecimal("1000"))
+                .ratePeriod(BillingRatePeriod.HOURLY)
+                .isActive(true)
+                .build();
+
+        when(timesheetIntegration.getApprovedTimesheets(PROJECT_ID, start, end))
+                .thenReturn(List.of(timesheet("TS-1", "Developer", workDate)));
+        when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, workDate))
+                .thenReturn(List.of(monthlyCard, hourlyCard));
+
+        BillingAcquisitionResultDto result = strategy.acquire(
+                configuration(PricingModel.ROLE_BASED, null), request(start, end));
+
+        assertThat(result.getTimesheets().get(0).getHourlyRate()).isEqualByComparingTo("1000");
+    }
+
+    @Test
+    void multipleTimesheets_differentWorkDates_queryRatesForRespectiveDates() {
+        LocalDate start = LocalDate.of(2026, 10, 1);
+        LocalDate end = LocalDate.of(2026, 10, 31);
+        LocalDate date1 = LocalDate.of(2026, 10, 5);
+        LocalDate date2 = LocalDate.of(2026, 10, 25);
+
+        BillingTMRateCard earlyRate = rateCard("Developer", "1200");
+        BillingTMRateCard lateRate = rateCard("Developer", "1400");
+
+        when(timesheetIntegration.getApprovedTimesheets(PROJECT_ID, start, end)).thenReturn(List.of(
+                timesheet("TS-1", "Developer", date1),
+                timesheet("TS-2", "Developer", date2)));
+        when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, date1))
+                .thenReturn(List.of(earlyRate));
+        when(billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configurationId, date2))
+                .thenReturn(List.of(lateRate));
+
+        BillingAcquisitionResultDto result = strategy.acquire(
+                configuration(PricingModel.ROLE_BASED, null), request(start, end));
+
+        assertThat(result.getTimesheets().get(0).getHourlyRate()).isEqualByComparingTo("1200");
+        assertThat(result.getTimesheets().get(1).getHourlyRate()).isEqualByComparingTo("1400");
+    }
 }

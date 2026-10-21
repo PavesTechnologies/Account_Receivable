@@ -106,12 +106,16 @@
 
 ## BD-07 Correcting tax after a configuration's currency or tax region changed (G-12)
 
-- **Existing behaviour.** Invoice generation for an occurrence now refuses when the configuration's currency or tax
-  region differs from what its tax calculation recorded. There is no supported way to recalculate a
-  TAX_CALCULATED occurrence's tax.
-- **Options.** A Finance-authorised "recalculate tax" action for un-invoiced occurrences (audited), or re-plan the
-  occurrence through configuration reconciliation.
-- **Implementation status.** Blocked occurrences surface as failed runs / refused manual invoicing.
+- **Existing behaviour.** Invoice generation for an occurrence refuses when the configuration's currency or tax
+  region differs from what its tax calculation recorded (G-12).
+- **Options.** A Finance/Operations-authorised "recalculate tax" action for un-invoiced occurrences (audited), keeping
+  historical calculations superseded rather than deleted.
+- **Implementation status.** Implemented in recovery layer (`TaxRecalculationRecoveryService`,
+  `POST /api/v1/recovery/billing-occurrences/{occurrenceId}/recalculate-tax`, Flyway V15 schema). Requires
+  `OPERATIONS_RECOVERY` authority. A reason is mandatory. The existing tax calculation is retained with
+  `superseded_at`, `superseded_by`, `superseded_by_user_id`, `superseded_reason`, and `superseded_billing_schedule_id`,
+  and fresh tax is calculated under the new approved configuration. If the occurrence is already invoiced,
+  recalculation is strictly refused.
 
 ## BD-08 Operational thresholds and alert routing
 

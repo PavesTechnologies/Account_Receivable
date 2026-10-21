@@ -108,14 +108,17 @@ class MySqlIntegrationTest {
     // ---------------------------------------------------------------- migrations
 
     /**
-     * Upgrade path: a database at V11 (simulated by removing what V12-V14 add
+     * Upgrade path: a database at V11 (simulated by removing what V12-V15 add
      * from the mapped schema) is baselined at 11 and migrated by Flyway; the
      * result has every column and table the entities need, with the expected
      * types. Data already present survives.
      */
     @Test
-    void migrationsV12toV14_upgradeAV11Schema_withoutLosingData() {
-        jdbc.execute("ALTER TABLE tax_calculation DROP COLUMN currency_code");
+    void migrationsV12toV15_upgradeAV11Schema_withoutLosingData() {
+        jdbc.execute("ALTER TABLE tax_calculation DROP COLUMN currency_code, "
+                + "DROP COLUMN superseded_at, DROP COLUMN superseded_billing_schedule_id, "
+                + "DROP COLUMN superseded_by, DROP COLUMN superseded_by_user_id, "
+                + "DROP COLUMN superseded_reason");
         jdbc.execute("ALTER TABLE automatic_billing_run DROP COLUMN requeued_at");
         jdbc.execute("DROP TABLE automatic_billing_run_event");
         jdbc.execute("ALTER TABLE invoice_delivery DROP COLUMN requested_by, DROP COLUMN requested_by_user_id, "
@@ -128,12 +131,14 @@ class MySqlIntegrationTest {
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .baselineVersion("11")
-                .target("14")
+                .target("15")
                 .load()
                 .migrate();
 
-        assertThat(result.migrationsExecuted).isEqualTo(3);
+        assertThat(result.migrationsExecuted).isEqualTo(4);
         assertColumn("tax_calculation", "currency_code", "varchar");
+        assertColumn("tax_calculation", "superseded_reason", "varchar");
+        assertColumn("tax_calculation", "superseded_at", "datetime");
         assertColumn("automatic_billing_run", "requeued_at", "datetime");
         assertColumn("automatic_billing_run_event", "run_id", "binary");
         assertColumn("automatic_billing_run_event", "failure_reason", "varchar");
@@ -143,7 +148,7 @@ class MySqlIntegrationTest {
 
         // History is consistent: validate passes, nothing pending.
         Flyway flyway = Flyway.configure().dataSource(dataSource).locations("classpath:db/migration")
-                .baselineVersion("11").target("14").load();
+                .baselineVersion("11").target("15").load();
         flyway.validate();
         assertThat(flyway.info().pending()).isEmpty();
     }
