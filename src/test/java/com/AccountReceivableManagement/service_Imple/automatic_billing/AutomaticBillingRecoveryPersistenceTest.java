@@ -90,6 +90,13 @@ class AutomaticBillingRecoveryPersistenceTest {
     @Autowired private BillingSnapshotRepository snapshotRepository;
     @Autowired private ClientRepository clientRepository;
     @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunEventRepository eventRepository;
+    @Autowired private com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository invoiceRepository;
+
+    private final com.AccountReceivableManagement.security.FinancialActionAuthorizer authorizer =
+            mock(com.AccountReceivableManagement.security.FinancialActionAuthorizer.class);
+    private static final com.AccountReceivableManagement.security.Actor OPERATOR =
+            new com.AccountReceivableManagement.security.Actor(7L, "ops@example.com");
 
     private final BillingConfigurationIntegration configurationIntegration = mock(BillingConfigurationIntegration.class);
     private final TaxCalculationService taxService = mock(TaxCalculationService.class);
@@ -103,7 +110,9 @@ class AutomaticBillingRecoveryPersistenceTest {
 
     @BeforeEach
     void setUp() {
-        reset(configurationIntegration, taxService, invoiceService, snapshotService);
+        reset(configurationIntegration, taxService, invoiceService, snapshotService, authorizer);
+        when(authorizer.requirePermission(com.AccountReceivableManagement.security.FinancialAction.OPERATIONS_RECOVERY))
+                .thenReturn(OPERATOR);
         clock.set(START);
         tx = new TransactionTemplate(transactionManager);
         client = tx.execute(status -> clientRepository.save(Client.builder()
@@ -124,6 +133,8 @@ class AutomaticBillingRecoveryPersistenceTest {
     void tearDown() {
         tx.executeWithoutResult(status -> {
             runRepository.deleteAll();
+            eventRepository.deleteAll();
+            invoiceRepository.deleteAll();
             snapshotRepository.deleteAll();
             scheduleRepository.deleteAll();
             configurationRepository.deleteAll();
@@ -224,9 +235,19 @@ class AutomaticBillingRecoveryPersistenceTest {
                 configurationIntegration, scheduleRepository, mock(BillingOccurrenceTransactionService.class),
                 mock(BillingOccurrenceServiceImpl.class), snapshotService, taxService, invoiceService,
                 new AutomaticBillingRetryPolicy(properties, clock), Duration.ofMinutes(15));
-        return new AutomaticBillingScheduler(properties, orchestrator, runService, runRepository,
-                scheduleRepository, configurationRepository, snapshotRepository,
+        AutomaticBillingScheduler scheduler = new AutomaticBillingScheduler(properties, orchestrator, runService,
+                runRepository, scheduleRepository, configurationRepository, snapshotRepository,
                 mock(BillingOccurrenceServiceImpl.class), transactionManager, clock);
+        scheduler.setRecoveryService(recovery());
+        return scheduler;
+    }
+
+    private AutomaticBillingRunRecoveryServiceImpl recovery() {
+        AutomaticBillingRunServiceImpl runService = new AutomaticBillingRunServiceImpl(runRepository,
+                scheduleRepository, configurationRepository, mock(BillingOccurrenceServiceImpl.class),
+                transactionManager, clock);
+        return new AutomaticBillingRunRecoveryServiceImpl(runRepository, eventRepository, runService,
+                invoiceRepository, authorizer, transactionManager, clock);
     }
 
     private AutomaticBillingRun runOf(BillingSchedule occurrence) {
@@ -469,5 +490,271 @@ class AutomaticBillingRecoveryPersistenceTest {
         assertThat(runOf(broken).getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
         assertThat(runOf(broken).getNextRetryAt()).isNotNull();
         assertThat(runOf(healthy).getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL);
+    }
+    // ================================================================ G-17 operator re-queue
+
+    private BillingSchedule failedOnValidation() {
+        BillingSchedule october = due(configuration(BillingType.FIXED_PRICE, null), 1,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), "100000.00");
+        when(taxService.findOrCalculateTaxForSchedule(october.getBillingScheduleId()))
+                .thenThrow(new com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler
+                        .ValidationException("No active tax configuration is available."));
+        scheduler().runOnce();
+        assertThat(runOf(october).getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+        assertThat(runOf(october).getNextRetryAt()).isNull();
+        return october;
+    }
+
+    @Test
+    void requeue_byAuthorizedOperator_isProcessedOnce_withItsFailureKeptInHistory() {
+        BillingSchedule october = failedOnValidation();
+        UUID runId = runOf(october).getAutomaticBillingRunId();
+        reset(taxService); // Finance fixed the tax configuration.
+
+        var result = recovery().requeue(runId, "Tax configuration for KA added");
+
+        assertThat(result.isAccepted()).isTrue();
+        var events = eventRepository.findByRunIdOrderByOccurredAtAsc(runId);
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.getEventType().name()).isEqualTo("REQUEUED");
+            assertThat(event.getFailureReason()).contains("No active tax configuration");
+            assertThat(event.getActorUserId()).isEqualTo(7L);
+            assertThat(event.getReason()).isEqualTo("Tax configuration for KA added");
+        });
+
+        scheduler().runOnce();
+        scheduler().runOnce();
+
+        AutomaticBillingRun run = runOf(october);
+        assertThat(run.getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL);
+        assertThat(run.getAttemptCount()).isEqualTo(2);
+        verify(invoiceService, times(1)).findOrGenerateInvoiceForSchedule(october.getBillingScheduleId());
+    }
+
+    @Test
+    void requeue_whileAutomaticRetryIsDisabled_isStillProcessed() {
+        BillingSchedule october = failedOnValidation();
+        properties.getRetry().setEnabled(false);
+        reset(taxService);
+
+        recovery().requeue(runOf(october).getAutomaticBillingRunId(), "Corrected");
+        scheduler().runOnce();
+
+        assertThat(runOf(october).getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL);
+    }
+
+    @Test
+    void requeue_byUnauthorizedCaller_changesNothing() {
+        BillingSchedule october = failedOnValidation();
+        UUID runId = runOf(october).getAutomaticBillingRunId();
+        when(authorizer.requirePermission(com.AccountReceivableManagement.security.FinancialAction.OPERATIONS_RECOVERY))
+                .thenThrow(new org.springframework.security.access.AccessDeniedException("no"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> recovery().requeue(runId, "try"))
+                .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+
+        assertThat(runOf(october).getNextRetryAt()).isNull();
+        assertThat(runOf(october).getRequeuedAt()).isNull();
+        assertThat(eventRepository.count()).isZero();
+    }
+
+    @Test
+    void requeue_ofCompletedPendingOrScheduledRun_isRejectedWithoutChange() {
+        BillingSchedule october = failedOnValidation();
+        UUID runId = runOf(october).getAutomaticBillingRunId();
+        for (AutomaticBillingRunStatus status : List.of(AutomaticBillingRunStatus.COMPLETED,
+                AutomaticBillingRunStatus.PENDING_APPROVAL, AutomaticBillingRunStatus.SCHEDULED)) {
+            tx.executeWithoutResult(s -> {
+                AutomaticBillingRun run = runOf(october);
+                run.setStatus(status);
+                runRepository.save(run);
+            });
+
+            var result = recovery().requeue(runId, "try");
+
+            assertThat(result.isAccepted()).as(status.name()).isFalse();
+            assertThat(result.getState()).isEqualTo(status.name());
+            assertThat(runOf(october).getNextRetryAt()).isNull();
+        }
+        assertThat(eventRepository.count()).isZero();
+    }
+
+    @Test
+    void concurrentRequeues_acceptExactlyOne() throws Exception {
+        BillingSchedule october = failedOnValidation();
+        UUID runId = runOf(october).getAutomaticBillingRunId();
+        AutomaticBillingRunRecoveryServiceImpl recovery = recovery();
+
+        List<Boolean> accepted = concurrently(8, () -> recovery.requeue(runId, "retry").isAccepted());
+
+        assertThat(accepted).containsOnlyOnce(true);
+        assertThat(eventRepository.findByRunIdOrderByOccurredAtAsc(runId)).hasSize(1);
+    }
+
+    private <T> List<T> concurrently(int threads, Callable<T> work) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<T>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    return work.call();
+                }));
+            }
+            start.countDown();
+            List<T> results = new java.util.ArrayList<>();
+            for (Future<T> future : futures) {
+                results.add(future.get(30, TimeUnit.SECONDS));
+            }
+            return results;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    // ================================================================ G-30 retry disabled
+
+    @Test
+    void retryDisabled_interruptedRun_isClosedAsFailedForIntervention_notLeftProcessing() {
+        BillingSchedule october = due(configuration(BillingType.FIXED_PRICE, null), 1,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), "100000.00");
+        AutomaticBillingScheduler scheduler = scheduler();
+        scheduler.runOnce();
+        tx.executeWithoutResult(status -> {
+            AutomaticBillingRun run = runOf(october);
+            run.setStatus(AutomaticBillingRunStatus.PROCESSING);
+            run.setClaimToken(UUID.randomUUID());
+            run.setClaimExpiresAt(LocalDateTime.ofInstant(START, ZoneOffset.UTC).plusMinutes(15));
+            run.setLastCompletedStep(AutomaticBillingStep.TAX_CALCULATION);
+            run.setCurrentStep(AutomaticBillingStep.INVOICE_CREATION);
+            run.setInvoiceId(null);
+            runRepository.save(run);
+        });
+        properties.getRetry().setEnabled(false);
+        reset(invoiceService);
+
+        clock.advance(Duration.ofMinutes(20));
+        var summary = scheduler.runOnce();
+
+        AutomaticBillingRun run = runOf(october);
+        assertThat(summary.abandoned()).isEqualTo(1);
+        assertThat(run.getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+        assertThat(run.getNextRetryAt()).isNull();
+        assertThat(run.getFailureStep()).isEqualTo(AutomaticBillingStep.INVOICE_CREATION);
+        assertThat(run.getFailureReason()).contains("automatic retry is disabled");
+        verify(invoiceService, never()).findOrGenerateInvoiceForSchedule(any());
+    }
+
+    @Test
+    void retryDisabled_automaticallyScheduledRetry_isNotProcessed() {
+        BillingSchedule october = due(configuration(BillingType.FIXED_PRICE, null), 1,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), "100000.00");
+        when(taxService.findOrCalculateTaxForSchedule(october.getBillingScheduleId()))
+                .thenThrow(new QueryTimeoutException("lock wait timeout"));
+        scheduler().runOnce();
+        assertThat(runOf(october).getNextRetryAt()).isNotNull();
+
+        properties.getRetry().setEnabled(false);
+        clock.advance(Duration.ofDays(1));
+        scheduler().runOnce();
+
+        assertThat(runOf(october).getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+        assertThat(runOf(october).getAttemptCount()).isEqualTo(1);
+    }
+
+    // ================================================================ G-18 approval reconciliation
+
+    private UUID pendingApprovalRunWithInvoice(BillingSchedule october, InvoiceStatus invoiceStatus) {
+        scheduler().runOnce();
+        assertThat(runOf(october).getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL);
+        com.AccountReceivableManagement.entity.invoice_generation.Invoice invoice = tx.execute(s ->
+                invoiceRepository.save(com.AccountReceivableManagement.entity.invoice_generation.Invoice.builder()
+                        .invoiceNumber("INV-" + UUID.randomUUID().toString().substring(0, 8))
+                        .billingScheduleId(october.getBillingScheduleId())
+                        .taxCalculationId(UUID.randomUUID())
+                        .clientId(client.getClientId())
+                        .projectId(1L)
+                        .billingPeriodStart(october.getPeriodStartDate())
+                        .billingPeriodEnd(october.getPeriodEndDate())
+                        .invoiceDate(LocalDate.of(2026, 11, 1))
+                        .generatedAt(LocalDateTime.of(2026, 11, 1, 6, 0))
+                        .subtotal(new BigDecimal("100000.00"))
+                        .totalTaxAmount(new BigDecimal("18000.00"))
+                        .grandTotal(new BigDecimal("118000.00"))
+                        .status(invoiceStatus)
+                        .build()));
+        tx.executeWithoutResult(s -> {
+            AutomaticBillingRun run = runOf(october);
+            run.setInvoiceId(invoice.getInvoiceId());
+            runRepository.save(run);
+        });
+        return invoice.getInvoiceId();
+    }
+
+    private void setInvoiceStatus(UUID invoiceId, InvoiceStatus status) {
+        tx.executeWithoutResult(s -> {
+            var invoice = invoiceRepository.findById(invoiceId).orElseThrow();
+            invoice.setStatus(status);
+            invoiceRepository.save(invoice);
+        });
+    }
+
+    @Test
+    void pendingApprovalRun_staysPendingWhileItsInvoiceAwaitsApproval_andCompletesOnceApproved() {
+        BillingSchedule october = due(configuration(BillingType.FIXED_PRICE, null), 1,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), "100000.00");
+        UUID invoiceId = pendingApprovalRunWithInvoice(october, InvoiceStatus.PENDING_APPROVAL);
+
+        assertThat(scheduler().runOnce().reconciled()).isZero();
+        assertThat(runOf(october).getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL);
+
+        // Approved (and its document finalized), but the after-commit completion was lost.
+        setInvoiceStatus(invoiceId, InvoiceStatus.READY_TO_SEND);
+        assertThat(scheduler().runOnce().reconciled()).isEqualTo(1);
+
+        AutomaticBillingRun run = runOf(october);
+        assertThat(run.getStatus()).isEqualTo(AutomaticBillingRunStatus.COMPLETED);
+        assertThat(run.getCompletedAt()).isNotNull();
+        assertThat(eventRepository.findByRunIdOrderByOccurredAtAsc(run.getAutomaticBillingRunId()))
+                .singleElement().satisfies(event -> {
+                    assertThat(event.getEventType().name()).isEqualTo("APPROVAL_RECONCILED");
+                    assertThat(event.getActor()).isEqualTo("SYSTEM");
+                    assertThat(event.getActorUserId()).isNull();
+                });
+
+        // Repeated reconciliation changes nothing more, and nothing is generated again.
+        assertThat(scheduler().runOnce().reconciled()).isZero();
+        assertThat(eventRepository.count()).isEqualTo(1);
+        verify(invoiceService, times(1)).findOrGenerateInvoiceForSchedule(october.getBillingScheduleId());
+    }
+
+    @Test
+    void pendingApprovalRun_ofRejectedInvoice_isNotCompleted() {
+        BillingSchedule october = due(configuration(BillingType.FIXED_PRICE, null), 1,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), "100000.00");
+        pendingApprovalRunWithInvoice(october, InvoiceStatus.REJECTED);
+
+        var result = recovery().reconcileApproval(runOf(october).getAutomaticBillingRunId());
+
+        assertThat(result.isAccepted()).isFalse();
+        assertThat(result.getMessage()).contains("rejected");
+        assertThat(runOf(october).getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL);
+        assertThat(scheduler().runOnce().reconciled()).isZero();
+    }
+
+    @Test
+    void concurrentApprovalReconciliation_completesTheRunOnce() throws Exception {
+        BillingSchedule october = due(configuration(BillingType.FIXED_PRICE, null), 1,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), "100000.00");
+        pendingApprovalRunWithInvoice(october, InvoiceStatus.APPROVED);
+        UUID runId = runOf(october).getAutomaticBillingRunId();
+        AutomaticBillingRunRecoveryServiceImpl recovery = recovery();
+
+        List<Boolean> accepted = concurrently(6, () -> recovery.reconcileApproval(runId).isAccepted());
+
+        assertThat(accepted).containsOnlyOnce(true);
+        assertThat(runOf(october).getStatus()).isEqualTo(AutomaticBillingRunStatus.COMPLETED);
+        assertThat(eventRepository.findByRunIdOrderByOccurredAtAsc(runId)).hasSize(1);
     }
 }

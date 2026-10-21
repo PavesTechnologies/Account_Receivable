@@ -15,7 +15,14 @@ public enum FinancialAction {
     INVOICE_APPROVAL("approve or reject invoices"),
 
     /** Send an approved invoice to the client. */
-    INVOICE_DELIVERY("send invoices to clients");
+    INVOICE_DELIVERY("send invoices to clients"),
+
+    /**
+     * Operational recovery: re-queue a failed automatic billing run,
+     * reconcile a run with its approved invoice, create a sent invoice's
+     * missing receivable, resolve an uncertain invoice delivery.
+     */
+    OPERATIONS_RECOVERY("perform operational recovery of billing runs, deliveries and receivables");
 
     private final String description;
 
@@ -32,6 +39,7 @@ public enum FinancialAction {
             case BILLING_CONFIGURATION_APPROVAL -> authorization.getConfigurationApprovalAuthorities();
             case INVOICE_APPROVAL -> authorization.getInvoiceApprovalAuthorities();
             case INVOICE_DELIVERY -> authorization.getInvoiceDeliveryAuthorities();
+            case OPERATIONS_RECOVERY -> authorization.getOperationsRecoveryAuthorities();
         };
     }
 }

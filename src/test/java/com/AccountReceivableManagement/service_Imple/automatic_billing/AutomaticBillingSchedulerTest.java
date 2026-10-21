@@ -412,14 +412,32 @@ class AutomaticBillingSchedulerTest {
         assertThat(occurrencePage.getValue().getPageSize()).isEqualTo(1);
     }
 
+    // G-30: retry disabled means nothing is attempted again automatically - but
+    // an interrupted run is closed as FAILED (visible, needs intervention)
+    // instead of staying PROCESSING forever, and explicit re-queues still run.
     @Test
-    void retriesDisabled_neitherRecoversNorRetries() {
+    void retriesDisabled_noAutomaticRetry_interruptedRunClosedNotResumed_requeuedRunProcessed() {
         properties.getRetry().setEnabled(false);
+        UUID interruptedRun = UUID.randomUUID();
+        UUID requeuedRun = UUID.randomUUID();
+        interrupted(interruptedRun, 1);
+        when(runRepository.findInterruptedRunIds(eq(LocalDateTime.now(CLOCK)), any()))
+                .thenReturn(List.of(interruptedRun));
+        when(runService.failInterruptedRun(eq(interruptedRun), any()))
+                .thenReturn(java.util.Optional.of(run(interruptedRun, AutomaticBillingRunStatus.FAILED)));
+        when(runRepository.findRequeuedRunIdsDue(any(), any())).thenReturn(List.of(requeuedRun));
+        when(orchestrator.processRun(requeuedRun))
+                .thenReturn(run(requeuedRun, AutomaticBillingRunStatus.PENDING_APPROVAL));
 
-        scheduler.runOnce();
+        AutomaticBillingScheduler.TickSummary summary = scheduler.runOnce();
 
-        verify(runRepository, never()).findInterruptedRunIds(any(), any());
         verify(runRepository, never()).findRunIdsDueForRetry(any(), any());
+        verify(orchestrator, never()).processRun(interruptedRun);
+        verify(runService).failInterruptedRun(eq(interruptedRun),
+                org.mockito.ArgumentMatchers.contains("automatic retry is disabled"));
+        verify(orchestrator).processRun(requeuedRun);
+        assertThat(summary.abandoned()).isEqualTo(1);
+        assertThat(summary.recovered()).isZero();
     }
 
     // ================================================================ backfill (Phase 11)

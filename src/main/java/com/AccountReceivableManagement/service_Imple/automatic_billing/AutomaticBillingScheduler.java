@@ -98,6 +98,17 @@ public class AutomaticBillingScheduler {
         this.metrics = metrics;
     }
 
+    /** Reconciles runs whose invoice was approved but whose completion was not recorded (G-18). */
+    private com.AccountReceivableManagement.service_interface.automatic_billing.AutomaticBillingRunRecoveryService
+            recoveryService;
+
+    @Autowired(required = false)
+    void setRecoveryService(
+            com.AccountReceivableManagement.service_interface.automatic_billing.AutomaticBillingRunRecoveryService
+                    recoveryService) {
+        this.recoveryService = recoveryService;
+    }
+
     @Autowired
     public AutomaticBillingScheduler(AutomaticBillingSchedulerProperties properties,
             AutomaticBillingOrchestrator orchestrator,
@@ -170,6 +181,19 @@ public class AutomaticBillingScheduler {
         int batchSize = properties.getBatchSize();
         TickSummary summary = new TickSummary();
 
+        // G-18: runs whose invoice Finance already approved, but whose
+        // after-commit completion was lost. Records a decision already made -
+        // not a retry - so it runs whatever the retry policy, outside the batch budget.
+        if (recoveryService != null) {
+            try {
+                summary.reconciled = recoveryService.reconcileApprovedRuns(batchSize);
+            } catch (RuntimeException ex) {
+                summary.errors++;
+                log.warn("[AutomaticBillingScheduler] approval reconciliation failed: {}",
+                        AutomaticBillingRunServiceImpl.sanitizeFailureReason(ex.getMessage()));
+            }
+        }
+
         List<UUID> pendingRunIds = automaticBillingRunRepository.findRunIdsByStatus(
                 AutomaticBillingRunStatus.SCHEDULED, PageRequest.of(0, batchSize));
         for (UUID runId : pendingRunIds) {
@@ -178,8 +202,10 @@ public class AutomaticBillingScheduler {
         }
 
         int remaining = batchSize - pendingRunIds.size();
-        if (remaining > 0 && properties.getRetry().isEnabled()) {
-            remaining -= recover(summary, remaining);
+        if (remaining > 0) {
+            remaining -= properties.getRetry().isEnabled()
+                    ? recover(summary, remaining)
+                    : recoverWithoutAutomaticRetry(summary, remaining);
         }
 
         LocalDate earliestBillingDate = earliestBillingDate(today);
@@ -306,6 +332,47 @@ public class AutomaticBillingScheduler {
         return handled;
     }
 
+    /**
+     * G-30: with automatic retry disabled nothing is attempted again on its
+     * own, but nothing is left stranded either. An interrupted run is closed
+     * as FAILED (failure recorded, no automatic retry) so it shows as needing
+     * intervention instead of staying PROCESSING forever; runs explicitly
+     * re-queued since their last failure - by an operator or a configuration
+     * re-approval - are processed, as those are decisions, not retries.
+     */
+    private int recoverWithoutAutomaticRetry(TickSummary summary, int limit) {
+        LocalDateTime now = LocalDateTime.now(clock);
+        int handled = 0;
+
+        for (UUID runId : automaticBillingRunRepository.findInterruptedRunIds(now, PageRequest.of(0, limit))) {
+            handled++;
+            AutomaticBillingRun run = automaticBillingRunService.findById(runId).orElse(null);
+            if (run == null) {
+                continue;
+            }
+            try {
+                automaticBillingRunService.failInterruptedRun(runId, "Interrupted during "
+                        + run.getCurrentStep() + " on attempt " + run.getAttemptCount()
+                        + "; automatic retry is disabled - re-queue it once the cause is understood.")
+                        .ifPresent(failed -> summary.abandoned++);
+            } catch (RuntimeException ex) {
+                summary.errors++;
+                log.warn("[AutomaticBillingScheduler] interrupted run {} could not be closed: {}", runId,
+                        AutomaticBillingRunServiceImpl.sanitizeFailureReason(ex.getMessage()));
+            }
+        }
+
+        if (handled < limit) {
+            for (UUID runId : automaticBillingRunRepository.findRequeuedRunIdsDue(now,
+                    PageRequest.of(0, limit - handled))) {
+                handled++;
+                summary.retried++;
+                process(summary, "re-queued run " + runId, () -> runId);
+            }
+        }
+        return handled;
+    }
+
     record DueTimeAndMaterialPeriod(UUID configurationId, LocalDate start, LocalDate end) {
         @Override
         public String toString() {
@@ -405,6 +472,7 @@ public class AutomaticBillingScheduler {
         int recovered;
         int retried;
         int abandoned;
+        int reconciled;
         int newOccurrences;
         int newTimeAndMaterialPeriods;
         int errors;
@@ -416,7 +484,7 @@ public class AutomaticBillingScheduler {
         }
 
         public int handled() {
-            return resumed + recovered + retried + abandoned + newOccurrences + newTimeAndMaterialPeriods;
+            return resumed + recovered + retried + abandoned + reconciled + newOccurrences + newTimeAndMaterialPeriods;
         }
 
         /** Interrupted runs taken over and resumed. */
@@ -427,6 +495,11 @@ public class AutomaticBillingScheduler {
         /** FAILED runs retried because their {@code nextRetryAt} arrived. */
         public int retried() {
             return retried;
+        }
+
+        /** PENDING_APPROVAL runs completed from their already-approved invoice (G-18). */
+        public int reconciled() {
+            return reconciled;
         }
 
         /** Interrupted runs closed as FAILED - no automatic attempt left. */
@@ -457,7 +530,7 @@ public class AutomaticBillingScheduler {
         @Override
         public String toString() {
             return "resumed runs " + resumed + ", recovered " + recovered + ", retried " + retried
-                    + ", abandoned " + abandoned + ", new occurrences " + newOccurrences
+                    + ", abandoned " + abandoned + ", reconciled " + reconciled + ", new occurrences " + newOccurrences
                     + ", new T&M periods " + newTimeAndMaterialPeriods + ", outcomes " + outcomes
                     + ", errors " + errors;
         }

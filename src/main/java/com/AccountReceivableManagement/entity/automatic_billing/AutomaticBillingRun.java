@@ -166,6 +166,16 @@ public class AutomaticBillingRun {
     @Column(name = "next_retry_at")
     private LocalDateTime nextRetryAt;
 
+    /**
+     * When the run was last explicitly re-queued - by an authorized operator
+     * or by a configuration re-approval - rather than by the automatic retry
+     * policy. A FAILED run re-queued after its last failure is processed even
+     * while automatic retry is disabled (G-17/G-30); who and why are recorded
+     * in {@code automatic_billing_run_event}.
+     */
+    @Column(name = "requeued_at")
+    private LocalDateTime requeuedAt;
+
     /** Start of the most recent attempt. */
     @Column(name = "started_at")
     private LocalDateTime startedAt;

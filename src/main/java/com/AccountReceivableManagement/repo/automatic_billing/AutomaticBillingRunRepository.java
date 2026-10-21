@@ -78,6 +78,35 @@ public interface AutomaticBillingRunRepository extends JpaRepository<AutomaticBi
             org.springframework.data.domain.Pageable page);
 
     /**
+     * FAILED runs explicitly re-queued (operator or configuration re-approval)
+     * after their last failure and now due, earliest first. Processed even
+     * while automatic retry is disabled: a re-queue is a decision, not an
+     * automatic retry (G-30).
+     */
+    @Query("SELECT r.automaticBillingRunId FROM AutomaticBillingRun r "
+            + "WHERE r.status = com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticBillingRunStatus.FAILED "
+            + "AND r.nextRetryAt IS NOT NULL AND r.nextRetryAt <= :now "
+            + "AND r.requeuedAt IS NOT NULL AND (r.failedAt IS NULL OR r.requeuedAt >= r.failedAt) "
+            + "ORDER BY r.nextRetryAt ASC, r.automaticBillingRunId ASC")
+    java.util.List<UUID> findRequeuedRunIdsDue(@Param("now") LocalDateTime now,
+            org.springframework.data.domain.Pageable page);
+
+    /**
+     * PENDING_APPROVAL runs whose invoice the persisted invoice status shows
+     * as already approved ({@code invoiceStatuses}) - the after-commit
+     * completion did not happen (callback failure, crash, or approval while
+     * the run was still PROCESSING). Oldest first (G-18).
+     */
+    @Query("SELECT r.automaticBillingRunId FROM AutomaticBillingRun r, "
+            + "com.AccountReceivableManagement.entity.invoice_generation.Invoice i "
+            + "WHERE r.status = com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticBillingRunStatus.PENDING_APPROVAL "
+            + "AND i.invoiceId = r.invoiceId AND i.status IN :invoiceStatuses "
+            + "ORDER BY r.updatedAt ASC, r.automaticBillingRunId ASC")
+    java.util.List<UUID> findPendingApprovalRunIdsWithInvoiceIn(
+            @Param("invoiceStatuses") Collection<com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus> invoiceStatuses,
+            org.springframework.data.domain.Pageable page);
+
+    /**
      * Makes FAILED runs due for another attempt now, after a configuration
      * re-approval: runs of the given unbilled occurrences that either belong
      * to an occurrence the re-approval re-planned ({@code replannedOccurrenceIds})
@@ -91,7 +120,8 @@ public interface AutomaticBillingRunRepository extends JpaRepository<AutomaticBi
      * @return the number of runs re-queued
      */
     @Modifying(flushAutomatically = true)
-    @Query("UPDATE AutomaticBillingRun r SET r.nextRetryAt = :now, r.updatedAt = :now, r.version = r.version + 1 "
+    @Query("UPDATE AutomaticBillingRun r SET r.nextRetryAt = :now, r.requeuedAt = :now, r.updatedAt = :now, "
+            + "r.version = r.version + 1 "
             + "WHERE r.status = com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticBillingRunStatus.FAILED "
             + "AND r.billingScheduleId IN :occurrenceIds "
             + "AND (r.billingScheduleId IN :replannedOccurrenceIds OR r.failureStep IS NULL)")

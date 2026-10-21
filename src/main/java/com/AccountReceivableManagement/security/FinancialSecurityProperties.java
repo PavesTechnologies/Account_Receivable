@@ -50,6 +50,13 @@ public class FinancialSecurityProperties {
         private List<String> invoiceDeliveryAuthorities = new ArrayList<>();
 
         /**
+         * May perform operational recovery (re-queue billing runs, reconcile
+         * runs, receivables and deliveries). Empty = nobody.
+         */
+        @NotNull
+        private List<String> operationsRecoveryAuthorities = new ArrayList<>();
+
+        /**
          * Maker-checker: the user who submitted a billing configuration or an
          * invoice for approval cannot approve it. Records submitted by the
          * system (automatic billing) are exempt - there is no human maker.
