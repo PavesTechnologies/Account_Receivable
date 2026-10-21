@@ -438,6 +438,17 @@ class InvoiceFinancialCorrectionServiceImplTest {
 
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(configId))
                 .thenReturn(approvedTimeAndMaterialConfiguration());
+        // InvoiceServiceImpl.refreshAfterCorrection() reads the configuration's
+        // project duration through BillingConfigurationService (0b595eb).
+        when(billingConfigurationService.getBillingConfiguration(configId))
+                .thenReturn(com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto.builder()
+                        .billingConfigurationId(configId)
+                        .projectId(PROJECT_ID)
+                        .currencyCode("USD")
+                        .taxRegionId(taxRegionId)
+                        .projectStartDate(PERIOD_START)
+                        .projectEndDate(LocalDate.of(2026, 12, 31))
+                        .build());
         // TaxCalculationServiceImpl reads the configuration through the
         // repository (not BillingConfigurationService) for its response mapping.
         when(billingConfigurationRepository.findById(configId))

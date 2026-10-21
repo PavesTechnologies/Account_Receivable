@@ -2472,6 +2472,8 @@ class InvoiceServiceImplTest {
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
         when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -2524,7 +2526,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.CORRECTED);
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
         assertThat(history.getComment()).isEqualTo("Invoice refreshed from corrected billing/tax data.");
     }
 
@@ -2702,6 +2704,8 @@ class InvoiceServiceImplTest {
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
         when(invoiceRepository.save(any(Invoice.class)))
                 .thenThrow(new RuntimeException("unexpected database error"));
@@ -2809,6 +2813,8 @@ class InvoiceServiceImplTest {
 
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
 
         // Cycle 1.
@@ -3586,6 +3592,8 @@ class InvoiceServiceImplTest {
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
         when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
 

@@ -43,12 +43,12 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
                     log.warn("After payload is null for create operation and entityId '{}'", payload.getEntityId());
                     return;
                 }
-                handleCreate(data);
-                // Refresh client budget in separate transaction after project is committed
-                Long pmsProjectId = getPmsProjectId(data);
-                projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId).ifPresent(project -> {
-                    refreshClientBudgetAsync(project.getClientId());
-                });
+                // Refresh only when this event actually created the project: a replayed
+                // or duplicate create event is skipped entirely (as before f4f3886).
+                ProjectMasterReference created = handleCreate(data);
+                if (created != null) {
+                    refreshClientBudgetAsync(created.getClientId());
+                }
                 break;
             case "u":
                 data = payload.getAfter();
@@ -84,8 +84,9 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
         );
     }
 
+    /** @return the created project, or {@code null} when it already existed (event skipped) */
     @Transactional
-    private void handleCreate(Map<String, Object> data) {
+    private ProjectMasterReference handleCreate(Map<String, Object> data) {
         Long pmsProjectId = getPmsProjectId(data);
         log.info("[PROJECT-CDC] CREATE START - Extracted pmsProjectId: {}", pmsProjectId);
         
@@ -99,7 +100,7 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
         
         if (projectExists) {
             log.warn("Project with PMS ID {} already exists. Skipping create operation.", pmsProjectId);
-            return;
+            return null;
         }
 
         log.info("[PROJECT-CDC] Creating new ProjectMasterReference for pmsProjectId: {}", pmsProjectId);
@@ -117,6 +118,7 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
                 savedProject.getPmsProjectId());
         
         log.info("[PROJECT-CDC] CREATE COMPLETE - Created project with PMS ID: {}", project.getPmsProjectId());
+        return savedProject != null ? savedProject : project;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

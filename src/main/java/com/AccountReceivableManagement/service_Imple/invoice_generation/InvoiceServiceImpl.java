@@ -2651,8 +2651,14 @@ public class InvoiceServiceImpl implements InvoiceService {
             List<InvoiceApprovalHistory> historyAscendingByActionAt
     ) {
 
-        LocalDateTime latestRejectionAt = null;
         LocalDateTime latestCorrectionAt = null;
+
+        // Decided by the history's order, not by comparing timestamps: a
+        // correction and a later rejection recorded within the same clock
+        // tick compare equal, which let a rejected invoice be resubmitted
+        // without its correction. Each rejection requires a correction that
+        // comes after it.
+        boolean correctionRequired = false;
 
         for (
                 InvoiceApprovalHistory entry
@@ -2661,19 +2667,13 @@ public class InvoiceServiceImpl implements InvoiceService {
 
             if (entry.getAction()
                     == InvoiceApprovalAction.REJECTED) {
-                latestRejectionAt = entry.getActionAt();
+                correctionRequired = true;
             } else if (entry.getAction()
                     == InvoiceApprovalAction.CORRECTED) {
                 latestCorrectionAt = entry.getActionAt();
+                correctionRequired = false;
             }
         }
-
-        boolean correctionRequired =
-                latestRejectionAt != null
-                        && (latestCorrectionAt == null
-                        || latestCorrectionAt.isBefore(
-                                latestRejectionAt
-                        ));
 
         return new CorrectionState(
                 correctionRequired,
