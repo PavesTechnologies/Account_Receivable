@@ -151,6 +151,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
         TaxApplicabilityType transactionApplicability =
                 resolveApplicability(snapshot);
 
+        requireJurisdictionsWhenConfigurationNeedsThem(
+                configuration, transactionApplicability, "billing snapshot");
+
         snapshot.setStatus(
                 BillingSnapshotStatus.IN_TAX
         );
@@ -169,6 +172,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                         )
                         .taxRegionId(
                                 snapshot.getTaxRegionId()
+                        )
+                        .currencyCode(
+                                snapshot.getCurrencyCode()
                         )
                         .taxConfigurationId(
                                 configuration
@@ -473,6 +479,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         TaxApplicabilityType transactionApplicability = resolveApplicabilityForSchedule(schedule, configuration);
 
+        requireJurisdictionsWhenConfigurationNeedsThem(
+                taxConfiguration, transactionApplicability, "billing schedule");
+
         TaxCalculation calculation =
                 TaxCalculation.builder()
                         .billingScheduleId(
@@ -480,6 +489,11 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                         )
                         .taxRegionId(
                                 configuration.getTaxRegion().getTaxRegionId()
+                        )
+                        .currencyCode(
+                                configuration.getCurrency() != null
+                                        ? configuration.getCurrency().getCurrencyCode()
+                                        : null
                         )
                         .taxConfigurationId(
                                 taxConfiguration.getTaxConfigurationId()
@@ -792,6 +806,55 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                 + " (source jurisdiction " + normalize(snapshot.getSourceTaxJurisdictionCode())
                 + ", destination jurisdiction " + normalize(snapshot.getDestinationTaxJurisdictionCode())
                 + ") but active components are configured only for " + activeApplicabilities + ".";
+    }
+
+    /**
+     * G-12: {@code ALL} is the transaction applicability only when the source
+     * or destination jurisdiction could not be determined. If the Tax
+     * Configuration has active jurisdiction-specific components (e.g.
+     * CGST/SGST vs IGST), taxing with only its {@code ALL} components would
+     * silently under-tax - so the calculation fails with the missing
+     * prerequisite instead. A configuration made only of {@code ALL}
+     * components needs no jurisdictions and is unaffected; one without any
+     * {@code ALL} component already fails (no applicable component).
+     */
+    private void requireJurisdictionsWhenConfigurationNeedsThem(
+            TaxConfiguration taxConfiguration,
+            TaxApplicabilityType transactionApplicability,
+            String record
+    ) {
+
+        if (transactionApplicability != TaxApplicabilityType.ALL) {
+            return;
+        }
+
+        List<TaxApplicabilityType> jurisdictionSpecific =
+                taxConfiguration.getComponents()
+                        .stream()
+                        .filter(component ->
+                                Boolean.TRUE.equals(component.getIsActive()))
+                        .map(TaxConfigurationComponent::getApplicabilityType)
+                        .filter(type -> type != null && type != TaxApplicabilityType.ALL)
+                        .distinct()
+                        .toList();
+
+        boolean hasJurisdictionIndependent =
+                taxConfiguration.getComponents()
+                        .stream()
+                        .anyMatch(component ->
+                                Boolean.TRUE.equals(component.getIsActive())
+                                        && component.getApplicabilityType() == TaxApplicabilityType.ALL);
+
+        if (hasJurisdictionIndependent && !jurisdictionSpecific.isEmpty()) {
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Tax cannot be calculated for this " + record
+                            + ": its source and destination tax jurisdictions could not be determined, "
+                            + "but the Tax Configuration has jurisdiction-specific components ("
+                            + jurisdictionSpecific + "). Set the tax region and the project location "
+                            + "to a known tax region, then calculate tax again."
+            );
+        }
     }
 
     private boolean isApplicable(

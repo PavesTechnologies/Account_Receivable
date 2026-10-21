@@ -565,6 +565,56 @@ class TaxCalculationServiceImplTest {
         verify(taxCalculationRepository, never()).save(any());
     }
 
+    // G-12 — Jurisdictions missing and the configuration mixes ALL with jurisdiction-specific
+    // components: tax is not calculated with only the ALL components (silent under-taxing).
+    @Test
+    void calculateTax_missingJurisdictions_mixedConfiguration_failsInsteadOfDroppingJurisdictionTaxes() {
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("900.00"), null, null);
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "1.0000", TaxApplicabilityType.ALL, true),
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(igstType, "18.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, true)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+
+        assertThatThrownBy(() -> taxCalculationService.calculateTax(snapshotId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("tax jurisdictions could not be determined")
+                .hasMessageContaining("SAME_JURISDICTION");
+        verify(taxCalculationRepository, never()).save(any());
+    }
+
+    // G-12 — A configuration made only of ALL components needs no jurisdictions.
+    @Test
+    void calculateTax_missingJurisdictions_allOnlyConfiguration_isCalculated() {
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("900.00"), null, null);
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "10.0000", TaxApplicabilityType.ALL, true)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+        when(taxCalculationRepository.save(any(TaxCalculation.class))).thenAnswer(i -> i.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class))).thenAnswer(i -> i.getArgument(0));
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
+
+        taxCalculationService.calculateTax(snapshotId);
+
+        ArgumentCaptor<TaxCalculation> saved = ArgumentCaptor.forClass(TaxCalculation.class);
+        verify(taxCalculationRepository).save(saved.capture());
+        assertThat(saved.getValue().getTotalTaxAmount()).isEqualByComparingTo("90.00");
+        assertThat(saved.getValue().getCurrencyCode()).isEqualTo(snapshot.getCurrencyCode());
+    }
+
     // CASE 13d — A configured 0% rate is a real, applicable component: zero tax, one component.
     @Test
     void calculateTax_zeroRatedApplicableComponent_isPersistedAsComponent() {

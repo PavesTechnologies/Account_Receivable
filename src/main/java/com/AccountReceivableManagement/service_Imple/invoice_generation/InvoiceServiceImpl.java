@@ -578,6 +578,13 @@ public class InvoiceServiceImpl implements InvoiceService {
                         schedule.getBillingConfiguration().getBillingConfigurationId()
                 );
 
+        // G-12: the frozen amounts must not be paired with a tax region or
+        // currency other than the ones they were calculated for.
+        requireTaxContextUnchanged(taxCalculation, configuration);
+        String invoiceCurrencyCode = taxCalculation.getCurrencyCode() != null
+                ? taxCalculation.getCurrencyCode()
+                : configuration.getCurrencyCode();
+
         // Determine billing type from BillingConfiguration
         String billingTypeName = configuration.getBillingTypeName();
         boolean isTimeMaterial = billingTypeName != null && 
@@ -638,7 +645,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .projectEndDate(configuration.getProjectEndDate())
                         .billingPeriodStart(schedule.getPeriodStartDate())
                         .billingPeriodEnd(schedule.getPeriodEndDate())
-                        .currencyCode(configuration.getCurrencyCode())
+                        .currencyCode(invoiceCurrencyCode)
                         .paymentTermCode(configuration.getPaymentTermCode())
                         .paymentTermName(configuration.getPaymentTermName())
                         .sellerLegalName(companyProfile.getLegalName())
@@ -656,7 +663,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .termsAndConditions(companyProfile.getDefaultTermsAndConditions())
                         .paymentInstructions(companyProfile.getDefaultPaymentInstructions())
                         // The schedule tax path does not persist the jurisdictions
-                        // it compared, so only the Tax Region is frozen here.
+                        // it compared, so only the Tax Region is frozen here - the
+                        // one tax was calculated for (requireTaxContextUnchanged).
                         .taxRegionCode(configuration.getTaxRegionCode())
                         .subtotal(taxCalculation.getTaxableAmount())
                         .totalTaxAmount(taxCalculation.getTotalTaxAmount())
@@ -2204,6 +2212,37 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .map(PaymentTermsMaster::getPaymentDays)
                 .map(invoiceDate::plusDays)
                 .orElse(null);
+    }
+
+    /**
+     * G-12: an occurrence's tax calculation is frozen; the invoice copies its
+     * amounts. If the billing configuration's tax region or currency changed
+     * since (an edit re-approved after tax was calculated), those amounts
+     * would be invoiced under a region or currency they were never calculated
+     * for. Refuse instead of silently mixing them; a calculation made before
+     * the currency was recorded is checked on its tax region only.
+     */
+    private void requireTaxContextUnchanged(
+            TaxCalculation taxCalculation,
+            BillingConfigurationResponseDto configuration
+    ) {
+        if (taxCalculation.getTaxRegionId() != null && configuration.getTaxRegionId() != null
+                && !taxCalculation.getTaxRegionId().equals(configuration.getTaxRegionId())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice cannot be generated because the billing configuration's tax region changed "
+                            + "after tax was calculated for this billing occurrence. The tax calculation "
+                            + "must be corrected before invoicing."
+            );
+        }
+        if (taxCalculation.getCurrencyCode() != null && configuration.getCurrencyCode() != null
+                && !taxCalculation.getCurrencyCode().equalsIgnoreCase(configuration.getCurrencyCode())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Invoice cannot be generated because the billing configuration's currency changed from "
+                            + taxCalculation.getCurrencyCode() + " to " + configuration.getCurrencyCode()
+                            + " after tax was calculated for this billing occurrence. The tax calculation "
+                            + "must be corrected before invoicing."
+            );
+        }
     }
 
     private InvoiceResponseDto mapToResponse(

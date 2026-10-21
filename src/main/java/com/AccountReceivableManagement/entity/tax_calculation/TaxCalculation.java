@@ -75,6 +75,14 @@ public class TaxCalculation {
     )
     private UUID taxConfigurationId;
 
+    /**
+     * Currency the taxable amount was expressed in when tax was calculated
+     * (G-12). Invoice generation uses it and refuses to invoice in another
+     * currency. Nullable: calculations made before V12 did not record it.
+     */
+    @Column(name = "currency_code", length = 10)
+    private String currencyCode;
+
     @Column(
             name = "taxable_amount",
             nullable = false,

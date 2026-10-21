@@ -3629,4 +3629,72 @@ class InvoiceServiceImplTest {
         assertThat(response.getSourceTaxJurisdictionCode()).isNull();
         assertThat(response.getDestinationTaxJurisdictionCode()).isNull();
     }
+    // ---------------------------------------------------------------- G-12: stored tax context
+
+    private void scheduleReadyForInvoice(BillingSchedule schedule, TaxCalculation taxCalculation,
+            BillingConfigurationResponseDto liveConfiguration) {
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(schedule));
+        when(taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingScheduleId(schedule.getBillingScheduleId())).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(liveConfiguration);
+        lenient().when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(billingScheduleRepository.save(any(BillingSchedule.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    // The invoice is in the currency tax was calculated in.
+    @Test
+    void generateInvoiceForSchedule_usesTheCurrencyRecordedByItsTaxCalculation() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+        taxCalculation.setCurrencyCode("INR");
+        scheduleReadyForInvoice(schedule, taxCalculation, BillingConfigurationResponseDto.builder()
+                .clientId(clientId).projectId(23L)
+                .currencyCode("INR").taxRegionId(taxCalculation.getTaxRegionId()).taxRegionCode("IN")
+                .build());
+
+        InvoiceResponseDto response = invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId());
+
+        assertThat(response.getCurrencyCode()).isEqualTo("INR");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo(taxCalculation.getGrandTotal());
+    }
+
+    // The configuration's currency changed after tax was calculated: no invoice
+    // pairs the frozen amounts with the new currency.
+    @Test
+    void generateInvoiceForSchedule_currencyChangedAfterTaxCalculation_isRefused() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+        taxCalculation.setCurrencyCode("INR");
+        scheduleReadyForInvoice(schedule, taxCalculation, BillingConfigurationResponseDto.builder()
+                .clientId(clientId).projectId(23L)
+                .currencyCode("USD").taxRegionId(taxCalculation.getTaxRegionId()).taxRegionCode("IN")
+                .build());
+
+        assertThatThrownBy(() -> invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId()))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("currency changed from INR to USD");
+        verify(invoiceRepository, never()).save(any(Invoice.class));
+    }
+
+    // The configuration's tax region changed after tax was calculated.
+    @Test
+    void generateInvoiceForSchedule_taxRegionChangedAfterTaxCalculation_isRefused() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+        if (taxCalculation.getTaxRegionId() == null) {
+            taxCalculation.setTaxRegionId(UUID.randomUUID());
+        }
+        scheduleReadyForInvoice(schedule, taxCalculation, BillingConfigurationResponseDto.builder()
+                .clientId(clientId).projectId(23L)
+                .currencyCode("INR").taxRegionId(UUID.randomUUID()).taxRegionCode("US")
+                .build());
+
+        assertThatThrownBy(() -> invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId()))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("tax region changed");
+        verify(invoiceRepository, never()).save(any(Invoice.class));
+    }
 }
