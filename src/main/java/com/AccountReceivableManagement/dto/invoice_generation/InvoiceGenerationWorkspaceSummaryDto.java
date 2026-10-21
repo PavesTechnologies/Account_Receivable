@@ -29,6 +29,9 @@ public class InvoiceGenerationWorkspaceSummaryDto {
 
     private long rejectedCount;
 
+    /** Approved invoices whose document is finalized - not yet a statement of delivery. */
+    private long readyToSendCount;
+
     /** Number of invoices created, i.e. snapshots already INVOICED. */
     private long invoicedCount;
 

@@ -1,14 +1,20 @@
 package com.AccountReceivableManagement.integration.billing_data_acquisition;
 
 import com.AccountReceivableManagement.dto.billing_data_acquisition.TimesheetDto;
-import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import io.micrometer.core.instrument.Metrics;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
@@ -20,24 +26,52 @@ import java.util.stream.Collectors;
  * left unset here; TMS never knows commercial data, so
  * {@code TimeAndMaterialBillingStrategy} fills it in from the Billing
  * Configuration after this call returns.
+ * <p>
+ * Authentication: the caller's own {@code Authorization} header is forwarded
+ * (as {@code TmsFeignConfig} does for the Feign clients). Outside an HTTP
+ * request - the automatic billing scheduler - there is none, and no
+ * service-to-service credential exists yet, so TMS is called without one;
+ * if TMS then refuses it, the error names that missing dependency rather
+ * than an expired user JWT.
  */
 @Component
 public class TimesheetIntegrationImpl implements TimesheetIntegration {
 
     private static final String TIMESHEETS_BILLING_PATH = "/api/timesheets/billing";
 
-    private final RestClient restClient;
-    private final HttpServletRequest httpServletRequest;
+    /** TMS {@code approvalStatus} value of an approved timesheet. */
+    private static final String APPROVED_STATUS = "APPROVED";
 
+    /** Defaults of {@code tms.api.connect-timeout} / {@code tms.api.read-timeout}. */
+    static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(60);
+
+    private final RestClient restClient;
+
+    public TimesheetIntegrationImpl(String tmsApiBaseUrl) {
+        this(tmsApiBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT);
+    }
+
+    /**
+     * Bounded connect and read timeouts: without them a TMS that accepts the
+     * connection but never answers would block the caller - a user request,
+     * or the automatic billing scheduler thread past its run's claim - for
+     * good. A timeout surfaces as {@code ResourceAccessException}, which
+     * automatic billing retries.
+     */
+    @Autowired
     public TimesheetIntegrationImpl(@Value("${tms.api.base-url}") String tmsApiBaseUrl,
-                                     HttpServletRequest httpServletRequest) {
-        this.restClient = RestClient.builder().baseUrl(tmsApiBaseUrl).build();
-        this.httpServletRequest = httpServletRequest;
+            @Value("${tms.api.connect-timeout:PT10S}") Duration connectTimeout,
+            @Value("${tms.api.read-timeout:PT60S}") Duration readTimeout) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout((int) connectTimeout.toMillis());
+        requestFactory.setReadTimeout((int) readTimeout.toMillis());
+        this.restClient = RestClient.builder().baseUrl(tmsApiBaseUrl).requestFactory(requestFactory).build();
     }
 
     @Override
     public List<TimesheetDto> getApprovedTimesheets(Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd) {
-        String authorizationHeader = httpServletRequest.getHeader(HttpHeaders.AUTHORIZATION);
+        String authorizationHeader = currentAuthorizationHeader();
 
         TmsTimesheetBillingResponse response;
         try {
@@ -55,7 +89,12 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
                     .retrieve()
                     .body(TmsTimesheetBillingResponse.class);
         } catch (RestClientResponseException ex) {
-            throw translateTmsError(ex);
+            Metrics.counter("ar.tms.request.failures", "status", String.valueOf(ex.getStatusCode().value())).increment();
+            throw translateTmsError(ex, authorizationHeader != null);
+        } catch (RestClientException ex) {
+            // Unreachable, timed out or unreadable response.
+            Metrics.counter("ar.tms.request.failures", "status", "io").increment();
+            throw ex;
         }
 
         if (response == null || response.getTimesheets() == null) {
@@ -67,8 +106,13 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
                 .collect(Collectors.toList());
     }
 
-    private TimesheetDto toTimesheetDto(TmsTimesheetEntry entry) {
-        // TMS guarantees every returned record is already approved and billable.
+    /**
+     * Maps one TMS entry as sent - approval and billability are taken from
+     * TMS's own {@code approvalStatus} and {@code billable} values, never
+     * assumed, so {@code BillingAcquisitionValidator} decides eligibility
+     * from the real source data.
+     */
+    TimesheetDto toTimesheetDto(TmsTimesheetEntry entry) {
         return TimesheetDto.builder()
                 .resourceId(entry.getResourceId())
                 .resourceName(entry.getResourceName())
@@ -77,13 +121,29 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
                 .hours(entry.getHours())
                 .role(entry.getRole())
                 .approvalStatus(entry.getApprovalStatus())
-                .approved(true)
-                .billable(true)
+                .approved(entry.getApprovalStatus() != null
+                        && APPROVED_STATUS.equalsIgnoreCase(entry.getApprovalStatus().trim()))
+                .billable(Boolean.TRUE.equals(entry.getBillable()))
                 .build();
     }
 
-    private RuntimeException translateTmsError(RestClientResponseException ex) {
+    /** The incoming request's Authorization header; {@code null} outside a request (scheduler threads). */
+    private static String currentAuthorizationHeader() {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)) {
+            return null;
+        }
+        String header = attributes.getRequest().getHeader(HttpHeaders.AUTHORIZATION);
+        return header != null && !header.isBlank() ? header : null;
+    }
+
+    private RuntimeException translateTmsError(RestClientResponseException ex, boolean callerAuthorizationSent) {
         HttpStatusCode status = ex.getStatusCode();
+
+        if (!callerAuthorizationSent && (status.value() == 401 || status.value() == 403)) {
+            return new IllegalStateException("TMS refused the request (status " + status.value() + "): no "
+                    + "Authorization was available - background TMS access requires service-to-service "
+                    + "authentication, which is not configured.");
+        }
 
         if (status.value() == 400) {
             return new IllegalArgumentException("TMS rejected the request: " + ex.getResponseBodyAsString());
@@ -95,7 +155,7 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
             return new IllegalStateException("TMS authorization failed: insufficient permissions to read timesheets.");
         }
         if (status.is5xxServerError()) {
-            return new IllegalStateException("TMS service failed with status " + status.value() + ".");
+            return new TmsServiceUnavailableException("TMS service failed with status " + status.value() + ".");
         }
         return new IllegalStateException("Unexpected TMS response: " + status.value());
     }

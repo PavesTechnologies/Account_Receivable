@@ -8,10 +8,12 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.HashMap;
 import java.util.Map;
 
+@lombok.extern.slf4j.Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -146,14 +148,34 @@ public class GlobalExceptionHandler {
                         .build());
     }
 
+    /** An unmapped path is a 404, not a server error. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Object>> handleNoResource(
+            NoResourceFoundException ex) {
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.builder()
+                        .success(false)
+                        .message("Resource not found.")
+                        .data(null)
+                        .build());
+    }
+
+    /**
+     * Unexpected failures: logged in full, answered generically - their
+     * message may carry SQL, constraint or connection details that must not
+     * reach a client. Expected failures have their own handlers above.
+     */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Object>> handleException(
             Exception ex) {
 
+        log.error("Unhandled exception: {}", ex.getClass().getName(), ex);
+
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.builder()
                         .success(false)
-                        .message(ex.getMessage())
+                        .message("An unexpected error occurred. Please try again or contact support.")
                         .data(null)
                         .build());
     }

@@ -6,6 +6,8 @@ import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnaps
 import com.AccountReceivableManagement.dto.billing_data_acquisition.TimesheetDto;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingTMRateCard;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingRatePeriod;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import com.AccountReceivableManagement.integration.billing_data_acquisition.TimesheetIntegration;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingTMRateCardRepository;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,12 @@ import java.util.UUID;
 /**
  * Acquires approved timesheets from TMS for Time & Material billing
  * and retrieves active hourly rates from billing_tm_rate_card for the configuration.
+ * <p>
+ * Timesheets are billed in hours, so only rate cards priced per hour are
+ * used: a DAILY/WEEKLY/MONTHLY card's rate would otherwise be multiplied by
+ * hours. No conversion is made (the model has no hours-per-day rule) - a
+ * role with only non-hourly cards gets no rate and the acquisition is
+ * rejected by {@code BillingAcquisitionValidator}.
  */
 @Component
 @RequiredArgsConstructor
@@ -46,28 +54,15 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
                 ? request.getBillingConfigurationId()
                 : (configuration != null ? configuration.getBillingConfigurationId() : null);
 
+        boolean roleBased = configuration != null
+                && configuration.getPricingModel() == PricingModel.ROLE_BASED;
+
         for (TimesheetDto timesheet : timesheets) {
             LocalDate workDate = timesheet.getWorkDate() != null ? timesheet.getWorkDate() : request.getBillingPeriodStart();
-            BigDecimal hourlyRate = null;
 
-            if (configId != null) {
-                List<BillingTMRateCard> activeRates = billingTMRateCardRepository
-                        .findActiveRatesByConfigurationAndDate(configId, workDate);
-
-                if (activeRates != null && !activeRates.isEmpty()) {
-                    hourlyRate = activeRates.get(0).getRate();
-                } else {
-                    List<BillingTMRateCard> allActive = billingTMRateCardRepository
-                            .findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(configId);
-                    if (allActive != null && !allActive.isEmpty()) {
-                        hourlyRate = allActive.get(0).getRate();
-                    }
-                }
-            }
-
-            if (hourlyRate == null && configuration != null && configuration.getHourlyRate() != null) {
-                hourlyRate = configuration.getHourlyRate();
-            }
+            BigDecimal hourlyRate = roleBased
+                    ? resolveRoleBasedRate(configId, timesheet.getRole(), workDate)
+                    : resolveStandardRate(configuration, configId, workDate);
 
             timesheet.setHourlyRate(hourlyRate);
         }
@@ -76,5 +71,75 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
                 .billingConfigurationId(configId)
                 .timesheets(timesheets)
                 .build();
+    }
+
+    /**
+     * ROLE_BASED: the rate card row for the timesheet's role that is in
+     * effect on its work date, so a rate card activated later never reprices
+     * work already done. No fallback to another role, an out-of-date rate or
+     * the configuration's hourly rate - an unmatched role leaves the rate
+     * unset and {@code BillingAcquisitionValidator} rejects the acquisition.
+     */
+    private BigDecimal resolveRoleBasedRate(UUID configId, String role, LocalDate workDate) {
+        if (configId == null || role == null || role.isBlank()) {
+            return null;
+        }
+        List<BillingTMRateCard> effectiveRates =
+                billingTMRateCardRepository.findActiveRatesByConfigurationAndDate(configId, workDate);
+        if (effectiveRates == null) {
+            return null;
+        }
+        String normalizedRole = role.trim();
+        return effectiveRates.stream()
+                .filter(TimeAndMaterialBillingStrategy::isHourly)
+                .filter(rateCard -> rateCard.getRoleName() != null
+                        && rateCard.getRoleName().trim().equalsIgnoreCase(normalizedRole))
+                .map(BillingTMRateCard::getRate)
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * STANDARD (and configurations without a pricing model): unchanged
+     * resolution order - rate card effective on the work date, then any
+     * active rate card, then the configuration's hourly rate.
+     */
+    private BigDecimal resolveStandardRate(BillingConfigurationResponseDto configuration, UUID configId,
+            LocalDate workDate) {
+        BigDecimal hourlyRate = null;
+
+        if (configId != null) {
+            List<BillingTMRateCard> activeRates = hourlyOnly(billingTMRateCardRepository
+                    .findActiveRatesByConfigurationAndDate(configId, workDate));
+
+            if (!activeRates.isEmpty()) {
+                hourlyRate = activeRates.get(0).getRate();
+            } else {
+                List<BillingTMRateCard> allActive = hourlyOnly(billingTMRateCardRepository
+                        .findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(configId));
+                if (!allActive.isEmpty()) {
+                    hourlyRate = allActive.get(0).getRate();
+                }
+            }
+        }
+
+        if (hourlyRate == null && configuration != null && configuration.getHourlyRate() != null) {
+            hourlyRate = configuration.getHourlyRate();
+        }
+
+        return hourlyRate;
+    }
+
+    /**
+     * A card priced per hour. The column is mandatory; an unset period (only
+     * possible for rows that bypassed it) is treated as hourly, as before.
+     */
+    private static boolean isHourly(BillingTMRateCard rateCard) {
+        return rateCard.getRatePeriod() == null || rateCard.getRatePeriod() == BillingRatePeriod.HOURLY;
+    }
+
+    private static List<BillingTMRateCard> hourlyOnly(List<BillingTMRateCard> rateCards) {
+        return rateCards == null ? List.of()
+                : rateCards.stream().filter(TimeAndMaterialBillingStrategy::isHourly).toList();
     }
 }

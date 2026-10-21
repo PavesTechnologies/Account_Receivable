@@ -158,14 +158,7 @@ public class BillingAcquisitionServiceImpl implements BillingAcquisitionService 
                     "Billing Configuration must be approved before data acquisition.");
         }
 
-        // 3. Billing Configuration must currently be active
-        if (config.getBillingStatus() != BillingConfigurationStatus.ACTIVE) {
-            throw new ValidationException(
-                    "Billing Configuration is not active for project ID: "
-                            + config.getProject().getPmsProjectId());
-        }
-
-        // 4. Validate billing period
+        // 3. Validate billing period
         if (startDate == null) {
             throw new ValidationException(
                     "Billing Period Start Date is required.");
@@ -180,6 +173,9 @@ public class BillingAcquisitionServiceImpl implements BillingAcquisitionService 
             throw new ValidationException(
                     "Billing Period Start Date cannot be after Billing Period End Date.");
         }
+
+        // 4. Billing Configuration must be billable for this period
+        validateConfigurationBillableForPeriod(config, startDate, endDate);
 
         // 5. Validate snapshot
         if (snapshotId == null) {
@@ -239,6 +235,69 @@ public class BillingAcquisitionServiceImpl implements BillingAcquisitionService 
 
         // 9. Return response
         return toResponse(saved);
+    }
+
+    /**
+     * An ACTIVE configuration is billable as before. An EXPIRED one - which
+     * {@code BillingConfigurationStatusScheduler} sets the day after its
+     * billing range ends - stays billable only for periods that lie entirely
+     * inside that range, so the final period that ended on the range's last
+     * day can still be acquired while nothing after expiry is billed.
+     * INACTIVE (not yet started, or manually deactivated) is never billable.
+     */
+    private void validateConfigurationBillableForPeriod(
+            BillingConfiguration config,
+            LocalDate startDate,
+            LocalDate endDate
+    ) {
+        if (config.getBillingStatus() == BillingConfigurationStatus.ACTIVE) {
+            return;
+        }
+
+        if (config.getBillingStatus() == BillingConfigurationStatus.EXPIRED
+                && !Boolean.TRUE.equals(config.getManuallyDeactivated())) {
+
+            LocalDate billingRangeEnd = resolveBillingRangeEnd(config);
+
+            boolean startsInsideRange = config.getEffectiveFrom() == null
+                    || !startDate.isBefore(config.getEffectiveFrom());
+            boolean endsInsideRange = billingRangeEnd != null
+                    && !endDate.isAfter(billingRangeEnd);
+
+            if (startsInsideRange && endsInsideRange) {
+                return;
+            }
+
+            throw new ValidationException(
+                    "Billing Configuration has expired for project ID: "
+                            + config.getProject().getPmsProjectId()
+                            + ". Only billing periods within its billing range"
+                            + (billingRangeEnd != null ? " (ending " + billingRangeEnd + ")" : "")
+                            + " can still be acquired.");
+        }
+
+        throw new ValidationException(
+                "Billing Configuration is not active for project ID: "
+                        + config.getProject().getPmsProjectId());
+    }
+
+    /**
+     * The last billable day - the earlier of the configuration's own
+     * Effective To and the project's end date, the same two dates
+     * {@code BillingConfigurationStatusScheduler} expires the
+     * configuration on.
+     */
+    private LocalDate resolveBillingRangeEnd(BillingConfiguration config) {
+        LocalDate effectiveTo = config.getEffectiveTo();
+        LocalDate projectEnd = config.getProject() != null ? config.getProject().getEndDate() : null;
+
+        if (effectiveTo == null) {
+            return projectEnd;
+        }
+        if (projectEnd == null) {
+            return effectiveTo;
+        }
+        return effectiveTo.isBefore(projectEnd) ? effectiveTo : projectEnd;
     }
 
     private Optional<BillingAcquisition> findAcquisition(UUID billingConfigurationId, LocalDate startDate,

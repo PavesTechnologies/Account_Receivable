@@ -162,4 +162,16 @@ public class InvoiceResponseDto {
      * stored on the invoice itself.
      */
     private LocalDateTime lastCorrectedAt;
+
+    /**
+     * {@code true} when the invoice's finalized PDF is stored - exactly when
+     * {@code status == READY_TO_SEND}. Derived from the status, never stored.
+     */
+    private boolean documentAvailable;
+
+    /**
+     * Relative API path of the finalized PDF ({@code GET}), present only
+     * when {@link #documentAvailable}. Never a storage location.
+     */
+    private String documentUrl;
 }

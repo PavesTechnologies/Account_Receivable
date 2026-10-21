@@ -13,9 +13,11 @@ import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository
 import com.AccountReceivableManagement.service_Imple.email.EmailDeliveryException;
 import com.AccountReceivableManagement.service_interface.email.EmailService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDeliveryService;
-import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDocumentService;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceDocument;
+import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDocumentRepository;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.receivable.ReceivableService;
+import io.micrometer.core.instrument.Metrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,8 +34,10 @@ import java.util.UUID;
 
 /**
  * Orchestrates one "Send to Client" attempt:
- * Approved Invoice -> validate recipient -> generate PDF -> create PENDING
- * delivery row -> send through Gmail SMTP -> persist SENT/FAILED.
+ * READY_TO_SEND Invoice -> validate recipient -> load its finalized PDF ->
+ * create PENDING delivery row -> send through Gmail SMTP -> persist
+ * SENT/FAILED. The PDF attached is the one stored when the invoice was
+ * finalized - exactly what was reviewed - never re-rendered here.
  * Never marks {@link Invoice#getStatus()} as sent - delivery state lives
  * entirely on {@link InvoiceDelivery}, a separate audit trail, matching
  * the same standalone-history convention already used by
@@ -53,7 +57,7 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
 
     private final InvoiceService invoiceService;
 
-    private final InvoiceDocumentService invoiceDocumentService;
+    private final InvoiceDocumentRepository invoiceDocumentRepository;
 
     private final EmailService emailService;
 
@@ -85,16 +89,15 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
 
         InvoiceResponseDto invoiceResponse = invoiceService.getInvoiceById(invoiceId);
 
-        byte[] pdfBytes;
-        try {
-            pdfBytes = invoiceDocumentService.generateInvoicePdf(invoiceResponse);
-        } catch (PdfGenerationException ex) {
-            return markFailed(delivery, "PDF generation failed: " + ex.getMessage());
+        InvoiceDocument document = invoiceDocumentRepository.findByInvoiceId(invoiceId).orElse(null);
+        if (document == null || document.getContent() == null || document.getContent().length == 0) {
+            return markFailed(delivery, "The finalized invoice document could not be found.");
         }
+        byte[] pdfBytes = document.getContent();
 
         String subject = buildSubject(invoiceResponse);
         String body = buildBody(invoiceResponse);
-        String attachmentFilename = "invoice-" + invoiceResponse.getInvoiceNumber() + ".pdf";
+        String attachmentFilename = document.getFileName();
 
         String messageId;
         try {
@@ -185,9 +188,21 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
             String recipientEmail
     ) {
 
-        if (invoice.getStatus() != InvoiceStatus.APPROVED) {
+        if (invoice.getStatus() == InvoiceStatus.APPROVED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The invoice document has not been generated yet; generate it before sending the invoice."
+            );
+        }
+
+        if (invoice.getStatus() != InvoiceStatus.READY_TO_SEND) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Invoice must be approved before it can be sent to the client."
+            );
+        }
+
+        if (!invoiceDocumentRepository.existsByInvoiceId(invoice.getInvoiceId())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The invoice document has not been generated yet; generate it before sending the invoice."
             );
         }
 
@@ -223,6 +238,7 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
 
         InvoiceDelivery saved = invoiceDeliveryRepository.save(delivery);
 
+        Metrics.counter("ar.invoice.delivery.failures").increment();
         log.warn("Invoice delivery {} failed: {}", delivery.getInvoiceDeliveryId(), reason);
 
         Invoice invoice = invoiceRepository.findById(delivery.getInvoiceId()).orElse(null);

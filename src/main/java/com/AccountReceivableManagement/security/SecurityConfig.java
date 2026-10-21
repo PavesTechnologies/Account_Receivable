@@ -26,6 +26,8 @@ public class SecurityConfig {
     private CustomAuthenticationEntryPoint customAuthenticationEntryPoint;
     @Autowired
     private CorsConfigurationSource corsConfigurationSource;
+    @Autowired
+    private OperationsReportAccess operationsReportAccess;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -36,10 +38,17 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(
                                 "/public/**",
+                                // Load balancer / Kubernetes probes: status only, never details.
+                                "/health",
+                                "/actuator/health",
+                                "/actuator/health/liveness",
+                                "/actuator/health/readiness",
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
                                 "/swagger-ui.html"
                         ).permitAll()
+                        // Operations reports carry client and financial data: configured authorities only.
+                        .requestMatchers("/api/v1/operations/**").access(operationsReportAccess)
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().authenticated()
                 )

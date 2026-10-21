@@ -52,4 +52,12 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
      */
     Optional<BillingSnapshot> findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
             UUID billingConfigurationId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
+
+    /**
+     * Whether any snapshot of the project overlaps {@code periodStart}..
+     * {@code periodEnd} - i.e. the period's timesheets are already being, or
+     * have been, billed (manually or through another period).
+     */
+    boolean existsByProjectIdAndBillingPeriodStartLessThanEqualAndBillingPeriodEndGreaterThanEqual(
+            Long projectId, LocalDate periodEnd, LocalDate periodStart);
 }

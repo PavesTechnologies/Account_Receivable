@@ -182,13 +182,15 @@ public class ReceivableServiceImpl implements ReceivableService {
     }
 
     /**
-     * "Dispatched" in this system means the invoice is APPROVED (a terminal,
-     * immutable status) and at least one "Send to Client" attempt reached
-     * SENT - {@code Invoice.status} itself never records delivery.
+     * "Dispatched" in this system means the invoice is approved -
+     * READY_TO_SEND, or APPROVED for an invoice sent before documents were
+     * finalized - and at least one "Send to Client" attempt reached SENT -
+     * {@code Invoice.status} itself never records delivery.
      */
     private void validateInvoiceDispatched(Invoice invoice) {
 
-        if (invoice.getStatus() != InvoiceStatus.APPROVED) {
+        if (invoice.getStatus() != InvoiceStatus.READY_TO_SEND
+                && invoice.getStatus() != InvoiceStatus.APPROVED) {
             throw new GlobalExceptionHandler.ValidationException(
                     "A receivable can only be created for an approved invoice that has been sent to the client."
             );

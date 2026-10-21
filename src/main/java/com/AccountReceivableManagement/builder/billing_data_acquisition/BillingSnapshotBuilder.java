@@ -6,6 +6,8 @@ import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSn
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingItemType;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -34,9 +36,11 @@ public class BillingSnapshotBuilder {
                     .itemType(BillingItemType.TIME_ENTRY)
                     .itemName(timesheet.getResourceName())
                     .sourceReferenceId(timesheet.getSourceReferenceId())
+                    // Claims the TMS timesheet (uk_billing_snapshot_item_billed_source).
+                    .billedSourceReferenceId(timesheet.getSourceReferenceId())
                     .quantity(timesheet.getHours())
                     .rate(timesheet.getHourlyRate())
-                    .amount(timesheet.getHours().multiply(timesheet.getHourlyRate()))
+                    .amount(lineAmount(timesheet))
                     .workDate(timesheet.getWorkDate())
                     .approvalStatus(timesheet.getApprovalStatus())
                     .role(timesheet.getRole())
@@ -44,6 +48,17 @@ public class BillingSnapshotBuilder {
                     .build());
         }
         return items;
+    }
+
+    /**
+     * The billed amount of one timesheet line: hours x rate, rounded once to
+     * 2 decimals HALF_UP (the tax engine's money convention). The snapshot
+     * subtotal is the sum of these rounded lines, so the invoice's lines
+     * always add up to its subtotal - rounding the unrounded total instead
+     * could differ from the lines by a paisa per line.
+     */
+    public static BigDecimal lineAmount(TimesheetDto timesheet) {
+        return timesheet.getHours().multiply(timesheet.getHourlyRate()).setScale(2, RoundingMode.HALF_UP);
     }
 
     public BillingSnapshot build(BillingSnapshotBuilderContext context) {

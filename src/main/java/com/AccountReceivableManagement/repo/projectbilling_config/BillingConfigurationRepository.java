@@ -48,5 +48,21 @@ public interface BillingConfigurationRepository extends JpaRepository<BillingCon
     List<BillingConfiguration>
     findByProjectPmsProjectId(Long projectId);
 
-
+    /**
+     * Approved, AUTOMATIC, not manually deactivated configurations whose
+     * billing type is one of {@code lowerCaseBillingTypeNames} - the automatic
+     * billing scheduler's Time &amp; Material configurations.
+     */
+    @Query("SELECT c.billingConfigurationId FROM BillingConfiguration c "
+            + "WHERE c.approvalStatus = :approvalStatus "
+            + "AND c.invoiceGenerationType = :invoiceGenerationType "
+            + "AND c.manuallyDeactivated = false "
+            + "AND LOWER(TRIM(c.billingType.billingTypeName)) IN :lowerCaseBillingTypeNames "
+            + "ORDER BY c.billingConfigurationId")
+    List<UUID> findAutomaticConfigurationIdsByBillingTypeNames(
+            @org.springframework.data.repository.query.Param("approvalStatus") ApprovalStatus approvalStatus,
+            @org.springframework.data.repository.query.Param("invoiceGenerationType")
+            com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType invoiceGenerationType,
+            @org.springframework.data.repository.query.Param("lowerCaseBillingTypeNames")
+            java.util.Collection<String> lowerCaseBillingTypeNames);
 }

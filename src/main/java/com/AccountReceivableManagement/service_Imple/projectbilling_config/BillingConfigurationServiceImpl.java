@@ -63,6 +63,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingConfigurationChangeTrackingService changeTrackingService;
     private final RecordActionLockService recordActionLockService;
     private final com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationSnapshotRepository snapshotRepository;
+    private final com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
 
     // =========================================================
     // CREATE BILLING CONFIGURATION
@@ -1492,6 +1493,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         if (billingSnapshotRepository.existsByBillingConfigurationId(billingConfigurationId)) {
             throw new GlobalExceptionHandler.ValidationException(
                     "This billing configuration cannot be deleted because it is referenced by historical Billing Snapshot data.");
+        }
+
+        // Same rule for automatic billing history (fk from automatic_billing_run).
+        if (automaticBillingRunRepository.existsByBillingConfiguration_BillingConfigurationId(billingConfigurationId)) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "This billing configuration cannot be deleted because it is referenced by automatic billing history.");
         }
 
         // Delete child configurations first

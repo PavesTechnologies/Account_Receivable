@@ -15,8 +15,12 @@ import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSn
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshotItem;
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceApprovalHistory;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceDocument;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceItem;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceTaxComponent;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingMilestonePlan;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingPaymentEntry;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity.projectbilling_config.PaymentTermsMaster;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
@@ -27,11 +31,19 @@ import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceApprovalAction;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.PaymentStructure;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
+import com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticBillingRunStatus;
+import com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceApprovalHistoryRepository;
+import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDocumentRepository;
+import com.AccountReceivableManagement.service_interface.automatic_billing.AutomaticBillingRunService;
+import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDocumentService;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingMilestonePlanRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingPaymentEntryRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
@@ -41,17 +53,22 @@ import com.AccountReceivableManagement.service_interface.invoice_generation.Invo
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
 import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -65,6 +82,7 @@ import java.util.stream.Collectors;
  * tax calculation's {@link TaxCalculationComponent}s - no TMS re-query, no
  * new {@link BillingSnapshot}, no call back into the tax engine.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor(onConstructor_ = @Autowired)
 @Transactional
@@ -72,6 +90,8 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     private static final DateTimeFormatter INVOICE_NUMBER_FORMATTER =
             DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+
+    private static final int INVOICE_NUMBER_SUFFIX_LENGTH = 6;
 
     /**
      * No authenticated-user context exists anywhere in this backend yet
@@ -131,6 +151,21 @@ public class InvoiceServiceImpl implements InvoiceService {
 
         private final RecordActionLockService recordActionLockService;
 
+        /** Milestone Plan structure/remarks for occurrence-invoice line descriptions. */
+        private final BillingMilestonePlanRepository billingMilestonePlanRepository;
+
+        private final BillingPaymentEntryRepository billingPaymentEntryRepository;
+
+        /** Existing PDF renderer - used to finalize an approved invoice's document. */
+        private final InvoiceDocumentService invoiceDocumentService;
+
+        private final InvoiceDocumentRepository invoiceDocumentRepository;
+
+        /** Automatic billing runs that handed an invoice over for approval. */
+        private final AutomaticBillingRunRepository automaticBillingRunRepository;
+
+        private final AutomaticBillingRunService automaticBillingRunService;
+
         public InvoiceServiceImpl(
                         InvoiceRepository invoiceRepository,
                         InvoiceApprovalHistoryRepository invoiceApprovalHistoryRepository,
@@ -149,6 +184,12 @@ public class InvoiceServiceImpl implements InvoiceService {
                 this.billingScheduleRepository = null;
                 this.companyProfileService = null;
                 this.recordActionLockService = recordActionLockService;
+                this.billingMilestonePlanRepository = null;
+                this.billingPaymentEntryRepository = null;
+                this.invoiceDocumentService = null;
+                this.invoiceDocumentRepository = null;
+                this.automaticBillingRunRepository = null;
+                this.automaticBillingRunService = null;
         }
 
     @Override
@@ -424,6 +465,37 @@ public class InvoiceServiceImpl implements InvoiceService {
         return mapToResponse(saved);
     }
 
+    /**
+     * Idempotent form of {@link #generateInvoice(UUID)} for callers that may
+     * repeat the request (retries after a timeout or restart): returns the
+     * snapshot's existing invoice, whatever its approval status, instead of
+     * failing; otherwise generates it through {@link #generateInvoice(UUID)}.
+     * A concurrent generation that commits first still surfaces as
+     * {@code DuplicateResourceException} - this transaction is then
+     * rollback-only, so the caller re-invokes and receives the winner's invoice.
+     */
+    @Override
+    public InvoiceResponseDto findOrGenerateInvoice(UUID billingSnapshotId) {
+        Optional<Invoice> existing = invoiceRepository.findByBillingSnapshotId(billingSnapshotId);
+        if (existing.isPresent()) {
+            return mapToResponse(existing.get());
+        }
+        return generateInvoice(billingSnapshotId);
+    }
+
+    /**
+     * Idempotent form of {@link #generateInvoiceForSchedule(UUID)} - see
+     * {@link #findOrGenerateInvoice(UUID)}.
+     */
+    @Override
+    public InvoiceResponseDto findOrGenerateInvoiceForSchedule(UUID billingScheduleId) {
+        Optional<Invoice> existing = invoiceRepository.findByBillingScheduleId(billingScheduleId);
+        if (existing.isPresent()) {
+            return mapToResponse(existing.get());
+        }
+        return generateInvoiceForSchedule(billingScheduleId);
+    }
+
     @Override
     public InvoiceResponseDto generateInvoiceForSchedule(UUID billingScheduleId) {
 
@@ -572,17 +644,16 @@ public class InvoiceServiceImpl implements InvoiceService {
 
         Invoice invoice = invoiceBuilder.build();
 
-        // Determine item type based on billing type
-        BillingItemType itemType = isTimeMaterial ? BillingItemType.TIME_MATERIAL : BillingItemType.FIXED_PRICE;
-        String itemName = isTimeMaterial 
-                ? "Time & Material - Period " + schedule.getPeriodNumber()
-                : configuration.getBillingTypeName() + " - Period " + schedule.getPeriodNumber();
+        ScheduleInvoiceLine line = isTimeMaterial
+                ? new ScheduleInvoiceLine(BillingItemType.TIME_MATERIAL,
+                        "Time & Material - Period " + schedule.getPeriodNumber())
+                : describeScheduleInvoiceLine(schedule, configuration);
 
         invoice.getItems().add(
                 InvoiceItem.builder()
                         .invoice(invoice)
-                        .itemType(itemType)
-                        .itemName(itemName)
+                        .itemType(line.itemType())
+                        .itemName(line.itemName())
                         .sourceReferenceId(schedule.getBillingScheduleId().toString())
                         .quantity(BigDecimal.ONE)
                         .rate(billingAmount)
@@ -607,6 +678,11 @@ public class InvoiceServiceImpl implements InvoiceService {
         Invoice saved;
         try {
             saved = invoiceRepository.save(invoice);
+
+            // Flushed so uk_invoice_billing_schedule / uk_invoice_billing_snapshot
+            // are evaluated here and reported as a duplicate, instead of failing
+            // untranslated at commit - same as generateInvoice(UUID).
+            invoiceRepository.flush();
         } catch (DataIntegrityViolationException ex) {
             throw new GlobalExceptionHandler.DuplicateResourceException(
                     "An invoice has already been generated for this billing occurrence."
@@ -619,6 +695,168 @@ public class InvoiceServiceImpl implements InvoiceService {
         billingScheduleRepository.save(schedule);
 
         return mapToResponse(saved);
+    }
+
+    private static final String LINE_SEPARATOR = " — ";
+
+    private static final DateTimeFormatter LINE_MONTH_FORMATTER =
+            DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH);
+
+    private static final DateTimeFormatter LINE_DATE_FORMATTER =
+            DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH);
+
+    /** Matches {@code InvoiceItem.itemName}'s {@code length = 255}. */
+    private static final int LINE_ITEM_NAME_MAX_LENGTH = 255;
+
+    private record ScheduleInvoiceLine(BillingItemType itemType, String itemName) {
+    }
+
+    /**
+     * Item type and description of the single line an occurrence invoice
+     * carries, from the billing type that produced the occurrence:
+     * Fixed Price -> FIXED_PRICE, Milestone Plan -> MILESTONE, Recurring /
+     * Subscription -> RETAINER. Any other type keeps the previous generic
+     * FIXED_PRICE "{billing type} - Period n" line. Descriptive only - the
+     * quantity, rate and amount are unchanged.
+     */
+    private ScheduleInvoiceLine describeScheduleInvoiceLine(
+            BillingSchedule schedule,
+            BillingConfigurationResponseDto configuration
+    ) {
+        String billingTypeName = configuration.getBillingTypeName() != null
+                ? configuration.getBillingTypeName().trim()
+                : "";
+
+        if (schedule.getRecurringConfiguration() != null
+                || billingTypeName.equalsIgnoreCase("Recurring")
+                || billingTypeName.equalsIgnoreCase("Subscription")) {
+            return new ScheduleInvoiceLine(BillingItemType.RETAINER,
+                    describeRecurringLine(schedule, configuration));
+        }
+
+        if (billingTypeName.equalsIgnoreCase("Milestone Plan")) {
+            return new ScheduleInvoiceLine(BillingItemType.MILESTONE,
+                    describeMilestoneLine(schedule));
+        }
+
+        if (billingTypeName.equalsIgnoreCase("Fixed Price")) {
+            return new ScheduleInvoiceLine(BillingItemType.FIXED_PRICE,
+                    describeFixedPriceLine(schedule, configuration));
+        }
+
+        String typeLabel = billingTypeName.isEmpty() ? "Billing" : billingTypeName;
+        return new ScheduleInvoiceLine(BillingItemType.FIXED_PRICE,
+                truncateLineName(typeLabel + " - Period " + schedule.getPeriodNumber()));
+    }
+
+    /** "Fixed Price — Website Redesign", plus " — Period n" when billed over several periods. */
+    private String describeFixedPriceLine(
+            BillingSchedule schedule,
+            BillingConfigurationResponseDto configuration
+    ) {
+        String subject = firstNonBlank(configuration.getProjectName(), configuration.getProductName());
+
+        StringBuilder name = new StringBuilder("Fixed Price");
+        if (subject != null) {
+            name.append(LINE_SEPARATOR).append(subject);
+        }
+        if (!isOneTimeFrequency(configuration.getBillingFrequencyName())) {
+            name.append(LINE_SEPARATOR).append("Period ").append(schedule.getPeriodNumber());
+        }
+        return truncateLineName(name.toString());
+    }
+
+    /**
+     * INSTALLMENTS: "Installment 2 of 4"; FULL_PAYMENT: "Milestone 1 — Payment".
+     * Either uses the payment entry's remarks when present. Occurrences map
+     * to their payment entry by sequence (= period number), which is how
+     * BillingOccurrenceServiceImpl.generateOccurrencesForMilestonePlan
+     * numbers them.
+     */
+    private String describeMilestoneLine(BillingSchedule schedule) {
+        Integer sequence = schedule.getPeriodNumber();
+
+        BillingMilestonePlan plan = billingMilestonePlanRepository
+                .findByBillingConfigurationAndIsActiveTrue(schedule.getBillingConfiguration())
+                .orElse(null);
+
+        List<BillingPaymentEntry> entries = plan != null
+                ? billingPaymentEntryRepository.findByMilestonePlanAndIsActiveTrueOrderBySequenceAsc(plan)
+                : List.of();
+
+        BillingPaymentEntry entry = entries.stream()
+                .filter(candidate -> sequence != null && sequence.equals(candidate.getSequence()))
+                .findFirst()
+                .orElse(null);
+
+        String remarks = entry != null ? firstNonBlank(entry.getRemarks()) : null;
+
+        String name;
+        if (plan != null && plan.getPaymentStructure() == PaymentStructure.INSTALLMENTS) {
+            name = "Installment " + sequence + " of " + entries.size();
+            if (remarks != null) {
+                name += LINE_SEPARATOR + remarks;
+            }
+        } else {
+            name = "Milestone " + sequence + LINE_SEPARATOR
+                    + (remarks != null
+                            ? remarks
+                            : firstNonBlank(plan != null ? plan.getRemarks() : null, "Payment"));
+        }
+        return truncateLineName(name);
+    }
+
+    /** "Monthly Retainer — October 2026" for a calendar-month period, otherwise the period's dates. */
+    private String describeRecurringLine(
+            BillingSchedule schedule,
+            BillingConfigurationResponseDto configuration
+    ) {
+        BillingRecurringConfiguration recurring = schedule.getRecurringConfiguration();
+
+        String serviceName = firstNonBlank(
+                recurring != null ? recurring.getRecurringName() : null,
+                configuration.getProductName(),
+                "Recurring Service");
+
+        return truncateLineName(serviceName + LINE_SEPARATOR
+                + describePeriod(schedule.getPeriodStartDate(), schedule.getPeriodEndDate()));
+    }
+
+    /**
+     * Labels the occurrence's own period - it never decides one. A period
+     * that is exactly one calendar month reads "October 2026"; any other
+     * (weekly, mid-month, quarterly, partial) reads "15 Oct 2026 – 14 Nov 2026".
+     */
+    private String describePeriod(LocalDate start, LocalDate end) {
+        if (start == null || end == null) {
+            return "Period";
+        }
+        boolean wholeCalendarMonth = start.getDayOfMonth() == 1
+                && end.equals(start.withDayOfMonth(start.lengthOfMonth()));
+        if (wholeCalendarMonth) {
+            return start.format(LINE_MONTH_FORMATTER);
+        }
+        return start.format(LINE_DATE_FORMATTER) + " – " + end.format(LINE_DATE_FORMATTER);
+    }
+
+    private boolean isOneTimeFrequency(String billingFrequencyName) {
+        return billingFrequencyName != null
+                && billingFrequencyName.trim().equalsIgnoreCase("One-Time");
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private static String truncateLineName(String name) {
+        return name.length() <= LINE_ITEM_NAME_MAX_LENGTH
+                ? name
+                : name.substring(0, LINE_ITEM_NAME_MAX_LENGTH);
     }
 
     @Override
@@ -921,7 +1159,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
 
         long readyCount = rows.size();
-        long generated = 0, pending = 0, approved = 0, rejected = 0;
+        long generated = 0, pending = 0, approved = 0, rejected = 0, readyToSend = 0;
         BigDecimal invoicedAmount = BigDecimal.ZERO;
 
         for (Invoice invoice : invoices) {
@@ -935,6 +1173,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 case PENDING_APPROVAL -> pending++;
                 case APPROVED -> approved++;
                 case REJECTED -> rejected++;
+                case READY_TO_SEND -> readyToSend++;
             }
 
             if (invoice.getStatus() != InvoiceStatus.REJECTED
@@ -952,6 +1191,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 .pendingApprovalCount(pending)
                                 .approvedCount(approved)
                                 .rejectedCount(rejected)
+                                .readyToSendCount(readyToSend)
                                 .invoicedCount(invoices.size())
                                 .totalInvoicedAmount(invoicedAmount)
                                 .build())
@@ -1562,7 +1802,200 @@ public class InvoiceServiceImpl implements InvoiceService {
                 null
         );
 
+        completeAutomaticBillingRunsAfterCommit(saved.getInvoiceId());
+
         return mapToResponse(saved);
+    }
+
+    /**
+     * An automatic billing run stops at PENDING_APPROVAL once it has handed
+     * its invoice over; the manual approval ends it (PENDING_APPROVAL ->
+     * COMPLETED). Done only after the approval has committed, through the
+     * run service's own transaction, and never fails the approval: the run
+     * is execution tracking, the invoice status is the business state.
+     */
+    private void completeAutomaticBillingRunsAfterCommit(UUID invoiceId) {
+        if (automaticBillingRunRepository == null || automaticBillingRunService == null
+                || !TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    automaticBillingRunRepository.findAllByInvoiceId(invoiceId).stream()
+                            .filter(run -> run.getStatus() == AutomaticBillingRunStatus.PENDING_APPROVAL)
+                            .forEach(run -> automaticBillingRunService.completeAfterApproval(
+                                    run.getAutomaticBillingRunId()));
+                } catch (RuntimeException ex) {
+                    log.error("Invoice {} was approved but its automatic billing run could not be marked "
+                            + "COMPLETED.", invoiceId, ex);
+                }
+            }
+        });
+    }
+
+    private static final String INVOICE_DOCUMENT_CONTENT_TYPE = "application/pdf";
+
+    /** One cent per line: line amounts are stored rounded, the subtotal from the unrounded total. */
+    private static final BigDecimal LINE_ROUNDING_TOLERANCE_PER_ITEM = new BigDecimal("0.01");
+
+    @Override
+    public InvoiceResponseDto finalizeInvoiceDocument(UUID invoiceId) {
+
+        // Serializes concurrent approve/finalize requests: the second sees READY_TO_SEND.
+        Invoice invoice =
+                invoiceRepository.findByIdForUpdate(invoiceId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "Invoice could not be found."
+                                ));
+
+        if (invoice.getStatus() == InvoiceStatus.READY_TO_SEND
+                && invoiceDocumentRepository.existsByInvoiceId(invoiceId)) {
+            return mapToResponse(invoice);
+        }
+
+        if (invoice.getStatus() != InvoiceStatus.APPROVED
+                && invoice.getStatus() != InvoiceStatus.READY_TO_SEND) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Only an approved invoice can have its document generated (current status "
+                            + invoice.getStatus() + ")."
+            );
+        }
+
+        validateInvoiceReadyForDocument(invoice);
+
+        InvoiceResponseDto content = mapToResponse(invoice);
+
+        // Renders from the persisted invoice only; throws PdfGenerationException on failure.
+        byte[] pdf = invoiceDocumentService.generateInvoicePdf(content);
+        if (pdf == null || pdf.length == 0) {
+            throw new PdfGenerationException("The invoice document was empty.", null);
+        }
+
+        InvoiceDocument document = invoiceDocumentRepository.findByInvoiceId(invoiceId)
+                .orElseGet(() -> InvoiceDocument.builder().invoiceId(invoiceId).build());
+        document.setFileName("invoice-" + invoice.getInvoiceNumber() + ".pdf");
+        document.setContentType(INVOICE_DOCUMENT_CONTENT_TYPE);
+        document.setContent(pdf);
+        document.setSizeBytes((long) pdf.length);
+        document.setChecksumSha256(sha256Hex(pdf));
+        document.setGeneratedAt(LocalDateTime.now());
+
+        try {
+            invoiceDocumentRepository.saveAndFlush(document);
+        } catch (DataIntegrityViolationException ex) {
+            // A concurrent finalization stored it first (uk_invoice_document_invoice).
+            throw new GlobalExceptionHandler.DuplicateResourceException(
+                    "The invoice document has already been generated."
+            );
+        }
+
+        invoice.setStatus(InvoiceStatus.READY_TO_SEND);
+        Invoice saved = invoiceRepository.save(invoice);
+
+        log.info("Invoice {} document finalized ({} bytes); invoice is READY_TO_SEND.",
+                invoice.getInvoiceNumber(), pdf.length);
+
+        return mapToResponse(saved);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public InvoiceDocument getInvoiceDocument(UUID invoiceId) {
+
+        Invoice invoice =
+                invoiceRepository.findById(invoiceId)
+                        .orElseThrow(() ->
+                                new GlobalExceptionHandler.ResourceNotFoundException(
+                                        "Invoice could not be found."
+                                ));
+
+        if (invoice.getStatus() != InvoiceStatus.READY_TO_SEND) {
+            throw new GlobalExceptionHandler.ResourceNotFoundException(
+                    "The invoice document has not been generated yet."
+            );
+        }
+
+        return invoiceDocumentRepository.findByInvoiceId(invoiceId)
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
+                        "The invoice document has not been generated yet."
+                ));
+    }
+
+    /**
+     * What the finalized document needs and must agree with: client,
+     * project, billing period, currency, line items and tax breakdown, with
+     * totals that reconcile. Every value is the persisted invoice's own.
+     */
+    private void validateInvoiceReadyForDocument(Invoice invoice) {
+
+        List<String> missing = new java.util.ArrayList<>();
+        if (isBlank(invoice.getInvoiceNumber())) missing.add("invoice number");
+        if (invoice.getInvoiceDate() == null) missing.add("invoice date");
+        if (isBlank(invoice.getClientName())) missing.add("client");
+        if (invoice.getProjectId() == null && isBlank(invoice.getProjectName())) missing.add("project");
+        if (invoice.getBillingPeriodStart() == null || invoice.getBillingPeriodEnd() == null) {
+            missing.add("billing period");
+        }
+        if (isBlank(invoice.getCurrencyCode())) missing.add("currency");
+        if (invoice.getItems() == null || invoice.getItems().isEmpty()) missing.add("line items");
+        if (invoice.getSubtotal() == null || invoice.getTotalTaxAmount() == null
+                || invoice.getGrandTotal() == null) {
+            missing.add("totals");
+        }
+        if (!missing.isEmpty()) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The invoice document cannot be generated because the invoice has no "
+                            + String.join(", ", missing) + "."
+            );
+        }
+
+        if (invoice.getSubtotal().add(invoice.getTotalTaxAmount()).compareTo(invoice.getGrandTotal()) != 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The invoice document cannot be generated because the grand total does not equal "
+                            + "the subtotal plus tax."
+            );
+        }
+
+        BigDecimal componentTax = invoice.getTaxComponents() == null ? BigDecimal.ZERO
+                : invoice.getTaxComponents().stream()
+                        .map(InvoiceTaxComponent::getTaxAmount)
+                        .filter(java.util.Objects::nonNull)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (componentTax.compareTo(invoice.getTotalTaxAmount()) != 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The invoice document cannot be generated because the tax breakdown does not add up "
+                            + "to the total tax."
+            );
+        }
+
+        BigDecimal lineTotal = invoice.getItems().stream()
+                .map(InvoiceItem::getAmount)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal tolerance = LINE_ROUNDING_TOLERANCE_PER_ITEM.multiply(
+                BigDecimal.valueOf(invoice.getItems().size()));
+        if (lineTotal.subtract(invoice.getSubtotal()).abs().compareTo(tolerance) > 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The invoice document cannot be generated because the line items total "
+                            + lineTotal + " does not match the subtotal " + invoice.getSubtotal() + "."
+            );
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static String sha256Hex(byte[] content) {
+        try {
+            return java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(content));
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 is not available.", ex);
+        }
     }
 
     @Override
@@ -1683,9 +2116,19 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
     }
 
-    private String generateInvoiceNumber() {
+    /**
+     * {@code INV-yyyyMMddHHmmss-XXXXXX} (25 chars, fits the 30-char
+     * invoice_number column). The timestamp alone has one-second resolution,
+     * so two invoices generated in the same second - an automatic billing
+     * batch, or two users - collided on uk_invoice_number and the second was
+     * rejected as a duplicate; the random suffix keeps them unique, as it does
+     * for billing snapshot numbers. Existing numbers are left as they are.
+     */
+    String generateInvoiceNumber() {
+        String suffix = UUID.randomUUID().toString().replace("-", "")
+                .substring(0, INVOICE_NUMBER_SUFFIX_LENGTH).toUpperCase(Locale.ROOT);
         return "INV-" + LocalDateTime.now()
-                .format(INVOICE_NUMBER_FORMATTER);
+                .format(INVOICE_NUMBER_FORMATTER) + "-" + suffix;
     }
 
     /**
@@ -1867,6 +2310,10 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .lastCorrectedAt(
                         correctionState.lastCorrectedAt()
                 )
+                .documentAvailable(invoice.getStatus() == InvoiceStatus.READY_TO_SEND)
+                .documentUrl(invoice.getStatus() == InvoiceStatus.READY_TO_SEND
+                        ? "/api/v1/invoices/" + invoice.getInvoiceId() + "/document"
+                        : null)
                 .build();
     }
 

@@ -1,6 +1,8 @@
 package com.AccountReceivableManagement.dto.billing_data_acquisition;
 
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -59,6 +61,15 @@ public class BillingConfigurationResponseDto {
     private String taxRegionCode;
 
     private BigDecimal hourlyRate;
+
+    /**
+     * STANDARD (one hourly rate) or ROLE_BASED (rate per role from the
+     * configuration's rate card). {@code null} on legacy configurations.
+     */
+    private PricingModel pricingModel;
+
+    /** MANUAL or AUTOMATIC invoice generation; {@code null} on legacy configurations. */
+    private InvoiceGenerationType invoiceGenerationType;
 
     private boolean expenseEligible;
 

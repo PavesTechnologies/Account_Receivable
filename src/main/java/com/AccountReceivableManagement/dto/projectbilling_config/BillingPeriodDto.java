@@ -18,6 +18,13 @@ public class BillingPeriodDto {
 
     private LocalDate periodEndDate;
 
+    /**
+     * Date the period becomes due for billing. Set by
+     * BillingOccurrenceServiceImpl.resolveTimeAndMaterialBillingPeriods;
+     * {@code null} from the schedule-preview calculations.
+     */
+    private LocalDate billingDate;
+
     private BigDecimal billingAmount;
 
     private Boolean isPartialPeriod;

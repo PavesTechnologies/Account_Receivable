@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+
 /**
  * Implementation of BillingOccurrenceTransactionService.
  * Each transition runs in its own transaction (REQUIRES_NEW) to ensure
@@ -22,14 +24,43 @@ public class BillingOccurrenceTransactionServiceImpl implements BillingOccurrenc
 
     private final BillingScheduleRepository billingScheduleRepository;
 
+    /**
+     * The passed occurrence was read outside this transaction and may be
+     * stale - changed, deactivated or deleted (configuration reconciliation)
+     * since, or already transitioned by an overlapping run. It is therefore
+     * only used for its id: the current row is re-read under a row lock and
+     * transitioned only if it is still active, SCHEDULED, tax PENDING and
+     * due. Saving the stale copy would overwrite concurrent changes or
+     * resurrect a deleted occurrence; a repeated or concurrent run now
+     * finds the row already TAX_PENDING and changes nothing.
+     */
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void transitionSingleOccurrenceToTaxPending(BillingSchedule schedule) {
-        if (schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED) {
-            schedule.setPeriodStatus(BillingPeriodStatus.TAX_PENDING);
-            schedule.setTaxStatus(BillingPeriodStatus.TAX_PENDING);
-            billingScheduleRepository.save(schedule);
-            log.info("Transitioned occurrence {} to TAX_PENDING", schedule.getBillingScheduleId());
+        BillingSchedule current = billingScheduleRepository
+                .findByIdForUpdate(schedule.getBillingScheduleId())
+                .orElse(null);
+
+        if (current == null) {
+            log.info("Occurrence {} no longer exists; not transitioned to TAX_PENDING",
+                    schedule.getBillingScheduleId());
+            return;
         }
+
+        if (!Boolean.TRUE.equals(current.getIsActive())
+                || current.getPeriodStatus() != BillingPeriodStatus.SCHEDULED
+                || current.getTaxStatus() != BillingPeriodStatus.PENDING
+                || current.getBillingDate() == null
+                || current.getBillingDate().isAfter(LocalDate.now())) {
+            log.debug("Occurrence {} is no longer a due SCHEDULED occurrence (active={}, status={}, tax={}); unchanged",
+                    current.getBillingScheduleId(), current.getIsActive(), current.getPeriodStatus(),
+                    current.getTaxStatus());
+            return;
+        }
+
+        current.setPeriodStatus(BillingPeriodStatus.TAX_PENDING);
+        current.setTaxStatus(BillingPeriodStatus.TAX_PENDING);
+        billingScheduleRepository.save(current);
+        log.info("Transitioned occurrence {} to TAX_PENDING", current.getBillingScheduleId());
     }
 }

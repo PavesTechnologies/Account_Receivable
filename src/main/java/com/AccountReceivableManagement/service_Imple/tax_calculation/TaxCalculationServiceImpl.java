@@ -34,6 +34,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -282,6 +283,10 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                             calculation
                     );
 
+            // Flushed so a concurrent duplicate on billing_snapshot_id is
+            // reported here as DuplicateResourceException, not at commit.
+            taxCalculationRepository.flush();
+
         } catch (DataIntegrityViolationException ex) {
 
             throw new GlobalExceptionHandler
@@ -313,6 +318,72 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                 snapshot,
                 snapshotConfiguration
         );
+    }
+
+    /**
+     * Idempotent form of {@link #calculateTax(UUID)} for callers that may
+     * repeat the request: an existing CALCULATED tax calculation for the
+     * snapshot is returned as-is - never recalculated, never duplicated;
+     * otherwise tax is calculated through {@link #calculateTax(UUID)}.
+     */
+    @Override
+    public TaxCalculationResponseDto findOrCalculateTax(
+            UUID billingSnapshotId
+    ) {
+
+        Optional<TaxCalculation> existing =
+                taxCalculationRepository.findByBillingSnapshotId(
+                        billingSnapshotId
+                );
+
+        if (existing.isPresent()) {
+            requireCalculated(existing.get(), "billing snapshot");
+            return getTaxCalculationBySnapshotId(billingSnapshotId);
+        }
+
+        return calculateTax(billingSnapshotId);
+    }
+
+    /**
+     * Idempotent form of {@link #calculateTaxForSchedule(UUID)} - see
+     * {@link #findOrCalculateTax(UUID)}.
+     */
+    @Override
+    public TaxCalculationResponseDto findOrCalculateTaxForSchedule(
+            UUID billingScheduleId
+    ) {
+
+        Optional<TaxCalculation> existing =
+                taxCalculationRepository.findByBillingScheduleId(
+                        billingScheduleId
+                );
+
+        if (existing.isPresent()) {
+            requireCalculated(existing.get(), "billing occurrence");
+            return getTaxCalculationByScheduleId(billingScheduleId);
+        }
+
+        return calculateTaxForSchedule(billingScheduleId);
+    }
+
+    /**
+     * An existing tax calculation that did not complete is not reused - it
+     * is reported, since recalculating over it would need the existing
+     * record to be resolved first.
+     */
+    private void requireCalculated(
+            TaxCalculation calculation,
+            String source
+    ) {
+
+        if (calculation.getStatus() != TaxCalculationStatus.CALCULATED) {
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "A tax calculation already exists for this " + source
+                            + " but has status " + calculation.getStatus()
+                            + "; it cannot be reused."
+            );
+        }
     }
 
     @Override
@@ -350,6 +421,16 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
             );
         }
 
+        // Never taxed as zero: a missing or negative amount would otherwise
+        // flow on into a zero-value (or negative) invoice.
+        BigDecimal taxableAmount = schedule.getBillingAmount();
+        if (taxableAmount == null || taxableAmount.signum() < 0) {
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Tax calculation cannot be started because this billing schedule has no valid billing amount."
+            );
+        }
+
         BillingConfiguration configuration = schedule.getBillingConfiguration();
         if (configuration == null) {
             throw new GlobalExceptionHandler
@@ -382,11 +463,6 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
         TaxConfiguration taxConfiguration = configurations.get(0);
 
         TaxApplicabilityType transactionApplicability = resolveApplicabilityForSchedule(schedule, configuration);
-
-        BigDecimal taxableAmount = schedule.getBillingAmount();
-        if (taxableAmount == null) {
-            taxableAmount = BigDecimal.ZERO;
-        }
 
         TaxCalculation calculation =
                 TaxCalculation.builder()
@@ -502,6 +578,10 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         try {
             saved = taxCalculationRepository.save(calculation);
+
+            // Flushed so a concurrent duplicate on billing_schedule_id is
+            // reported here as DuplicateResourceException, not at commit.
+            taxCalculationRepository.flush();
         } catch (DataIntegrityViolationException ex) {
             throw new GlobalExceptionHandler
                     .DuplicateResourceException(

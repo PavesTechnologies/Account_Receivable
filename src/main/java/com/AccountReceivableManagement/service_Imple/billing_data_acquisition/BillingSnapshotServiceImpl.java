@@ -55,6 +55,7 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
 
     private static final DateTimeFormatter SNAPSHOT_NUMBER_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final int SNAPSHOT_NUMBER_SUFFIX_LENGTH = 8;
+    private static final String BILLED_SOURCE_CONSTRAINT = "uk_billing_snapshot_item_billed_source";
 
     private final BillingSnapshotRepository billingSnapshotRepository;
     private final BillingConfigurationIntegration billingConfigurationIntegration;
@@ -184,6 +185,16 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                         request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
                 return reuseOrRejectExistingSnapshot(concurrentSnapshot.get(), request);
             }
+            if (isBilledSourceConflict(ex)) {
+                // A concurrent snapshot - another period, possibly overlapping this
+                // one - committed a claim on one of these timesheets first
+                // (uk_billing_snapshot_item_billed_source). Nothing was saved here.
+                log.warn("[BillingSnapshotSourceAlreadyClaimed] projectId={}, period {} to {}: {}",
+                        request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd(),
+                        ex.getMostSpecificCause().getMessage());
+                return ApiResponse.failure("One or more timesheets of this billing period were included in "
+                        + "another Billing Snapshot at the same time and cannot be billed again.");
+            }
             log.error("[BillingSnapshotPersistenceError] Snapshot creation failed for projectId={}: {}",
                     request.getProjectId(), ex.getMostSpecificCause().getMessage(), ex);
             return ApiResponse.failure("Failed to save Billing Snapshot: " + ex.getMostSpecificCause().getMessage());
@@ -282,7 +293,9 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         // existing strategy exactly as first-time acquisition does.
         BillingAcquisitionResultDto acquisitionResult = strategy.acquire(configuration, request);
 
-        ValidationResultDto validationResult = billingAcquisitionValidator.validate(acquisitionResult);
+        // The snapshot's own items are excluded - they are what is being replaced.
+        ValidationResultDto validationResult =
+                billingAcquisitionValidator.validate(acquisitionResult, snapshot.getId());
         if (!validationResult.isSuccess()) {
             // Nothing on the snapshot has been touched yet - fail closed.
             throw new GlobalExceptionHandler.ValidationException(validationResult.getValidationMessage());
@@ -298,6 +311,10 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         // deletes what's cleared and inserts what's added, same pattern already
         // used by InvoiceServiceImpl.refreshInvoiceFromAuthoritativeData().
         snapshot.getItems().clear();
+        // Hibernate inserts before it deletes orphans; the old items must be gone
+        // before the rebuilt ones re-claim the same timesheets
+        // (uk_billing_snapshot_item_billed_source).
+        billingSnapshotRepository.flush();
         snapshot.getItems().addAll(rebuiltItems);
 
         snapshot.setSubtotal(amounts.getSubtotal());
@@ -395,6 +412,11 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         }
     }
 
+    private static boolean isBilledSourceConflict(DataIntegrityViolationException ex) {
+        String message = ex.getMostSpecificCause().getMessage();
+        return message != null && message.toLowerCase().contains(BILLED_SOURCE_CONSTRAINT);
+    }
+
     private void applyAcquisitionStatus(BillingSnapshotResponseDto responseDto, AcquireDataResponseDto acquisition) {
         if (acquisition != null && acquisition.getStatus() != null) {
             responseDto.setAcquisitionStatus(acquisition.getStatus());
@@ -444,8 +466,9 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     }
 
     private BillingAmountSummary calculateAmounts(List<TimesheetDto> timesheets) {
+        // Sum of the rounded line amounts - exactly what the snapshot items carry.
         BigDecimal subtotal = timesheets.stream()
-                .map(timesheet -> timesheet.getHours().multiply(timesheet.getHourlyRate()))
+                .map(BillingSnapshotBuilder::lineAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         BigDecimal expenseAmount = BigDecimal.ZERO;
