@@ -165,13 +165,14 @@ class BillingOccurrenceServiceImplTest {
                 .thenReturn(Optional.of(billingConfiguration));
         when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
                 .thenReturn(Optional.of(fixedPriceConfig));
-        when(billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
                 billingConfiguration, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
-                .thenReturn(false);
+                .thenReturn(Optional.empty());
 
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
 
-        verify(billingScheduleRepository).save(argThat(schedule ->
+        verify(billingScheduleRepository).saveAll(argThat((List<BillingSchedule> saved) ->
+                saved.size() == 1 && saved.stream().allMatch(schedule ->
                 schedule.getPeriodNumber() == 1 &&
                         schedule.getPeriodStartDate().equals(LocalDate.of(2026, 9, 1)) &&
                         schedule.getPeriodEndDate().equals(LocalDate.of(2026, 9, 30)) &&
@@ -180,7 +181,21 @@ class BillingOccurrenceServiceImplTest {
                         schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED &&
                         schedule.getTaxStatus() == BillingPeriodStatus.PENDING &&
                         !schedule.getIsPartialPeriod()
-        ));
+        )));
+    }
+
+    /** The occurrence an earlier generation created for 01-30 Sep 2026. */
+    private BillingSchedule activeSeptemberOccurrence() {
+        return BillingSchedule.builder()
+                .billingScheduleId(UUID.randomUUID())
+                .billingConfiguration(billingConfiguration)
+                .periodNumber(1)
+                .periodStartDate(LocalDate.of(2026, 9, 1))
+                .periodEndDate(LocalDate.of(2026, 9, 30))
+                .periodStatus(BillingPeriodStatus.SCHEDULED)
+                .taxStatus(BillingPeriodStatus.PENDING)
+                .isActive(true)
+                .build();
     }
 
     @Test
@@ -191,9 +206,9 @@ class BillingOccurrenceServiceImplTest {
                 .thenReturn(Optional.of(billingConfiguration));
         when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
                 .thenReturn(Optional.of(fixedPriceConfig));
-        when(billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
                 billingConfiguration, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
-                .thenReturn(true);
+                .thenReturn(Optional.of(activeSeptemberOccurrence()));
 
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
 
@@ -466,22 +481,24 @@ class BillingOccurrenceServiceImplTest {
     // =========================================================
 
     @Test
-    void generateOccurrencesForFixedPrice_ConcurrentRequests_DatabaseConstraintPreventsDuplicates() {
+    void generateOccurrencesForFixedPrice_RepeatedRequests_SecondFindsExistingOccurrence() {
         billingConfiguration.setBillingFrequency(oneTimeFrequency);
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
         when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
                 .thenReturn(Optional.of(fixedPriceConfig));
-        when(billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
+        // Nothing on the first request; the first request's occurrence on the second.
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
                 billingConfiguration, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
-                .thenReturn(false)
-                .thenReturn(false);
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(activeSeptemberOccurrence()));
 
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
 
-        verify(billingScheduleRepository, times(2)).save(any(BillingSchedule.class));
+        verify(billingScheduleRepository, times(1)).saveAll(any());
+        verify(billingScheduleRepository, never()).save(any(BillingSchedule.class));
     }
 
     // =========================================================
@@ -888,9 +905,9 @@ class BillingOccurrenceServiceImplTest {
                 .thenReturn(Optional.of(billingConfiguration));
         when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
                 .thenReturn(Optional.of(fixedPriceConfig));
-        when(billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
+        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
                 billingConfiguration, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
-                .thenReturn(true);
+                .thenReturn(Optional.of(activeSeptemberOccurrence()));
 
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
 

@@ -5,15 +5,16 @@ import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto
 import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceDelivery;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceDocument;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDeliveryRepository;
+import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDocumentRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
 import com.AccountReceivableManagement.service_Imple.email.EmailDeliveryException;
 import com.AccountReceivableManagement.service_interface.email.EmailService;
-import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDocumentService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.receivable.ReceivableService;
 import org.junit.jupiter.api.AfterEach;
@@ -30,6 +31,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -41,14 +43,21 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
+/**
+ * "Send to Client" - still an explicit, manual action. Only a READY_TO_SEND
+ * invoice (approved, document finalized) can be sent, and the PDF attached
+ * is its stored document, exactly as reviewed - never re-rendered.
+ */
 @ExtendWith(MockitoExtension.class)
 class InvoiceDeliveryServiceImplTest {
+
+    private static final byte[] STORED_PDF = {37, 80, 68, 70, 1, 2, 3};
 
     @Mock
     private InvoiceRepository invoiceRepository;
 
-        @Mock
-        private ClientRepository clientRepository;
+    @Mock
+    private ClientRepository clientRepository;
 
     @Mock
     private InvoiceDeliveryRepository invoiceDeliveryRepository;
@@ -57,7 +66,7 @@ class InvoiceDeliveryServiceImplTest {
     private InvoiceService invoiceService;
 
     @Mock
-    private InvoiceDocumentService invoiceDocumentService;
+    private InvoiceDocumentRepository invoiceDocumentRepository;
 
     @Mock
     private EmailService emailService;
@@ -94,11 +103,11 @@ class InvoiceDeliveryServiceImplTest {
         TransactionSynchronizationManager.clearSynchronization();
     }
 
-    private Invoice approvedInvoice() {
+    private Invoice readyToSendInvoice() {
         return Invoice.builder()
                 .invoiceId(invoiceId)
                 .invoiceNumber("INV-20260908164549")
-                .status(InvoiceStatus.APPROVED)
+                .status(InvoiceStatus.READY_TO_SEND)
                 .invoiceDate(LocalDate.of(2026, 9, 8))
                 .dueDate(LocalDate.of(2026, 10, 8))
                 .clientName("Account Management")
@@ -137,38 +146,59 @@ class InvoiceDeliveryServiceImplTest {
                 .build();
     }
 
-    // 1. Successful email delivery -> 8. Delivery status becomes SENT after successful email.
-    // 9. Uses the Invoice's own seller snapshot for the PDF/email content -
-    // no CompanyProfileService dependency exists on this class at all.
-    @Test
-    void sendInvoice_approvedInvoiceWithEmail_sendsAndMarksSent() {
-        Invoice invoice = approvedInvoice();
-        InvoiceResponseDto response = invoiceResponse(invoice);
-
+    /** The invoice exists, is READY_TO_SEND and its finalized document is stored. */
+    private Invoice storedAndFinalized() {
+        Invoice invoice = readyToSendInvoice();
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
-        when(invoiceService.getInvoiceById(invoiceId)).thenReturn(response);
-        when(invoiceDocumentService.generateInvoicePdf(response))
-                .thenReturn(new byte[]{1, 2, 3});
+        lenient().when(invoiceService.getInvoiceById(invoiceId)).thenReturn(invoiceResponse(invoice));
+        lenient().when(invoiceDocumentRepository.existsByInvoiceId(invoiceId)).thenReturn(true);
+        lenient().when(invoiceDocumentRepository.findByInvoiceId(invoiceId)).thenReturn(Optional.of(
+                InvoiceDocument.builder()
+                        .invoiceDocumentId(UUID.randomUUID())
+                        .invoiceId(invoiceId)
+                        .fileName("invoice-INV-20260908164549.pdf")
+                        .contentType("application/pdf")
+                        .content(STORED_PDF)
+                        .sizeBytes((long) STORED_PDF.length)
+                        .checksumSha256("x")
+                        .generatedAt(LocalDateTime.now())
+                        .build()));
+        return invoice;
+    }
+
+    private void emailSucceeds() {
         when(emailService.sendEmailWithAttachment(
-                eq("client@example.com"), anyString(), anyString(), any(byte[].class), anyString(), anyString()
+                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString()
         )).thenReturn("<message-id@gmail.com>");
+    }
+
+    @Test
+    void sendInvoice_readyToSendInvoice_sendsItsStoredDocumentAndMarksSent() {
+        Invoice invoice = storedAndFinalized();
+        emailSucceeds();
 
         InvoiceDeliveryResponseDto result = invoiceDeliveryService.sendInvoice(invoiceId);
 
         assertThat(result.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.SENT);
-        // 10. Recipient still comes from the Invoice's existing client
-        // email field (CDC-derived), never from the seller snapshot.
         assertThat(result.getRecipientEmail()).isEqualTo("client@example.com");
         assertThat(result.getSentAt()).isNotNull();
         assertThat(result.getFailureReason()).isNull();
         assertThat(result.getInvoiceNumber()).isEqualTo("INV-20260908164549");
 
-        // Invoice status itself is never touched by delivery.
-        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.APPROVED);
+        // The attachment is the stored, reviewed document.
+        ArgumentCaptor<byte[]> attachment = ArgumentCaptor.forClass(byte[].class);
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        verify(emailService).sendEmailWithAttachment(eq("client@example.com"), subject.capture(), anyString(),
+                attachment.capture(), eq("invoice-INV-20260908164549.pdf"), eq("application/pdf"));
+        assertThat(attachment.getValue()).isEqualTo(STORED_PDF);
+        // Subject built from the invoice's own seller snapshot - no Company Profile lookup.
+        assertThat(subject.getValue()).contains("Example Global Infotech Private Limited");
+
+        // Invoice status itself is never touched by delivery: READY_TO_SEND is not "sent".
+        assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.READY_TO_SEND);
         verify(invoiceRepository, never()).save(any());
 
-        // A SENT outcome creates the invoice's receivable - only once the
-        // SENT delivery has committed.
+        // A SENT outcome creates the invoice's receivable - only once the SENT delivery has committed.
         verifyNoInteractions(receivableService);
         TransactionSynchronizationManager.getSynchronizations()
                 .forEach(TransactionSynchronization::afterCommit);
@@ -178,17 +208,8 @@ class InvoiceDeliveryServiceImplTest {
         verify(invoiceDeliveryRepository, atLeastOnce()).save(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(InvoiceDeliveryStatus.SENT);
         assertThat(captor.getValue().getProviderMessageId()).isEqualTo("<message-id@gmail.com>");
-
-        // Email subject/body are built from the invoice's own seller
-        // snapshot - verified via the actual subject argument sent.
-        ArgumentCaptor<String> subjectCaptor = ArgumentCaptor.forClass(String.class);
-        verify(emailService).sendEmailWithAttachment(
-                anyString(), subjectCaptor.capture(), anyString(), any(byte[].class), anyString(), anyString()
-        );
-        assertThat(subjectCaptor.getValue()).contains("Example Global Infotech Private Limited");
     }
 
-    // 2. Invoice not found.
     @Test
     void sendInvoice_invoiceNotFound_throwsResourceNotFoundException() {
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
@@ -196,123 +217,96 @@ class InvoiceDeliveryServiceImplTest {
         assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
                 .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class);
 
-        verifyNoInteractions(invoiceDeliveryRepository, emailService, invoiceDocumentService);
+        verifyNoInteractions(invoiceDeliveryRepository, emailService, invoiceDocumentRepository);
     }
 
     @Test
     void sendInvoice_legacyInvoice_resolvesEmailFromClient() {
         UUID clientId = UUID.randomUUID();
-        Invoice invoice = approvedInvoice();
+        Invoice invoice = storedAndFinalized();
         invoice.setClientId(clientId);
         invoice.setEmail(null);
-
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
         when(clientRepository.findById(clientId)).thenReturn(Optional.of(
                 Client.builder().clientId(clientId).email("synced-client@example.com").build()
         ));
-        InvoiceResponseDto response = invoiceResponse(invoice);
-        when(invoiceService.getInvoiceById(invoiceId)).thenReturn(response);
-        when(invoiceDocumentService.generateInvoicePdf(response)).thenReturn(new byte[]{1});
-        when(emailService.sendEmailWithAttachment(
-                eq("synced-client@example.com"), anyString(), anyString(), any(byte[].class), anyString(), anyString()
-        )).thenReturn("<message-id@gmail.com>");
+        emailSucceeds();
 
         InvoiceDeliveryResponseDto result = invoiceDeliveryService.sendInvoice(invoiceId);
 
         assertThat(result.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.SENT);
         assertThat(result.getRecipientEmail()).isEqualTo("synced-client@example.com");
-        verify(emailService).sendEmailWithAttachment(
-                eq("synced-client@example.com"), anyString(), anyString(), any(byte[].class), anyString(), anyString()
-        );
     }
 
-    // 3. Invoice not APPROVED.
     @Test
     void sendInvoice_invoiceNotApproved_throwsValidationException() {
-        Invoice invoice = approvedInvoice();
-        invoice.setStatus(InvoiceStatus.GENERATED);
+        for (InvoiceStatus status : List.of(InvoiceStatus.GENERATED, InvoiceStatus.PENDING_APPROVAL,
+                InvoiceStatus.REJECTED)) {
+            Invoice invoice = readyToSendInvoice();
+            invoice.setStatus(status);
+            when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
 
+            assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
+                    .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                    .hasMessage("Invoice must be approved before it can be sent to the client.");
+        }
+
+        verifyNoInteractions(invoiceDeliveryRepository, emailService, receivableService);
+    }
+
+    @Test
+    void sendInvoice_approvedButDocumentNotGenerated_isNotSent() {
+        Invoice invoice = readyToSendInvoice();
+        invoice.setStatus(InvoiceStatus.APPROVED);
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
 
         assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessage("Invoice must be approved before it can be sent to the client.");
+                .hasMessageContaining("document has not been generated yet");
 
-        verifyNoInteractions(invoiceDeliveryRepository, emailService, invoiceDocumentService);
+        verifyNoInteractions(invoiceDeliveryRepository, emailService, receivableService);
     }
 
-    // 4. Missing client email.
+    @Test
+    void sendInvoice_readyToSendWithoutStoredDocument_isNotSent() {
+        Invoice invoice = readyToSendInvoice();
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceDocumentRepository.existsByInvoiceId(invoiceId)).thenReturn(false);
+
+        assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
+                .hasMessageContaining("document has not been generated yet");
+
+        verifyNoInteractions(invoiceDeliveryRepository, emailService);
+    }
+
     @Test
     void sendInvoice_missingClientEmail_throwsValidationException() {
-        Invoice invoice = approvedInvoice();
+        Invoice invoice = readyToSendInvoice();
         invoice.setEmail(null);
-
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceDocumentRepository.existsByInvoiceId(invoiceId)).thenReturn(true);
 
         assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
                 .hasMessage("Client email is not configured for this invoice.");
 
-        verifyNoInteractions(invoiceDeliveryRepository, emailService, invoiceDocumentService);
+        verifyNoInteractions(invoiceDeliveryRepository, emailService);
     }
 
-    // 9. Sending an already-approved invoice must NOT require (or fetch)
-    // the currently active Company Profile - it renders purely from the
-    // Invoice's own frozen seller snapshot. This test never stubs any
-    // Company Profile lookup at all (the dependency no longer exists on
-    // this class), proving delivery is independent of it.
     @Test
-    void sendInvoice_doesNotDependOnActiveCompanyProfile() {
-        Invoice invoice = approvedInvoice();
-        InvoiceResponseDto response = invoiceResponse(invoice);
-
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
-        when(invoiceService.getInvoiceById(invoiceId)).thenReturn(response);
-        when(invoiceDocumentService.generateInvoicePdf(response)).thenReturn(new byte[]{1, 2, 3});
-        when(emailService.sendEmailWithAttachment(
-                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString()
-        )).thenReturn("<message-id@gmail.com>");
-
-        InvoiceDeliveryResponseDto result = invoiceDeliveryService.sendInvoice(invoiceId);
-
-        assertThat(result.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.SENT);
-        verify(invoiceDocumentService).generateInvoicePdf(response);
-    }
-
-    // 6. PDF generation failure -> 9. Delivery status becomes FAILED after email failure (PDF variant).
-    @Test
-    void sendInvoice_pdfGenerationFails_marksDeliveryFailed() {
-        Invoice invoice = approvedInvoice();
-        InvoiceResponseDto response = invoiceResponse(invoice);
-
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
-        when(invoiceService.getInvoiceById(invoiceId)).thenReturn(response);
-        when(invoiceDocumentService.generateInvoicePdf(response))
-                .thenThrow(new PdfGenerationException("Rendering failed.", new RuntimeException("boom")));
+    void sendInvoice_storedDocumentUnreadable_marksDeliveryFailedWithoutEmail() {
+        storedAndFinalized();
+        when(invoiceDocumentRepository.findByInvoiceId(invoiceId)).thenReturn(Optional.empty());
 
         InvoiceDeliveryResponseDto result = invoiceDeliveryService.sendInvoice(invoiceId);
 
         assertThat(result.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.FAILED);
-        assertThat(result.getFailureReason()).contains("PDF generation failed");
-        assertThat(result.getFailedAt()).isNotNull();
-        verifyNoInteractions(emailService);
-
-        ArgumentCaptor<InvoiceDelivery> captor = ArgumentCaptor.forClass(InvoiceDelivery.class);
-        verify(invoiceDeliveryRepository, atLeastOnce()).save(captor.capture());
-        assertThat(captor.getValue().getStatus()).isEqualTo(InvoiceDeliveryStatus.FAILED);
-        verifyNoInteractions(receivableService);
+        assertThat(result.getFailureReason()).contains("finalized invoice document could not be found");
+        verifyNoInteractions(emailService, receivableService);
     }
 
-    // 7. Gmail/email service failure -> 9. Delivery status becomes FAILED after email failure.
     @Test
     void sendInvoice_emailServiceFails_marksDeliveryFailedNotSent() {
-        Invoice invoice = approvedInvoice();
-        InvoiceResponseDto response = invoiceResponse(invoice);
-
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
-        when(invoiceService.getInvoiceById(invoiceId)).thenReturn(response);
-        when(invoiceDocumentService.generateInvoicePdf(response))
-                .thenReturn(new byte[]{1, 2, 3});
+        storedAndFinalized();
         when(emailService.sendEmailWithAttachment(
                 anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString()
         )).thenThrow(new EmailDeliveryException(
@@ -326,19 +320,33 @@ class InvoiceDeliveryServiceImplTest {
         assertThat(result.getFailureReason())
                 .isEqualTo("Failed to send invoice email through the configured mail provider.");
         assertThat(result.getFailedAt()).isNotNull();
-
-        // Never silently marked SENT.
-        assertThat(result.getDeliveryStatus()).isNotEqualTo(InvoiceDeliveryStatus.SENT);
         assertThat(result.getSentAt()).isNull();
 
         // A FAILED delivery never creates a receivable.
+        TransactionSynchronizationManager.getSynchronizations()
+                .forEach(TransactionSynchronization::afterCommit);
         verifyNoInteractions(receivableService);
     }
 
-    // 10. Delivery history retrieval.
+    @Test
+    void sendInvoice_repeated_reusesTheSameReceivableCreation() {
+        storedAndFinalized();
+        emailSucceeds();
+
+        invoiceDeliveryService.sendInvoice(invoiceId);
+        invoiceDeliveryService.sendInvoice(invoiceId);
+        TransactionSynchronizationManager.getSynchronizations()
+                .forEach(TransactionSynchronization::afterCommit);
+
+        // Both go through the single, idempotent per-invoice receivable creation
+        // (ReceivableServiceImpl returns the existing receivable on a resend).
+        verify(receivableService, times(2)).createReceivableFromInvoice(invoiceId);
+        verify(receivableService, never()).createReceivableFromInvoice(argThat(id -> !invoiceId.equals(id)));
+    }
+
     @Test
     void getDeliveryHistory_returnsAttemptsNewestFirst() {
-        Invoice invoice = approvedInvoice();
+        Invoice invoice = readyToSendInvoice();
 
         InvoiceDelivery latest = InvoiceDelivery.builder()
                 .invoiceDeliveryId(UUID.randomUUID())

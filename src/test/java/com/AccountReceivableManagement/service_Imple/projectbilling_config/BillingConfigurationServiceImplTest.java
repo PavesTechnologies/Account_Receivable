@@ -69,6 +69,9 @@ class BillingConfigurationServiceImplTest {
     private UUID configurationId;
     private BillingConfiguration draftConfiguration;
 
+    @Mock
+    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
+
     @BeforeEach
     void setUp() {
         service = new BillingConfigurationServiceImpl(
@@ -94,7 +97,8 @@ class BillingConfigurationServiceImplTest {
                 billingMilestonePlanService,
                 changeTrackingService,
                 recordActionLockService,
-                snapshotRepository);
+                snapshotRepository,
+                automaticBillingRunRepository);
 
         configurationId = UUID.randomUUID();
         draftConfiguration = BillingConfiguration.builder()
@@ -121,6 +125,23 @@ class BillingConfigurationServiceImplTest {
         verify(billingConfigurationRepository, never()).delete(any());
         verify(billingFixedPriceRepository, never()).deleteByBillingConfiguration(any());
         verify(billingRecurringConfigurationRepository, never()).deleteByBillingConfiguration(any());
+        verify(billingScheduleRepository, never()).deleteByBillingConfiguration(any());
+    }
+
+    @Test
+    void deleteBillingConfiguration_referencedByAutomaticBillingRun_rejectsDeletion() {
+        when(billingConfigurationRepository.findById(configurationId))
+                .thenReturn(Optional.of(draftConfiguration));
+        when(billingSnapshotRepository.existsByBillingConfigurationId(configurationId))
+                .thenReturn(false);
+        when(automaticBillingRunRepository.existsByBillingConfiguration_BillingConfigurationId(configurationId))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> service.deleteBillingConfiguration(configurationId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("referenced by automatic billing history");
+
+        verify(billingConfigurationRepository, never()).delete(any());
         verify(billingScheduleRepository, never()).deleteByBillingConfiguration(any());
     }
 

@@ -96,11 +96,17 @@ class BillingSnapshotServiceImplTest {
     @Mock
     private PlatformTransactionManager transactionManager;
 
+    // Backs the validator's already-billed timesheet check; unstubbed it
+    // reports no timesheet as already billed.
+    @Mock
+    private com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository
+            billingSnapshotItemRepository;
+
     // Real, dependency-free collaborators — using the actual production
     // logic here (not mocks) is what lets these tests prove the acquisition
     // pipeline genuinely attaches/maps source timesheet items, not just
     // that some mock was told to return them.
-    private final BillingAcquisitionValidator billingAcquisitionValidator = new BillingAcquisitionValidator();
+    private BillingAcquisitionValidator billingAcquisitionValidator;
     private final BillingSnapshotBuilder billingSnapshotBuilder = new BillingSnapshotBuilder();
     private final BillingSnapshotMapper billingSnapshotMapper = new BillingSnapshotMapper();
 
@@ -117,6 +123,8 @@ class BillingSnapshotServiceImplTest {
     @BeforeEach
     void setUp() {
         when(timeAndMaterialStrategy.getSupportedBillingType()).thenReturn(BillingType.TIME_AND_MATERIAL);
+
+        billingAcquisitionValidator = new BillingAcquisitionValidator(billingSnapshotItemRepository);
 
         service = new BillingSnapshotServiceImpl(
                 billingSnapshotRepository,
@@ -874,6 +882,26 @@ class BillingSnapshotServiceImplTest {
         verify(billingAcquisitionService, never()).recordAcquisitionForSnapshot(any(), any(), any(), any());
     }
 
+    @Test
+    void createBillingSnapshot_timesheetClaimedByConcurrentOverlappingSnapshot_returnsAlreadyBilledFailure() {
+        BillingSnapshotCreateRequestDto request = newRequest();
+        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
+        stubAcquiredTimesheets(configuration, request, timesheet(true));
+        when(billingSnapshotRepository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException(
+                "Duplicate entry 'TIME_ENTRY-TMS-100' for key "
+                        + "'billing_snapshot_item.UK_BILLING_SNAPSHOT_ITEM_BILLED_SOURCE'"));
+
+        ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getMessage()).isEqualTo("One or more timesheets of this billing period were included "
+                + "in another Billing Snapshot at the same time and cannot be billed again.");
+        verify(transactionManager).rollback(any());
+        verify(billingAcquisitionService, never()).recordAcquisitionForSnapshot(any(), any(), any(), any());
+    }
+
     // Test 7 - readiness validation failure
     @Test
     void createBillingSnapshot_readinessValidationFails_returnsMessageAndPersistsNothing() {
@@ -1050,5 +1078,150 @@ class BillingSnapshotServiceImplTest {
         assertThat(numbers).hasSize(count);
         // Sanity check: the loop really did produce several numbers per second.
         assertThat(seconds.size()).isLessThan(count);
+    }
+
+    // =========================================================
+    // Phase 1 automation readiness - T&M billing periods and source-level idempotency
+    // =========================================================
+
+    /**
+     * The requested period is the billing period - never normalised to a
+     * calendar month, month end or first-of-month. Weekly, calendar-month and
+     * mid-month cycles all reach TMS, the snapshot and the acquisition record
+     * with exactly the dates supplied.
+     */
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "2026-10-05, 2026-10-11",   // weekly
+            "2026-10-01, 2026-10-31",   // calendar month
+            "2026-10-15, 2026-11-14"    // mid-month cycle
+    })
+    void createBillingSnapshot_anyConfiguredPeriod_isUsedExactlyAsRequested(LocalDate start, LocalDate end) {
+        BillingSnapshotCreateRequestDto request = BillingSnapshotCreateRequestDto.builder()
+                .projectId(PROJECT_ID).billingPeriodStart(start).billingPeriodEnd(end).build();
+        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(PROJECT_ID, start, end))
+                .thenReturn(Optional.empty());
+        BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
+        stubAcquiredTimesheets(configuration, request, timesheet(true));
+        ArgumentCaptor<BillingSnapshot> saved = ArgumentCaptor.forClass(BillingSnapshot.class);
+        when(billingSnapshotRepository.saveAndFlush(saved.capture())).thenAnswer(invocation -> {
+            BillingSnapshot toSave = invocation.getArgument(0);
+            toSave.setId(UUID.randomUUID());
+            return toSave;
+        });
+        when(billingAcquisitionService.createManualAcquisition(
+                eq(NEW_CONFIGURATION_ID), eq(start), eq(end), any(), eq("READY")))
+                .thenReturn(acquisition(UUID.randomUUID(), "READY"));
+
+        ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(saved.getValue().getBillingPeriodStart()).isEqualTo(start);
+        assertThat(saved.getValue().getBillingPeriodEnd()).isEqualTo(end);
+        verify(timeAndMaterialStrategy).acquire(configuration, request);
+    }
+
+    @Test
+    void createBillingSnapshot_multipleApprovedTimesheets_billsEachLineAndSumsSubtotal() {
+        BillingSnapshotCreateRequestDto request = newRequest();
+        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
+
+        TimesheetDto developer = timesheet(true);
+        TimesheetDto senior = timesheet(true);
+        senior.setSourceReferenceId("TMS-101");
+        senior.setRole("Senior Developer");
+        senior.setHours(new BigDecimal("10"));
+        senior.setHourlyRate(new BigDecimal("200"));
+        when(timeAndMaterialStrategy.acquire(configuration, request)).thenReturn(
+                BillingAcquisitionResultDto.builder()
+                        .billingConfigurationId(NEW_CONFIGURATION_ID)
+                        .timesheets(List.of(developer, senior))
+                        .build());
+        ArgumentCaptor<BillingSnapshot> saved = ArgumentCaptor.forClass(BillingSnapshot.class);
+        when(billingSnapshotRepository.saveAndFlush(saved.capture())).thenAnswer(invocation -> {
+            BillingSnapshot toSave = invocation.getArgument(0);
+            toSave.setId(UUID.randomUUID());
+            return toSave;
+        });
+        when(billingAcquisitionService.createManualAcquisition(
+                eq(NEW_CONFIGURATION_ID), eq(PERIOD_START), eq(PERIOD_END), any(), eq("READY")))
+                .thenReturn(acquisition(UUID.randomUUID(), "READY"));
+
+        ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
+
+        assertThat(response.isSuccess()).isTrue();
+        // 8h x 165 + 10h x 200
+        assertThat(saved.getValue().getSubtotal()).isEqualByComparingTo("3320");
+        assertThat(saved.getValue().getItems())
+                .extracting(BillingSnapshotItem::getSourceReferenceId)
+                .containsExactly("TMS-100", "TMS-101");
+    }
+
+    @Test
+    void createBillingSnapshot_nonBillableTimesheet_returnsMessageAndPersistsNothing() {
+        BillingSnapshotCreateRequestDto request = newRequest();
+        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
+        TimesheetDto nonBillable = timesheet(true);
+        nonBillable.setBillable(false);
+        stubAcquiredTimesheets(configuration, request, nonBillable);
+
+        ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getMessage()).isEqualTo("Timesheet [TMS-100] is not billable.");
+        verify(billingSnapshotRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(billingAcquisitionService, transactionManager);
+    }
+
+    /**
+     * A timesheet already carried by another snapshot (an overlapping period,
+     * a manual snapshot, an earlier run) is not billed again - the whole
+     * acquisition fails like every other validation rule, and nothing is
+     * persisted, so a retry is always safe.
+     */
+    @Test
+    void createBillingSnapshot_timesheetAlreadyBilledInAnotherSnapshot_persistsNothing() {
+        BillingSnapshotCreateRequestDto request = newRequest();
+        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
+        stubAcquiredTimesheets(configuration, request, timesheet(true));
+        when(billingSnapshotItemRepository.findClaimedSourceReferenceIds(any(), any(), any(), any()))
+                .thenReturn(List.of("TMS-100"));
+
+        ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
+
+        assertThat(response.isSuccess()).isFalse();
+        assertThat(response.getMessage()).isEqualTo(
+                "Timesheet(s) [TMS-100] are already included in another Billing Snapshot and cannot be billed again.");
+        verify(billingSnapshotRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(billingAcquisitionService, transactionManager);
+    }
+
+    @Test
+    void createBillingSnapshot_repeatedForSamePeriod_reusesSnapshotWithoutCallingTms() {
+        existingSnapshot.setBillingConfigurationId(NEW_CONFIGURATION_ID);
+        BillingSnapshotCreateRequestDto request = BillingSnapshotCreateRequestDto.builder()
+                .projectId(PROJECT_ID).billingConfigurationId(NEW_CONFIGURATION_ID)
+                .billingPeriodStart(PERIOD_START).billingPeriodEnd(PERIOD_END).build();
+        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingConfigurationIntegration.getApprovedBillingConfigurationById(NEW_CONFIGURATION_ID))
+                .thenReturn(approvedTimeAndMaterialConfiguration(NEW_CONFIGURATION_ID));
+        when(billingAcquisitionService.recordAcquisitionForSnapshot(
+                NEW_CONFIGURATION_ID, PERIOD_START, PERIOD_END, snapshotId))
+                .thenReturn(acquisition(snapshotId, "READY"));
+
+        ApiResponse<BillingSnapshotResponseDto> first = service.createBillingSnapshot(request);
+        ApiResponse<BillingSnapshotResponseDto> second = service.createBillingSnapshot(request);
+
+        assertThat(first.getData().getSnapshotId()).isEqualTo(snapshotId);
+        assertThat(second.getData().getSnapshotId()).isEqualTo(snapshotId);
+        verify(timeAndMaterialStrategy, never()).acquire(any(), any());
+        verify(billingSnapshotRepository, never()).saveAndFlush(any());
     }
 }

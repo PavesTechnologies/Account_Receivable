@@ -192,7 +192,8 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 billingSnapshotRepository,
                 billingConfigurationIntegration,
                 projectMasterDataService,
-                new BillingAcquisitionValidator(),
+                new BillingAcquisitionValidator(org.mockito.Mockito.mock(
+                        com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository.class)),
                 new BillingSnapshotBuilder(),
                 new BillingSnapshotMapper(),
                 currencyMasterRepository,
@@ -218,7 +219,9 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 billingSnapshotRepository,
                 taxCalculationRepository,
                 billingConfigurationService,
-                paymentTermsMasterRepository);
+                paymentTermsMasterRepository,
+                org.mockito.Mockito.mock(
+                        com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService.class));
 
         financialCorrectionService = new InvoiceFinancialCorrectionServiceImpl(
                 invoiceRepository,
