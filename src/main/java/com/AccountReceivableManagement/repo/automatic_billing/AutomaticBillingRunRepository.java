@@ -78,10 +78,14 @@ public interface AutomaticBillingRunRepository extends JpaRepository<AutomaticBi
             org.springframework.data.domain.Pageable page);
 
     /**
-     * Makes the FAILED runs of the given occurrences due for another attempt
-     * now - called when a configuration re-approval re-plans those
-     * occurrences, so a run that failed on the old plan does not keep the
-     * re-planned occurrence from ever being billed. Bypasses
+     * Makes FAILED runs due for another attempt now, after a configuration
+     * re-approval: runs of the given unbilled occurrences that either belong
+     * to an occurrence the re-approval re-planned ({@code replannedOccurrenceIds})
+     * or failed before any billing step (failureStep null - on configuration
+     * or occurrence eligibility, e.g. the configuration was awaiting
+     * approval). A run that failed at a billing step on an unchanged
+     * occurrence is not retried blindly. Only nextRetryAt changes - status,
+     * attempts and failure details stay as the failure history. Bypasses
      * {@code @PreUpdate}/{@code @Version} like {@link #claim}.
      *
      * @return the number of runs re-queued
@@ -89,8 +93,10 @@ public interface AutomaticBillingRunRepository extends JpaRepository<AutomaticBi
     @Modifying(flushAutomatically = true)
     @Query("UPDATE AutomaticBillingRun r SET r.nextRetryAt = :now, r.updatedAt = :now, r.version = r.version + 1 "
             + "WHERE r.status = com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticBillingRunStatus.FAILED "
-            + "AND r.billingScheduleId IN :occurrenceIds")
+            + "AND r.billingScheduleId IN :occurrenceIds "
+            + "AND (r.billingScheduleId IN :replannedOccurrenceIds OR r.failureStep IS NULL)")
     int requeueFailedRunsOfOccurrences(@Param("occurrenceIds") Collection<UUID> occurrenceIds,
+                                       @Param("replannedOccurrenceIds") Collection<UUID> replannedOccurrenceIds,
                                        @Param("now") LocalDateTime now);
 
     /**

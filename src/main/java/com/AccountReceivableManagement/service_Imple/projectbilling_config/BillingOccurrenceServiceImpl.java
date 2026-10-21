@@ -226,6 +226,8 @@ public class BillingOccurrenceServiceImpl {
             return;
         }
 
+        Map<UUID, String> occurrencesBefore = occurrenceStates(configuration);
+
         String billingTypeName = billingType.getBillingTypeName().trim();
 
         if (billingTypeName.equalsIgnoreCase("Fixed Price")) {
@@ -237,18 +239,32 @@ public class BillingOccurrenceServiceImpl {
             reconcileMilestonePlanOccurrences(configuration);
         }
 
-        requeueFailedRunsOfUnbilledOccurrences(configuration);
+        requeueFailedRunsOfUnbilledOccurrences(configuration, occurrencesBefore);
+    }
+
+    /** What reconciliation may change about each occurrence, to see which ones it re-planned. */
+    private Map<UUID, String> occurrenceStates(BillingConfiguration configuration) {
+        Map<UUID, String> states = new HashMap<>();
+        for (BillingSchedule s : billingScheduleRepository.findByBillingConfiguration(configuration)) {
+            states.put(s.getBillingScheduleId(), s.getIsActive() + "|" + s.getPeriodStartDate() + "|"
+                    + s.getPeriodEndDate() + "|" + s.getBillingDate() + "|"
+                    + (s.getBillingAmount() == null ? null : s.getBillingAmount().stripTrailingZeros()));
+        }
+        return states;
     }
 
     /**
-     * After a re-approval has re-planned the configuration's occurrences, an
-     * automatic billing run that failed on the old plan is made due again, so
-     * it is retried against the approved plan instead of keeping the
-     * occurrence from ever being billed (no new run is created for an
-     * occurrence that already has one). Only FAILED runs are touched; a run
-     * in progress or done is left alone.
+     * After a re-approval, an automatic billing run that failed is made due
+     * again when the re-approval can have addressed its failure: its
+     * occurrence was re-planned (amount, dates or reactivation), or it failed
+     * on configuration eligibility before any billing step. It is retried
+     * against the approved plan instead of keeping the occurrence from ever
+     * being billed; no new run is created for an occurrence that has one.
+     * Only FAILED runs of active, unbilled occurrences are touched.
      */
-    private void requeueFailedRunsOfUnbilledOccurrences(BillingConfiguration configuration) {
+    private void requeueFailedRunsOfUnbilledOccurrences(BillingConfiguration configuration,
+            Map<UUID, String> occurrencesBefore) {
+        Map<UUID, String> occurrencesAfter = occurrenceStates(configuration);
         List<UUID> unbilled = billingScheduleRepository
                 .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration).stream()
                 .filter(s -> !isBilled(s) && BillingSchedule.UNBILLED_STATUSES.contains(s.getPeriodStatus()))
@@ -257,7 +273,12 @@ public class BillingOccurrenceServiceImpl {
         if (unbilled.isEmpty()) {
             return;
         }
+        List<UUID> replanned = unbilled.stream()
+                .filter(id -> !java.util.Objects.equals(occurrencesBefore.get(id), occurrencesAfter.get(id)))
+                .toList();
         int requeued = automaticBillingRunRepository.requeueFailedRunsOfOccurrences(unbilled,
+                // An empty IN list is not portable SQL; no id matches the placeholder.
+                replanned.isEmpty() ? List.of(new UUID(0L, 0L)) : replanned,
                 java.time.LocalDateTime.now());
         if (requeued > 0) {
             log.info("Re-queued {} failed automatic billing run(s) of Billing Configuration {} after re-approval.",
@@ -299,7 +320,7 @@ public class BillingOccurrenceServiceImpl {
                 .filter(s -> Boolean.TRUE.equals(s.getIsActive()) && s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
                 .toList();
         if (!staleScheduled.isEmpty()) {
-            retireScheduledOccurrences(staleScheduled);
+            retireReplaceableOccurrences(staleScheduled);
         }
 
         BillingSchedule schedule = BillingSchedule.builder()
@@ -1710,15 +1731,14 @@ public class BillingOccurrenceServiceImpl {
             return;
         }
         
-        List<BillingSchedule> scheduledBeforeNewStart = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
-                .filter(s -> s.getPeriodEndDate().isBefore(newEffectiveFrom))
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledBeforeNewStart.isEmpty()) {
-            retireScheduledOccurrences(scheduledBeforeNewStart);
-            log.info("Retired {} scheduled occurrences before new effective from {} for Fixed Price configuration",
-                    scheduledBeforeNewStart.size(), newEffectiveFrom);
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for new effective from {} for Fixed Price configuration",
+                    replaceable.size(), newEffectiveFrom);
         }
         
         List<BillingSchedule> taxPendingOrCalculatedBeforeNewStart = existingSchedules.stream()
@@ -1751,15 +1771,14 @@ public class BillingOccurrenceServiceImpl {
             return;
         }
         
-        List<BillingSchedule> scheduledBeforeNewStart = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
-                .filter(s -> s.getPeriodEndDate().isBefore(newEffectiveFrom))
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledBeforeNewStart.isEmpty()) {
-            retireScheduledOccurrences(scheduledBeforeNewStart);
-            log.info("Retired {} scheduled occurrences before new effective from {} for Recurring configuration",
-                    scheduledBeforeNewStart.size(), newEffectiveFrom);
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for new effective from {} for Recurring configuration",
+                    replaceable.size(), newEffectiveFrom);
         }
         
         List<BillingSchedule> taxPendingOrCalculatedBeforeNewStart = existingSchedules.stream()
@@ -1784,14 +1803,14 @@ public class BillingOccurrenceServiceImpl {
             List<BillingSchedule> existingSchedules,
             ConfigurationChangeDetector detector) {
         
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledSchedules.isEmpty()) {
-            retireScheduledOccurrences(scheduledSchedules);
-            log.info("Retired {} scheduled occurrences for frequency change in Fixed Price configuration",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for frequency change in Fixed Price configuration",
+                    replaceable.size());
         }
         
         generateOccurrencesForFixedPrice(configuration.getBillingConfigurationId());
@@ -1803,14 +1822,14 @@ public class BillingOccurrenceServiceImpl {
             List<BillingSchedule> existingSchedules,
             ConfigurationChangeDetector detector) {
         
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledSchedules.isEmpty()) {
-            retireScheduledOccurrences(scheduledSchedules);
-            log.info("Retired {} scheduled occurrences for frequency change in Recurring configuration",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for frequency change in Recurring configuration",
+                    replaceable.size());
         }
         
         generateRecurringTerm(configuration, recurring);
@@ -1985,16 +2004,45 @@ public class BillingOccurrenceServiceImpl {
     }
 
     /**
-     * Retires SCHEDULED occurrences that reconciliation replaces. They are
-     * deactivated, not deleted: a regenerated period with the same dates
-     * reactivates the same row ({@link #persistOccurrencesIdempotently}), so
-     * the occurrence keeps its identity and any automatic billing run that
-     * refers to it stays linked - re-creating it under a new id would make
-     * its run's period key ({@code uk_automatic_billing_run_period}) collide.
-     * A period that is not regenerated stays inactive and is never billed.
+     * Whether reconciliation may replace an occurrence with the corrected
+     * plan: active and not billed, and either SCHEDULED or TAX_PENDING (due,
+     * tax not yet calculated - no completed tax calculation exists). A
+     * tax-calculated or invoiced occurrence is final and only changes through
+     * the Finance correction process.
      */
-    private void retireScheduledOccurrences(List<BillingSchedule> occurrences) {
-        occurrences.forEach(occurrence -> occurrence.setIsActive(false));
+    private boolean isReplaceable(BillingSchedule schedule) {
+        if (!Boolean.TRUE.equals(schedule.getIsActive()) || isBilled(schedule)) {
+            return false;
+        }
+        if (schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED) {
+            return true;
+        }
+        return schedule.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING
+                && taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId())
+                        .map(tax -> tax.getStatus() != com.AccountReceivableManagement.entity_enums.tax_calculation
+                                .TaxCalculationStatus.CALCULATED)
+                        .orElse(true);
+    }
+
+    /**
+     * Retires the unbilled occurrences reconciliation replaces. They are
+     * deactivated, not deleted: a regenerated period with the same dates
+     * reactivates the same row ({@link #persistOccurrencesIdempotently}) with
+     * the corrected amount, so the occurrence keeps its identity and any
+     * automatic billing run that refers to it stays linked - re-creating it
+     * under a new id would make its run's period key
+     * ({@code uk_automatic_billing_run_period}) collide. A period that is not
+     * regenerated stays inactive and is never billed. A TAX_PENDING
+     * occurrence's leftover (never completed) tax record is removed, so tax
+     * is calculated on the corrected amount and no stale result is reused.
+     */
+    private void retireReplaceableOccurrences(List<BillingSchedule> occurrences) {
+        for (BillingSchedule occurrence : occurrences) {
+            if (occurrence.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING) {
+                taxCalculationRepository.deleteByBillingScheduleId(occurrence.getBillingScheduleId());
+            }
+            occurrence.setIsActive(false);
+        }
         billingScheduleRepository.saveAll(occurrences);
         billingScheduleRepository.flush();
     }
@@ -2004,14 +2052,14 @@ public class BillingOccurrenceServiceImpl {
             BillingFixedPriceConfiguration fixedPrice,
             List<BillingSchedule> existingSchedules) {
         
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledSchedules.isEmpty()) {
-            retireScheduledOccurrences(scheduledSchedules);
-            log.info("Retired {} scheduled occurrences for Effective To change in Fixed Price configuration",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for Effective To change in Fixed Price configuration",
+                    replaceable.size());
         }
         
         generateOccurrencesForFixedPrice(configuration.getBillingConfigurationId());
@@ -2022,14 +2070,14 @@ public class BillingOccurrenceServiceImpl {
             BillingRecurringConfiguration recurring,
             List<BillingSchedule> existingSchedules) {
         
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledSchedules.isEmpty()) {
-            retireScheduledOccurrences(scheduledSchedules);
-            log.info("Retired {} scheduled occurrences for Effective To change in Recurring configuration",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for Effective To change in Recurring configuration",
+                    replaceable.size());
         }
         
         generateRecurringTerm(configuration, recurring);
@@ -2050,21 +2098,31 @@ public class BillingOccurrenceServiceImpl {
         List<BillingSchedule> existingSchedules = billingScheduleRepository
                 .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration);
 
-        // For milestone plans, we regenerate all SCHEDULED occurrences when the plan is updated
-        // This is simpler than trying to detect individual changes since milestone plans
-        // can have varying numbers of entries
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        // For milestone plans, all SCHEDULED occurrences are regenerated when the plan is
+        // updated (plans can have varying numbers of entries). A due TAX_PENDING occurrence is
+        // regenerated only when its payment entry changed (amount, date or removed), so it is
+        // billed at the plan's current value; an unchanged one is left as it is.
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
+                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED || !matchesPaymentEntry(s, entries))
                 .toList();
 
-        if (!scheduledSchedules.isEmpty()) {
-            retireScheduledOccurrences(scheduledSchedules);
-            log.info("Retired {} scheduled occurrences for Milestone Plan configuration update",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for Milestone Plan configuration update",
+                    replaceable.size());
         }
 
         // Generate new occurrences from milestone plan entries
         generateOccurrencesForMilestonePlan(configuration, milestonePlan, entries);
+    }
+
+    /** Whether the occurrence is still exactly what its payment entry generates (sequence, date, amount). */
+    private static boolean matchesPaymentEntry(BillingSchedule occurrence, List<BillingPaymentEntry> entries) {
+        return entries.stream().anyMatch(entry -> java.util.Objects.equals(entry.getSequence(), occurrence.getPeriodNumber())
+                && java.util.Objects.equals(entry.getBillingDate(), occurrence.getBillingDate())
+                && entry.getAmount() != null && occurrence.getBillingAmount() != null
+                && entry.getAmount().compareTo(occurrence.getBillingAmount()) == 0);
     }
 
     public void generateOccurrencesForMilestonePlan(

@@ -814,6 +814,325 @@ class FinancialIntegrityRegressionTest {
         }
     }
 
+    // ================================================================ D: TAX_PENDING regeneration
+
+    @Nested
+    class D_TaxPendingRegeneration {
+
+        private BillingConfiguration configuration;
+        private LocalDate start;
+        private BillingSchedule billed;
+        private BillingSchedule taxPending;
+
+        /** 300,000 over three past months: approval makes all three TAX_PENDING; the first is then invoiced. */
+        @BeforeEach
+        void dueFixedPrice() {
+            start = today.minusMonths(5).withDayOfMonth(1);
+            configuration = fixedPrice("300000.00", monthly, start, 3);
+            List<BillingSchedule> periods = active(configuration);
+            assertThat(periods).allSatisfy(p -> assertThat(p.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING));
+            billed = periods.get(0);
+            taxPending = periods.get(1);
+            markInvoiced(billed);
+        }
+
+        /** A tax record that never completed, left on the TAX_PENDING occurrence. */
+        private void leaveFailedTaxRecord(BillingSchedule occurrence) {
+            tx.executeWithoutResult(status -> taxCalculationRepository.save(
+                    com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation.builder()
+                            .billingScheduleId(occurrence.getBillingScheduleId())
+                            .taxRegionId(karnataka.getTaxRegionId())
+                            .taxConfigurationId(UUID.randomUUID())
+                            .taxableAmount(occurrence.getBillingAmount())
+                            .totalTaxAmount(new BigDecimal("18000.00"))
+                            .grandTotal(occurrence.getBillingAmount().add(new BigDecimal("18000.00")))
+                            .status(com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus.FAILED)
+                            .calculatedAt(LocalDateTime.now())
+                            .build()));
+        }
+
+        private void extendByOneMonth() {
+            updateConfiguration(configuration, c -> c.setEffectiveTo(start.plusMonths(4).minusDays(1)));
+            reapprove(configuration);
+        }
+
+        @Test
+        void eligibleTaxPendingOccurrence_isRecalculatedInPlace_andItsStaleTaxRecordIsNotReused() {
+            leaveFailedTaxRecord(taxPending);
+
+            extendByOneMonth();
+
+            BillingSchedule after = scheduleRepository.findById(taxPending.getBillingScheduleId()).orElseThrow();
+            assertThat(after.getIsActive()).isTrue();
+            assertThat(after.getBillingAmount()).isEqualByComparingTo("66666.67");
+            assertThat(after.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
+            assertThat(taxCalculationRepository.existsByBillingScheduleId(taxPending.getBillingScheduleId())).isFalse();
+            // Tax is calculated on the corrected amount.
+            assertThat(taxCalculationService.calculateTaxForSchedule(taxPending.getBillingScheduleId()).getTaxableAmount())
+                    .isEqualByComparingTo("66666.67");
+            // Billed + re-planned allocation is exactly the contract; the invoiced period is untouched.
+            assertThat(sum(amountsById(configuration))).isEqualByComparingTo("300000.00");
+            BillingSchedule invoiced = scheduleRepository.findById(billed.getBillingScheduleId()).orElseThrow();
+            assertThat(invoiced.getBillingAmount()).isEqualByComparingTo("100000.00");
+            assertThat(invoiced.getPeriodStatus()).isEqualTo(BillingPeriodStatus.INVOICED);
+        }
+
+        @Test
+        void repeatedReconciliation_producesTheSameResult_withoutDuplicateRuns() {
+            UUID runId = saveFailedRun(configuration, taxPending.getBillingScheduleId(),
+                    taxPending.getPeriodStartDate(), taxPending.getPeriodEndDate(), AutomaticBillingStep.TAX_CALCULATION);
+            extendByOneMonth();
+            Map<UUID, BigDecimal> first = amountsById(configuration);
+
+            reapprove(configuration);
+            reapprove(configuration);
+
+            assertThat(amountsById(configuration)).isEqualTo(first);
+            assertThat(first).hasSize(4);
+            assertThat(runRepository.count()).isEqualTo(1);
+            assertThat(runRepository.findById(runId).orElseThrow().getBillingScheduleId())
+                    .isEqualTo(taxPending.getBillingScheduleId());
+        }
+
+        @Test
+        void taxCalculatedOccurrence_isFinal_andTheRemainderIsReallocatedAroundIt() {
+            taxCalculationService.calculateTaxForSchedule(taxPending.getBillingScheduleId());
+
+            extendByOneMonth();
+
+            BillingSchedule taxed = scheduleRepository.findById(taxPending.getBillingScheduleId()).orElseThrow();
+            assertThat(taxed.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_CALCULATED);
+            assertThat(taxed.getBillingAmount()).isEqualByComparingTo("100000.00");
+            assertThat(active(configuration).subList(2, 4)).extracting(BillingSchedule::getBillingAmount)
+                    .usingElementComparator(BigDecimal::compareTo)
+                    .containsExactly(new BigDecimal("50000.00"), new BigDecimal("50000.00"));
+            assertThat(sum(amountsById(configuration))).isEqualByComparingTo("300000.00");
+        }
+
+        @Test
+        void dueMilestoneOccurrence_isRepricedInPlace_whenItsPaymentEntryChanged() {
+            BillingConfiguration milestones = milestonePlan(today.minusMonths(1), today.minusDays(3));
+            BillingSchedule first = active(milestones).get(0);
+            assertThat(first.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
+            jdbc.update("UPDATE billing_payment_entry SET amount = 150000 WHERE sequence = 1");
+            jdbc.update("UPDATE billing_payment_entry SET amount = 150000 WHERE sequence = 2");
+
+            reapprove(milestones);
+
+            BillingSchedule after = scheduleRepository.findById(first.getBillingScheduleId()).orElseThrow();
+            assertThat(after.getIsActive()).isTrue();
+            assertThat(after.getBillingAmount()).isEqualByComparingTo("150000.00");
+            assertThat(after.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
+            assertThat(active(milestones)).hasSize(2);
+            // Billable at the plan's current value (the shared checks accept it).
+            occurrenceService.requireOccurrenceBillable(first.getBillingScheduleId());
+        }
+
+        @Test
+        void failedReconciliation_leavesTheTaxPendingOccurrenceAndItsRecordIntact() {
+            leaveFailedTaxRecord(taxPending);
+            Map<UUID, BigDecimal> before = amountsById(configuration);
+
+            updateFixedPrice(configuration, fp -> fp.setContractValue(new BigDecimal("360000.00")));
+            assertThatThrownBy(() -> reapprove(configuration))
+                    .isInstanceOf(GlobalExceptionHandler.ValidationException.class);
+
+            assertThat(amountsById(configuration)).isEqualTo(before);
+            assertThat(taxCalculationRepository.existsByBillingScheduleId(taxPending.getBillingScheduleId())).isTrue();
+            assertThat(scheduleRepository.findById(taxPending.getBillingScheduleId()).orElseThrow().getIsActive())
+                    .isTrue();
+        }
+    }
+
+    // ================================================================ E: re-approval re-queueing
+
+    @Nested
+    class E_ReapprovalRequeue {
+
+        private BillingConfiguration configuration;
+        private List<BillingSchedule> periods;
+
+        @BeforeEach
+        void futureFixedPrice() {
+            configuration = fixedPrice("300000.00", monthly, futureMonthStart(), 3);
+            periods = active(configuration);
+        }
+
+        @Test
+        void runThatFailedAtABillingStep_onAnUnchangedOccurrence_isNotRetriedBlindly() {
+            BillingSchedule occurrence = periods.get(1);
+            UUID runId = saveFailedRun(configuration, occurrence.getBillingScheduleId(), occurrence.getPeriodStartDate(),
+                    occurrence.getPeriodEndDate(), AutomaticBillingStep.TAX_CALCULATION);
+
+            reapprove(configuration);
+
+            assertThat(runRepository.findById(runId).orElseThrow().getNextRetryAt()).isNull();
+        }
+
+        @Test
+        void runThatFailedOnEligibility_isRequeued_keepingItsFailureHistory() {
+            BillingSchedule occurrence = periods.get(1);
+            UUID runId = saveFailedRun(configuration, occurrence.getBillingScheduleId(), occurrence.getPeriodStartDate(),
+                    occurrence.getPeriodEndDate(), null);
+
+            reapprove(configuration);
+            reapprove(configuration);
+
+            AutomaticBillingRun run = runRepository.findById(runId).orElseThrow();
+            assertThat(run.getNextRetryAt()).isNotNull();
+            assertThat(run.getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+            assertThat(run.getFailureReason()).isEqualTo("test failure");
+            assertThat(run.getFailedAt()).isNotNull();
+            assertThat(run.getAttemptCount()).isEqualTo(1);
+            assertThat(runRepository.count()).isEqualTo(1);
+        }
+
+        @Test
+        void runOfABilledOccurrence_isNeverRequeued() {
+            BillingSchedule occurrence = periods.get(0);
+            UUID runId = saveFailedRun(configuration, occurrence.getBillingScheduleId(), occurrence.getPeriodStartDate(),
+                    occurrence.getPeriodEndDate(), null);
+            markInvoiced(occurrence);
+
+            updateConfiguration(configuration, c -> c.setEffectiveTo(c.getEffectiveTo().plusMonths(1)));
+            reapprove(configuration);
+
+            assertThat(runRepository.findById(runId).orElseThrow().getNextRetryAt()).isNull();
+            assertThat(runRepository.count()).isEqualTo(1);
+        }
+    }
+
+    // ================================================================ F: concurrent re-approval
+
+    @Nested
+    class F_ConcurrentReapproval {
+
+        @Test
+        void twoConcurrentApprovals_neverDuplicateOccurrences_orApplyTheContractTwice() throws Exception {
+            LocalDate start = futureMonthStart();
+            BillingConfiguration configuration = fixedPrice("300000.00", monthly, start, 3);
+            BillingSchedule second = active(configuration).get(1);
+            UUID runId = saveFailedRun(configuration, second.getBillingScheduleId(), second.getPeriodStartDate(),
+                    second.getPeriodEndDate(), null);
+            // An edit awaiting approval that adds a fourth period (an insert both approvals would make).
+            updateConfiguration(configuration, c -> {
+                c.setEffectiveTo(start.plusMonths(4).minusDays(1));
+                c.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+            });
+            UUID id = configuration.getBillingConfigurationId();
+            lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
+
+            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+            List<java.util.concurrent.Future<String>> outcomes = new ArrayList<>();
+            try {
+                for (int i = 0; i < 2; i++) {
+                    outcomes.add(pool.submit(() -> {
+                        go.await();
+                        try {
+                            configurationService.approve(id);
+                            return "approved";
+                        } catch (RuntimeException ex) {
+                            return "refused: " + ex.getClass().getSimpleName();
+                        }
+                    }));
+                }
+                go.countDown();
+                List<String> results = new ArrayList<>();
+                for (java.util.concurrent.Future<String> outcome : outcomes) {
+                    results.add(outcome.get(60, java.util.concurrent.TimeUnit.SECONDS));
+                }
+                System.out.println("[ConcurrentReapproval] outcomes=" + results);
+                assertThat(results).contains("approved");
+            } finally {
+                pool.shutdownNow();
+                lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
+            }
+
+            assertThat(approvalStatus(configuration)).isEqualTo(ApprovalStatus.APPROVED);
+            List<BillingSchedule> after = active(configuration);
+            assertThat(after).hasSize(4);
+            assertThat(after.stream().map(p -> p.getPeriodStartDate() + "|" + p.getPeriodEndDate()).distinct())
+                    .hasSize(4);
+            assertThat(allOccurrences(configuration).stream()
+                    .map(p -> p.getPeriodStartDate() + "|" + p.getPeriodEndDate()).distinct()).hasSize(4);
+            assertThat(sum(amountsById(configuration))).isEqualByComparingTo("300000.00");
+            assertThat(after).extracting(BillingSchedule::getBillingScheduleId).contains(second.getBillingScheduleId());
+            assertThat(runRepository.count()).isEqualTo(1);
+            assertThat(runRepository.findById(runId).orElseThrow().getBillingScheduleId())
+                    .isEqualTo(second.getBillingScheduleId());
+        }
+    }
+
+    @Nested
+    class F_OverlappingReconciliation {
+
+        /**
+         * Deterministic overlap: transaction A reconciles and keeps its
+         * changes uncommitted for a moment while transaction B reconciles the
+         * same configuration from the committed (old) state. B's writes wait
+         * for A's row locks; afterwards B either fails and rolls back, or
+         * converges on the same schedule - never a second copy.
+         */
+        @Test
+        void overlappingReconciliations_leaveExactlyOneSchedule() throws Exception {
+            LocalDate start = futureMonthStart();
+            BillingConfiguration configuration = fixedPrice("300000.00", monthly, start, 3);
+            UUID id = configuration.getBillingConfigurationId();
+            updateConfiguration(configuration, c -> c.setEffectiveTo(start.plusMonths(4).minusDays(1)));
+
+            java.util.concurrent.CountDownLatch aReconciled = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+            try {
+                java.util.concurrent.Future<String> a = pool.submit(() -> {
+                    try {
+                        tx.executeWithoutResult(status -> {
+                            occurrenceService.reconcileOccurrencesOnConfigurationUpdate(id);
+                            scheduleRepository.flush();
+                            aReconciled.countDown();
+                            sleep(1500); // B now reads the old state and waits for these locks
+                        });
+                        return "A committed";
+                    } catch (RuntimeException ex) {
+                        return "A refused: " + ex.getClass().getSimpleName();
+                    } finally {
+                        aReconciled.countDown();
+                    }
+                });
+                java.util.concurrent.Future<String> b = pool.submit(() -> {
+                    aReconciled.await();
+                    try {
+                        tx.executeWithoutResult(status -> occurrenceService.reconcileOccurrencesOnConfigurationUpdate(id));
+                        return "B committed";
+                    } catch (RuntimeException ex) {
+                        return "B refused: " + ex.getClass().getSimpleName();
+                    }
+                });
+                String outcomeA = a.get(60, java.util.concurrent.TimeUnit.SECONDS);
+                String outcomeB = b.get(60, java.util.concurrent.TimeUnit.SECONDS);
+                System.out.println("[OverlappingReconciliation] " + outcomeA + ", " + outcomeB);
+                assertThat(outcomeA).isEqualTo("A committed");
+            } finally {
+                pool.shutdownNow();
+            }
+
+            List<BillingSchedule> after = active(configuration);
+            assertThat(after).hasSize(4);
+            assertThat(allOccurrences(configuration).stream()
+                    .map(p -> p.getPeriodStartDate() + "|" + p.getPeriodEndDate()).distinct()).hasSize(4);
+            assertThat(allOccurrences(configuration)).hasSize(4);
+            assertThat(sum(amountsById(configuration))).isEqualByComparingTo("300000.00");
+        }
+
+        private void sleep(long millis) {
+            try {
+                Thread.sleep(millis);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
     // ================================================================ fixtures
 
     private static final class YearMonthHelper {
@@ -978,14 +1297,21 @@ class FinancialIntegrityRegressionTest {
     }
 
     private UUID saveFailedRun(BillingConfiguration configuration, UUID occurrenceId, LocalDate start, LocalDate end) {
+        return saveFailedRun(configuration, occurrenceId, start, end, AutomaticBillingStep.SOURCE_DATA_ACQUISITION);
+    }
+
+    /** A FAILED run with no automatic retry left; {@code failureStep} null = failed before any billing step. */
+    private UUID saveFailedRun(BillingConfiguration configuration, UUID occurrenceId, LocalDate start, LocalDate end,
+            AutomaticBillingStep failureStep) {
         return tx.execute(status -> runRepository.save(AutomaticBillingRun.builder()
                 .billingConfiguration(configurationRepository.getReferenceById(configuration.getBillingConfigurationId()))
                 .billingScheduleId(occurrenceId)
                 .billingPeriodStart(start)
                 .billingPeriodEnd(end)
                 .status(AutomaticBillingRunStatus.FAILED)
-                .failureStep(AutomaticBillingStep.SOURCE_DATA_ACQUISITION)
+                .failureStep(failureStep)
                 .failureReason("test failure")
+                .failedAt(LocalDateTime.now())
                 .attemptCount(1)
                 .build()).getAutomaticBillingRunId());
     }

@@ -1154,8 +1154,12 @@ class BillingOccurrenceServiceImplTest {
         BillingMilestonePlan plan = milestonePlan();
         LocalDate date = LocalDate.of(2026, 10, 15);
         BillingPaymentEntry entry = paymentEntry(plan, 1, date, "5000");
+        // The occurrence payment 1 generated (as persisted: sequence, date and amount are NOT NULL).
         BillingSchedule taxPending = BillingSchedule.builder()
                 .isActive(true)
+                .periodNumber(1)
+                .billingDate(date)
+                .billingAmount(new BigDecimal("5000"))
                 .periodStatus(BillingPeriodStatus.TAX_PENDING)
                 .build();
 
