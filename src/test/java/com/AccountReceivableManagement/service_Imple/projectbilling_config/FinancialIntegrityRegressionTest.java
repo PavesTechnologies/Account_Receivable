@@ -110,6 +110,7 @@ import static org.mockito.Mockito.when;
         "ar.security.authorization.configuration-approval-authorities=ROLE_FINANCE_MANAGER",
         "ar.security.authorization.invoice-approval-authorities=ROLE_FINANCE_MANAGER",
         "ar.security.authorization.invoice-delivery-authorities=ROLE_FINANCE_MANAGER",
+        "ar.security.authorization.operations-recovery-authorities=ROLE_FINANCE_MANAGER",
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost/test-issuer"
 })
 @ActiveProfiles("test")
@@ -147,6 +148,8 @@ class FinancialIntegrityRegressionTest {
     @Autowired private BillingScheduleRepository scheduleRepository;
     @Autowired private TaxCalculationRepository taxCalculationRepository;
     @Autowired private AutomaticBillingRunRepository runRepository;
+    @Autowired private com.AccountReceivableManagement.service_Imple.tax_calculation.TaxRecalculationRecoveryService
+            taxRecalculation;
 
     private TransactionTemplate tx;
     private final LocalDate today = LocalDate.now();
@@ -431,6 +434,105 @@ class FinancialIntegrityRegressionTest {
                     .isInstanceOf(GlobalExceptionHandler.ValidationException.class);
             assertThat(scheduleRepository.findById(occurrence.getBillingScheduleId()).orElseThrow().getIsInvoiced())
                     .isFalse();
+        }
+    }
+
+    // ================================================================ BD-07 stale tax recovery
+
+    /**
+     * G-12 refuses to invoice an occurrence whose configuration currency or tax
+     * region changed after its tax was calculated; an authorized operator can
+     * recalculate it (old calculation kept as superseded history).
+     */
+    @Nested
+    class StaleTaxRecalculation {
+
+        private BillingConfiguration configuration;
+        private BillingSchedule occurrence;
+
+        @BeforeEach
+        void taxedOccurrence() {
+            configuration = fixedPrice("300000.00", monthly, today.minusMonths(4).withDayOfMonth(1), 3);
+            occurrence = active(configuration).get(0);
+            taxCalculationService.calculateTaxForSchedule(occurrence.getBillingScheduleId());
+        }
+
+        private void currencyChangesTo(String code) {
+            CurrencyMaster other = tx.execute(status -> currencyRepository.save(CurrencyMaster.builder()
+                    .currencyCode(code).currencyName(code).currencySymbol(code).isActive(true).build()));
+            updateConfiguration(configuration, c -> c.setCurrency(other));
+        }
+
+        @Test
+        void currencyChanged_blocksInvoicing_untilAnAuthorizedRecalculation_keepingTheOldCalculation() {
+            UUID id = occurrence.getBillingScheduleId();
+            UUID oldCalculationId = taxCalculationRepository.findByBillingScheduleId(id).orElseThrow()
+                    .getTaxCalculationId();
+            currencyChangesTo("USD");
+
+            assertThatThrownBy(() -> invoiceService.generateInvoiceForSchedule(id))
+                    .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                    .hasMessageContaining("currency changed from INR to USD");
+
+            actAs(APPROVER);
+            var result = taxRecalculation.recalculateStaleTax(id, "Contract re-signed in USD");
+            actAs(MAKER);
+
+            assertThat(result.isAccepted()).isTrue();
+            var current = taxCalculationRepository.findByBillingScheduleId(id).orElseThrow();
+            assertThat(current.getTaxCalculationId()).isNotEqualTo(oldCalculationId);
+            assertThat(current.getCurrencyCode()).isEqualTo("USD");
+            var superseded = taxCalculationRepository.findById(oldCalculationId).orElseThrow();
+            assertThat(superseded.getBillingScheduleId()).isNull();
+            assertThat(superseded.getSupersededBillingScheduleId()).isEqualTo(id);
+            assertThat(superseded.getSupersededByUserId()).isEqualTo(APPROVER.getId());
+            assertThat(superseded.getSupersededReason()).isEqualTo("Contract re-signed in USD");
+            assertThat(superseded.getCurrencyCode()).isEqualTo("INR");
+
+            var invoice = invoiceService.generateInvoiceForSchedule(id);
+            assertThat(invoice.getCurrencyCode()).isEqualTo("USD");
+        }
+
+        @Test
+        void calculationThatStillMatches_isNotRecalculated() {
+            UUID id = occurrence.getBillingScheduleId();
+            UUID calculationId = taxCalculationRepository.findByBillingScheduleId(id).orElseThrow()
+                    .getTaxCalculationId();
+
+            actAs(APPROVER);
+            var result = taxRecalculation.recalculateStaleTax(id, "check");
+            actAs(MAKER);
+
+            assertThat(result.isAccepted()).isFalse();
+            assertThat(result.getMessage()).contains("nothing to recalculate");
+            assertThat(taxCalculationRepository.findByBillingScheduleId(id).orElseThrow().getTaxCalculationId())
+                    .isEqualTo(calculationId);
+        }
+
+        @Test
+        void invoicedOccurrence_isNeverRecalculated() {
+            UUID id = occurrence.getBillingScheduleId();
+            invoiceService.generateInvoiceForSchedule(id);
+            currencyChangesTo("EUR");
+
+            actAs(APPROVER);
+            var result = taxRecalculation.recalculateStaleTax(id, "late change");
+            actAs(MAKER);
+
+            assertThat(result.isAccepted()).isFalse();
+            assertThat(result.getMessage()).contains("already invoiced");
+            assertThat(taxCalculationRepository.findByBillingScheduleId(id).orElseThrow().getCurrencyCode())
+                    .isEqualTo("INR");
+        }
+
+        @Test
+        void callerWithoutRecoveryAuthority_isRefused() {
+            currencyChangesTo("USD");
+
+            assertThatThrownBy(() -> taxRecalculation.recalculateStaleTax(occurrence.getBillingScheduleId(), "x"))
+                    .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+            assertThat(taxCalculationRepository.findByBillingScheduleId(occurrence.getBillingScheduleId()))
+                    .isPresent();
         }
     }
 

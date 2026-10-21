@@ -35,13 +35,11 @@ public class ClientDebeziumConfig {
         // Validate required properties
         validateClientCdcProperties();
 
+        // Hosts, ports, JDBC URLs and usernames are not logged (G-31).
         log.info("Connector Name              : {}", clientCdcProperties.getConnectorName());
         log.info("Connector Class             : {}", clientCdcProperties.getConnectorClass());
 
-        log.info("RMS Host                    : {}", clientCdcProperties.getHostname());
-        log.info("RMS Port                    : {}", clientCdcProperties.getPort());
         log.info("RMS Database                : {}", clientCdcProperties.getDatabaseName());
-        log.info("RMS Username                : {}", clientCdcProperties.getUsername());
 
         log.info("Topic Prefix                : {}", clientCdcProperties.getTopicPrefix());
 
@@ -57,8 +55,6 @@ public class ClientDebeziumConfig {
         log.info("------------------------------------------------------");
         log.info("AR Database (Offset Storage)");
         log.info("------------------------------------------------------");
-        log.info("AR JDBC URL                 : {}", arJdbcUrl);
-        log.info("AR Username                 : {}", arUsername);
 
         log.info("Offset Table                : {}", clientCdcProperties.getOffsetTable());
         log.info("Schema History Table        : {}", clientCdcProperties.getSchemaHistoryTable());

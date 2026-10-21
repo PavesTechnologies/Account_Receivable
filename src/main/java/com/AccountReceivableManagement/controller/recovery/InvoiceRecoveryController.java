@@ -34,6 +34,21 @@ public class InvoiceRecoveryController {
 
     private final InvoiceDeliveryService invoiceDeliveryService;
     private final ReceivableRecoveryService receivableRecoveryService;
+    private final com.AccountReceivableManagement.service_Imple.tax_calculation.TaxRecalculationRecoveryService
+            taxRecalculationRecoveryService;
+
+    /**
+     * BD-07: recalculate the tax of an un-invoiced occurrence whose
+     * configuration currency or tax region changed after tax was calculated
+     * (invoicing is refused until then). The old calculation is kept as
+     * superseded history.
+     */
+    @PostMapping("/billing-occurrences/{occurrenceId}/recalculate-tax")
+    public ResponseEntity<ApiResponse<RecoveryResultDto>> recalculateStaleTax(@PathVariable UUID occurrenceId,
+            @Valid @RequestBody RecoveryRequestDto request) {
+        return AutomaticBillingRunRecoveryController.respond(
+                taxRecalculationRecoveryService.recalculateStaleTax(occurrenceId, request.getReason()));
+    }
 
     /** Create the missing receivable of a sent invoice (never re-sends it). */
     @PostMapping("/invoices/{invoiceId}/receivable")

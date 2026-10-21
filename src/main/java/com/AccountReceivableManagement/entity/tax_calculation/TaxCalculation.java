@@ -136,6 +136,28 @@ public class TaxCalculation {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /**
+     * Set when an authorized recalculation replaced this calculation because
+     * the occurrence's currency or tax region changed before it was invoiced
+     * (BD-07 recovery). The row is kept as history: its billing_schedule_id
+     * moves to {@code supersededBillingScheduleId}, so the occurrence can get
+     * a new calculation without losing the old figures.
+     */
+    @Column(name = "superseded_at")
+    private LocalDateTime supersededAt;
+
+    @Column(name = "superseded_billing_schedule_id")
+    private UUID supersededBillingScheduleId;
+
+    @Column(name = "superseded_by", length = 100)
+    private String supersededBy;
+
+    @Column(name = "superseded_by_user_id")
+    private Long supersededByUserId;
+
+    @Column(name = "superseded_reason", length = 500)
+    private String supersededReason;
+
     @PrePersist
     public void prePersist() {
 
