@@ -1149,6 +1149,8 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                     "Effective From cannot be after Effective To.");
         }
 
+        validateRenewalTerm(originalRecurring, originalConfiguration, newEffectiveFrom, newEffectiveTo);
+
         // For product/service context, update product name/description if provided
         if (originalConfiguration.getBillingContext() == BillingContext.PRODUCT_SERVICE) {
             if (request.getProductName() != null) {
@@ -1208,6 +1210,46 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
+    }
+
+    /**
+     * A term is renewed once, and the renewal term overlaps no active
+     * recurring term of the same billing configuration - an overlapping
+     * period would be billed by both terms. Checked before anything is
+     * written; renew() is transactional, so a refusal leaves no partial state.
+     */
+    private void validateRenewalTerm(
+            BillingRecurringConfiguration originalRecurring,
+            BillingConfiguration configuration,
+            LocalDate newEffectiveFrom,
+            LocalDate newEffectiveTo) {
+
+        billingRecurringRepository.findByRenewedFrom(originalRecurring).stream()
+                .filter(renewal -> Boolean.TRUE.equals(renewal.getIsActive()))
+                .findFirst()
+                .ifPresent(renewal -> {
+                    throw new GlobalExceptionHandler.ValidationException(
+                            "Recurring configuration " + originalRecurring.getRecurringConfigurationId()
+                                    + " has already been renewed (renewal "
+                                    + renewal.getRecurringConfigurationId() + ", "
+                                    + renewal.getRecurringStartDate() + " to " + renewal.getRecurringEndDate()
+                                    + "); renew that configuration instead.");
+                });
+
+        for (BillingRecurringConfiguration term
+                : billingRecurringRepository.findAllByBillingConfigurationAndIsActiveTrue(configuration)) {
+            LocalDate termStart = term.getRecurringStartDate() != null
+                    ? term.getRecurringStartDate() : configuration.getEffectiveFrom();
+            LocalDate termEnd = term.getRecurringEndDate() != null
+                    ? term.getRecurringEndDate() : configuration.getEffectiveTo();
+            if (termStart != null && termEnd != null
+                    && !newEffectiveFrom.isAfter(termEnd) && !newEffectiveTo.isBefore(termStart)) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "The renewal term " + newEffectiveFrom + " to " + newEffectiveTo
+                                + " overlaps the recurring term " + termStart + " to " + termEnd
+                                + "; a renewal must start after the term it renews ends.");
+            }
+        }
     }
 
     private void validateRenewalEligibility(
