@@ -257,7 +257,9 @@ class OperationsMonitoringAndReconciliationTest {
         Pipeline pipeline = billFixedPriceAndProcessInvoices();
         Invoice sent = pipeline.sent;
 
-        deliveryService.sendInvoice(sent.getInvoiceId()); // second delivery of the same invoice
+        // A second ordinary delivery of the same invoice is refused (G-19).
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> deliveryService.sendInvoice(sent.getInvoiceId()))
+                .hasMessageContaining("already been sent");
 
         List<Receivable> receivables = receivableRepository.findAll().stream()
                 .filter(r -> r.getInvoice().getInvoiceId().equals(sent.getInvoiceId())).toList();

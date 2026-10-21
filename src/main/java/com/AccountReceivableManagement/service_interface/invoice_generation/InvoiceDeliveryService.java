@@ -8,21 +8,25 @@ import java.util.UUID;
 public interface InvoiceDeliveryService {
 
     /**
-     * Sends the given invoice to its client by email, with the generated
-     * invoice PDF attached. Requires the invoice to be {@code APPROVED},
-     * to have a non-blank recipient email, and an active
-     * {@code CompanyProfile} to exist - each precondition failure throws
-     * before any {@code InvoiceDelivery} row is created. Once those
-     * preconditions pass, a {@code PENDING} row is persisted first, and the
-     * attempt's outcome ({@code SENT} or {@code FAILED}) is always
-     * returned to the caller - a failed send never throws past this point
-     * and never leaves the delivery state ambiguous. {@link
-     * com.AccountReceivableManagement.entity.invoice_generation.Invoice#getStatus()}
-     * is never modified by this method. Once a {@code SENT} outcome has
-     * committed, the invoice's single {@code Receivable} is created in its
-     * own transaction (or reused on a resend); a failure there is logged and
-     * leaves the SENT record intact for recovery. A {@code FAILED} outcome
-     * creates no receivable.
+     * Sends a READY_TO_SEND invoice (approved, document stored) to its client
+     * by email, attaching its stored PDF. Requires INVOICE_DELIVERY.
+     * <p>
+     * An invoice is delivered at most once by this ordinary send (G-19): it
+     * is refused when a delivery of the invoice is SENT, PENDING or UNCERTAIN;
+     * allowed again only after every earlier attempt FAILED. The check and
+     * the PENDING intent are committed under the invoice's row lock, so of
+     * concurrent requests exactly one proceeds.
+     * <p>
+     * The email is sent outside any database transaction (G-20): the PENDING
+     * intent commits first, the SMTP call follows, and the outcome is
+     * recorded in its own transaction - SENT, FAILED (definitely not
+     * delivered) or UNCERTAIN (the server may have accepted it). A row left
+     * PENDING (outcome could not be recorded) is also treated as uncertain.
+     * Neither is ever re-sent automatically. Once SENT is recorded the
+     * invoice's single receivable is created; a failure there leaves SENT
+     * intact for reconciliation (G-21). Invoice status is never modified.
+     *
+     * @throws IllegalStateException if called inside a transaction
      */
     InvoiceDeliveryResponseDto sendInvoice(UUID invoiceId);
 
@@ -31,4 +35,15 @@ public interface InvoiceDeliveryService {
      * entry is the current delivery state.
      */
     List<InvoiceDeliveryResponseDto> getDeliveryHistory(UUID invoiceId);
+
+    /**
+     * Operator resolution of a delivery whose outcome is unknown (UNCERTAIN,
+     * or PENDING for longer than the in-flight timeout) after checking the
+     * sending mailbox: {@code SENT} (the receivable is then created) or
+     * {@code FAILED} (a new ordinary send becomes possible). Requires
+     * OPERATIONS_RECOVERY; recorded with actor and reason. Never sends email.
+     */
+    InvoiceDeliveryResponseDto resolveDelivery(UUID deliveryId,
+            com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus outcome,
+            String reason);
 }

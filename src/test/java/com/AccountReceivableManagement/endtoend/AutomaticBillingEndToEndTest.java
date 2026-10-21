@@ -401,11 +401,12 @@ class AutomaticBillingEndToEndTest {
         assertThat(receivable.getOutstandingBalance()).isEqualByComparingTo("118000.00");
         assertThat(receivable.getCurrencyCode()).isEqualTo("INR");
 
-        // 7. Repeated delivery: still one receivable.
-        deliveryService.sendInvoice(first.getInvoiceId());
+        // 7. Repeated delivery (G-19): refused - no second email, still one receivable.
+        assertThatThrownBy(() -> deliveryService.sendInvoice(first.getInvoiceId()))
+                .hasMessageContaining("already been sent");
         assertThat(receivableRepository.findAll().stream()
                 .filter(r -> r.getInvoice().getInvoiceId().equals(first.getInvoiceId()))).hasSize(1);
-        verify(emailService, times(2)).sendEmailWithAttachment(any(), any(), any(), any(), any(), any());
+        verify(emailService, times(1)).sendEmailWithAttachment(any(), any(), any(), any(), any(), any());
         assertThat(invoiceRepository.findById(first.getInvoiceId()).orElseThrow().getStatus())
                 .isEqualTo(InvoiceStatus.READY_TO_SEND);
     }

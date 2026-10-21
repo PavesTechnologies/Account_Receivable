@@ -101,10 +101,24 @@ class InvoiceDeliveryServiceImplTest {
                     InvoiceDelivery delivery = invocation.getArgument(0);
                     if (delivery.getInvoiceDeliveryId() == null) {
                         delivery.setInvoiceDeliveryId(UUID.randomUUID());
+                        delivery.setCreatedAt(LocalDateTime.now());
                     }
+                    deliveries.put(delivery.getInvoiceDeliveryId(), delivery);
                     return delivery;
                 });
+        lenient().when(invoiceDeliveryRepository.findById(any(UUID.class)))
+                .thenAnswer(invocation -> Optional.ofNullable(deliveries.get(invocation.<UUID>getArgument(0))));
+        lenient().when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(any(UUID.class), any()))
+                .thenAnswer(invocation -> deliveries.values().stream().anyMatch(d ->
+                        d.getInvoiceId().equals(invocation.getArgument(0))
+                                && d.getStatus() == invocation.getArgument(1)));
+        lenient().when(invoiceDeliveryRepository.existsByInvoiceIdAndStatusIn(any(UUID.class), any()))
+                .thenAnswer(invocation -> deliveries.values().stream().anyMatch(d ->
+                        d.getInvoiceId().equals(invocation.getArgument(0))
+                                && invocation.<java.util.Collection<?>>getArgument(1).contains(d.getStatus())));
     }
+
+    private final java.util.Map<UUID, InvoiceDelivery> deliveries = new java.util.LinkedHashMap<>();
 
     @AfterEach
     void tearDown() {
@@ -157,7 +171,8 @@ class InvoiceDeliveryServiceImplTest {
     /** The invoice exists, is READY_TO_SEND and its finalized document is stored. */
     private Invoice storedAndFinalized() {
         Invoice invoice = readyToSendInvoice();
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.findByIdForUpdate(invoiceId)).thenReturn(Optional.of(invoice));
+        lenient().when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
         lenient().when(invoiceService.getInvoiceById(invoiceId)).thenReturn(invoiceResponse(invoice));
         lenient().when(invoiceDocumentRepository.existsByInvoiceId(invoiceId)).thenReturn(true);
         lenient().when(invoiceDocumentRepository.findByInvoiceId(invoiceId)).thenReturn(Optional.of(
@@ -206,11 +221,9 @@ class InvoiceDeliveryServiceImplTest {
         assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.READY_TO_SEND);
         verify(invoiceRepository, never()).save(any());
 
-        // A SENT outcome creates the invoice's receivable - only once the SENT delivery has committed.
-        verifyNoInteractions(receivableService);
-        TransactionSynchronizationManager.getSynchronizations()
-                .forEach(TransactionSynchronization::afterCommit);
+        // A SENT outcome (recorded in its own transaction) creates the invoice's receivable.
         verify(receivableService).createReceivableFromInvoice(invoiceId);
+        assertThat(result.getRequestedBy()).isEqualTo("approver@example.com");
 
         ArgumentCaptor<InvoiceDelivery> captor = ArgumentCaptor.forClass(InvoiceDelivery.class);
         verify(invoiceDeliveryRepository, atLeastOnce()).save(captor.capture());
@@ -220,7 +233,7 @@ class InvoiceDeliveryServiceImplTest {
 
     @Test
     void sendInvoice_invoiceNotFound_throwsResourceNotFoundException() {
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.empty());
+        when(invoiceRepository.findByIdForUpdate(invoiceId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
                 .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class);
@@ -251,7 +264,7 @@ class InvoiceDeliveryServiceImplTest {
                 InvoiceStatus.REJECTED)) {
             Invoice invoice = readyToSendInvoice();
             invoice.setStatus(status);
-            when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+            when(invoiceRepository.findByIdForUpdate(invoiceId)).thenReturn(Optional.of(invoice));
 
             assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
                     .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
@@ -265,7 +278,7 @@ class InvoiceDeliveryServiceImplTest {
     void sendInvoice_approvedButDocumentNotGenerated_isNotSent() {
         Invoice invoice = readyToSendInvoice();
         invoice.setStatus(InvoiceStatus.APPROVED);
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.findByIdForUpdate(invoiceId)).thenReturn(Optional.of(invoice));
 
         assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
@@ -277,7 +290,7 @@ class InvoiceDeliveryServiceImplTest {
     @Test
     void sendInvoice_readyToSendWithoutStoredDocument_isNotSent() {
         Invoice invoice = readyToSendInvoice();
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.findByIdForUpdate(invoiceId)).thenReturn(Optional.of(invoice));
         when(invoiceDocumentRepository.existsByInvoiceId(invoiceId)).thenReturn(false);
 
         assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
@@ -290,7 +303,7 @@ class InvoiceDeliveryServiceImplTest {
     void sendInvoice_missingClientEmail_throwsValidationException() {
         Invoice invoice = readyToSendInvoice();
         invoice.setEmail(null);
-        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.findByIdForUpdate(invoiceId)).thenReturn(Optional.of(invoice));
         when(invoiceDocumentRepository.existsByInvoiceId(invoiceId)).thenReturn(true);
 
         assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
@@ -331,25 +344,151 @@ class InvoiceDeliveryServiceImplTest {
         assertThat(result.getSentAt()).isNull();
 
         // A FAILED delivery never creates a receivable.
-        TransactionSynchronizationManager.getSynchronizations()
-                .forEach(TransactionSynchronization::afterCommit);
         verifyNoInteractions(receivableService);
     }
 
+    // G-19: an invoice is delivered once. A second ordinary send is refused before
+    // anything is sent - no second email, no second delivery row, one receivable creation.
     @Test
-    void sendInvoice_repeated_reusesTheSameReceivableCreation() {
+    void sendInvoice_secondOrdinarySend_isRefused_noSecondEmail() {
         storedAndFinalized();
         emailSucceeds();
 
         invoiceDeliveryService.sendInvoice(invoiceId);
-        invoiceDeliveryService.sendInvoice(invoiceId);
-        TransactionSynchronizationManager.getSynchronizations()
-                .forEach(TransactionSynchronization::afterCommit);
+        assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("already been sent");
 
-        // Both go through the single, idempotent per-invoice receivable creation
-        // (ReceivableServiceImpl returns the existing receivable on a resend).
-        verify(receivableService, times(2)).createReceivableFromInvoice(invoiceId);
-        verify(receivableService, never()).createReceivableFromInvoice(argThat(id -> !invoiceId.equals(id)));
+        verify(emailService, times(1)).sendEmailWithAttachment(
+                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString());
+        verify(receivableService, times(1)).createReceivableFromInvoice(invoiceId);
+        assertThat(deliveries).hasSize(1);
+    }
+
+    // G-19: after a definite failure the invoice may be sent again.
+    @Test
+    void sendInvoice_afterAFailedAttempt_canBeSentAgain() {
+        storedAndFinalized();
+        when(emailService.sendEmailWithAttachment(
+                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString()))
+                .thenThrow(new EmailDeliveryException("Failed to send invoice email through the configured mail provider.",
+                        new java.net.ConnectException("Connection refused")))
+                .thenReturn("<message-id@gmail.com>");
+
+        assertThat(invoiceDeliveryService.sendInvoice(invoiceId).getDeliveryStatus())
+                .isEqualTo(InvoiceDeliveryStatus.FAILED);
+        assertThat(invoiceDeliveryService.sendInvoice(invoiceId).getDeliveryStatus())
+                .isEqualTo(InvoiceDeliveryStatus.SENT);
+        assertThat(deliveries.values()).extracting(InvoiceDelivery::getStatus)
+                .containsExactly(InvoiceDeliveryStatus.FAILED, InvoiceDeliveryStatus.SENT);
+    }
+
+    // G-19/G-20: a read timeout after the message was handed over may mean it was
+    // delivered - recorded UNCERTAIN, no receivable, and no further ordinary send.
+    @Test
+    void sendInvoice_smtpReadTimeout_isUncertain_andBlocksAnotherSend() {
+        storedAndFinalized();
+        when(emailService.sendEmailWithAttachment(
+                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString()))
+                .thenThrow(new EmailDeliveryException("Failed to send invoice email through the configured mail provider.",
+                        new RuntimeException(new java.net.SocketTimeoutException("Read timed out"))));
+
+        InvoiceDeliveryResponseDto result = invoiceDeliveryService.sendInvoice(invoiceId);
+
+        assertThat(result.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.UNCERTAIN);
+        verifyNoInteractions(receivableService);
+        assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("outcome is unknown");
+        verify(emailService, times(1)).sendEmailWithAttachment(
+                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString());
+    }
+
+    // G-20: the email left but recording SENT failed - the delivery stays PENDING
+    // (an unknown outcome), the caller is told not to resend, and a resend is refused.
+    @Test
+    void sendInvoice_outcomeCannotBeRecorded_staysPendingAndIsNotResent() {
+        storedAndFinalized();
+        emailSucceeds();
+        when(invoiceDeliveryRepository.save(any(InvoiceDelivery.class)))
+                .thenAnswer(invocation -> {
+                    InvoiceDelivery delivery = invocation.getArgument(0);
+                    if (delivery.getInvoiceDeliveryId() != null) {
+                        throw new org.springframework.dao.DataAccessResourceFailureException("database down");
+                    }
+                    delivery.setInvoiceDeliveryId(UUID.randomUUID());
+                    delivery.setCreatedAt(LocalDateTime.now());
+                    deliveries.put(delivery.getInvoiceDeliveryId(),
+                            InvoiceDelivery.builder().invoiceDeliveryId(delivery.getInvoiceDeliveryId())
+                                    .invoiceId(delivery.getInvoiceId()).recipientEmail(delivery.getRecipientEmail())
+                                    .status(delivery.getStatus()).createdAt(delivery.getCreatedAt()).build());
+                    return delivery;
+                });
+        // Like the database: a read returns a copy, so a failed save leaves the row as it was.
+        when(invoiceDeliveryRepository.findById(any(UUID.class))).thenAnswer(invocation ->
+                Optional.ofNullable(deliveries.get(invocation.<UUID>getArgument(0))).map(row ->
+                        InvoiceDelivery.builder().invoiceDeliveryId(row.getInvoiceDeliveryId())
+                                .invoiceId(row.getInvoiceId()).recipientEmail(row.getRecipientEmail())
+                                .status(row.getStatus()).createdAt(row.getCreatedAt()).build()));
+
+        assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Do not send it again");
+
+        assertThat(deliveries.values()).extracting(InvoiceDelivery::getStatus)
+                .containsExactly(InvoiceDeliveryStatus.PENDING);
+        verifyNoInteractions(receivableService);
+        assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
+                .hasMessageContaining("outcome is unknown");
+        verify(emailService, times(1)).sendEmailWithAttachment(
+                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString());
+    }
+
+    // G-20: never inside a caller's transaction - the email would leave before its outcome is known.
+    @Test
+    void sendInvoice_insideATransaction_isRefusedBeforeAnythingHappens() {
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
+                    .isInstanceOf(IllegalStateException.class);
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+        verifyNoInteractions(invoiceDeliveryRepository, emailService);
+    }
+
+    // Uncertain outcome resolved by an operator as SENT: the receivable is created, no email is sent.
+    @Test
+    void resolveDelivery_uncertainResolvedAsSent_createsTheReceivable_withoutSending() {
+        storedAndFinalized();
+        InvoiceDelivery uncertain = invoiceDeliveryRepository.save(InvoiceDelivery.builder()
+                .invoiceId(invoiceId).recipientEmail("client@example.com")
+                .status(InvoiceDeliveryStatus.UNCERTAIN).build());
+
+        InvoiceDeliveryResponseDto resolved = invoiceDeliveryService.resolveDelivery(
+                uncertain.getInvoiceDeliveryId(), InvoiceDeliveryStatus.SENT, "Found in the Sent folder");
+
+        assertThat(resolved.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.SENT);
+        assertThat(resolved.getResolvedBy()).isEqualTo("approver@example.com");
+        assertThat(resolved.getResolutionReason()).isEqualTo("Found in the Sent folder");
+        verify(receivableService).createReceivableFromInvoice(invoiceId);
+        verifyNoInteractions(emailService);
+    }
+
+    // A PENDING delivery that may still be in flight cannot be resolved.
+    @Test
+    void resolveDelivery_recentPending_isRefused() {
+        storedAndFinalized();
+        InvoiceDelivery pending = invoiceDeliveryRepository.save(InvoiceDelivery.builder()
+                .invoiceId(invoiceId).recipientEmail("client@example.com")
+                .status(InvoiceDeliveryStatus.PENDING).build());
+
+        assertThatThrownBy(() -> invoiceDeliveryService.resolveDelivery(
+                pending.getInvoiceDeliveryId(), InvoiceDeliveryStatus.FAILED, "not received"))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("may still be in progress");
+        assertThat(deliveries.get(pending.getInvoiceDeliveryId()).getStatus())
+                .isEqualTo(InvoiceDeliveryStatus.PENDING);
     }
 
     @Test

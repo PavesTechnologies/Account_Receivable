@@ -12,9 +12,11 @@ import java.util.UUID;
  * is a plain, unvalidated reference rather than a JPA relationship,
  * matching the convention already used by {@code InvoiceApprovalHistory}:
  * this table only records delivery history, it does not own or cascade
- * with {@link Invoice}, and every attempt (including repeated resends)
- * inserts a new row rather than overwriting the previous one. The latest
- * row for a given {@code invoiceId} is the current delivery state.
+ * with {@link Invoice}, and every attempt inserts a new row rather than
+ * overwriting the previous one. The latest row for a given {@code invoiceId}
+ * is the current delivery state. An invoice has at most one ordinary
+ * delivery: a new attempt is allowed only while every earlier one FAILED
+ * (G-19) - enforced under the invoice's row lock by the delivery service.
  * {@link Invoice#getStatus()} is never modified by a delivery attempt.
  */
 @Entity
@@ -76,6 +78,29 @@ public class InvoiceDelivery {
      */
     @Column(name = "provider_message_id", length = 255)
     private String providerMessageId;
+
+    /** The authenticated user who requested this delivery (G-19 accountability). */
+    @Column(name = "requested_by", length = 100)
+    private String requestedBy;
+
+    @Column(name = "requested_by_user_id")
+    private Long requestedByUserId;
+
+    /**
+     * Set when an operator resolved a PENDING/UNCERTAIN outcome to SENT or
+     * FAILED after checking the mailbox - who, when and why.
+     */
+    @Column(name = "resolved_at")
+    private LocalDateTime resolvedAt;
+
+    @Column(name = "resolved_by", length = 100)
+    private String resolvedBy;
+
+    @Column(name = "resolved_by_user_id")
+    private Long resolvedByUserId;
+
+    @Column(name = "resolution_reason", length = 500)
+    private String resolutionReason;
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;

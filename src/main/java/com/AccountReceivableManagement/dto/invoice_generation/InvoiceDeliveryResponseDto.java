@@ -30,4 +30,14 @@ public class InvoiceDeliveryResponseDto {
     private String failureReason;
 
     private LocalDateTime createdAt;
+
+    /** Who requested the delivery (null for deliveries before V14). */
+    private String requestedBy;
+
+    /** Operator resolution of an uncertain outcome, if any. */
+    private LocalDateTime resolvedAt;
+
+    private String resolvedBy;
+
+    private String resolutionReason;
 }
