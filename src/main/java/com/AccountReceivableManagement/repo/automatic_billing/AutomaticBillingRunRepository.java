@@ -77,6 +77,43 @@ public interface AutomaticBillingRunRepository extends JpaRepository<AutomaticBi
     java.util.List<UUID> findInterruptedRunIds(@Param("now") LocalDateTime now,
             org.springframework.data.domain.Pageable page);
 
+    /**
+     * Makes the FAILED runs of the given occurrences due for another attempt
+     * now - called when a configuration re-approval re-plans those
+     * occurrences, so a run that failed on the old plan does not keep the
+     * re-planned occurrence from ever being billed. Bypasses
+     * {@code @PreUpdate}/{@code @Version} like {@link #claim}.
+     *
+     * @return the number of runs re-queued
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE AutomaticBillingRun r SET r.nextRetryAt = :now, r.updatedAt = :now, r.version = r.version + 1 "
+            + "WHERE r.status = com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticBillingRunStatus.FAILED "
+            + "AND r.billingScheduleId IN :occurrenceIds")
+    int requeueFailedRunsOfOccurrences(@Param("occurrenceIds") Collection<UUID> occurrenceIds,
+                                       @Param("now") LocalDateTime now);
+
+    /**
+     * Points a not-yet-successful run at the occurrence that replaced its
+     * removed one for the same billing period (the run's business key) and,
+     * if it had failed, makes it due now. Conditional on the run still
+     * referring to {@code oldOccurrenceId} and being in {@code statuses}.
+     *
+     * @return 1 if the run was re-linked, 0 otherwise
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE AutomaticBillingRun r SET r.billingScheduleId = :newOccurrenceId, "
+            + "r.nextRetryAt = CASE WHEN r.status = com.AccountReceivableManagement.entity_enums.automatic_billing"
+            + ".AutomaticBillingRunStatus.FAILED THEN :now ELSE r.nextRetryAt END, "
+            + "r.updatedAt = :now, r.version = r.version + 1 "
+            + "WHERE r.automaticBillingRunId = :runId AND r.billingScheduleId = :oldOccurrenceId "
+            + "AND r.status IN :statuses")
+    int relinkOccurrence(@Param("runId") UUID runId,
+                         @Param("oldOccurrenceId") UUID oldOccurrenceId,
+                         @Param("newOccurrenceId") UUID newOccurrenceId,
+                         @Param("now") LocalDateTime now,
+                         @Param("statuses") Collection<AutomaticBillingRunStatus> statuses);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT r FROM AutomaticBillingRun r WHERE r.automaticBillingRunId = :runId")
     Optional<AutomaticBillingRun> findByIdForUpdate(@Param("runId") UUID runId);

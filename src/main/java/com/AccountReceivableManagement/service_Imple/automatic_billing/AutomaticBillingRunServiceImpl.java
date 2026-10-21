@@ -92,7 +92,8 @@ public class AutomaticBillingRunServiceImpl implements AutomaticBillingRunServic
     @Override
     public AutomaticBillingRun findOrCreateForOccurrence(UUID billingScheduleId) {
         return findOrCreate(
-                () -> automaticBillingRunRepository.findByBillingScheduleId(billingScheduleId),
+                () -> automaticBillingRunRepository.findByBillingScheduleId(billingScheduleId)
+                        .or(() -> relinkRunOfReplacedOccurrence(billingScheduleId)),
                 () -> {
                     BillingSchedule occurrence = billingScheduleRepository.findById(billingScheduleId)
                             .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
@@ -151,6 +152,47 @@ public class AutomaticBillingRunServiceImpl implements AutomaticBillingRunServic
                             .billingPeriodStart(billingPeriodStart)
                             .billingPeriodEnd(billingPeriodEnd)
                             .build();
+                });
+    }
+
+    /**
+     * The run of the occurrence's billing event (configuration + period) when
+     * it still refers to an occurrence that no longer exists - the occurrence
+     * was removed and re-created for the same period. The run is the billing
+     * event's one run (uk_automatic_billing_run_period), so it is re-linked to
+     * the replacement instead of inserting a second run that the key would
+     * reject on every scheduler pass. A run linked to another existing
+     * occurrence, or already past SCHEDULED/FAILED, is a genuine conflict and
+     * is reported.
+     */
+    private Optional<AutomaticBillingRun> relinkRunOfReplacedOccurrence(UUID billingScheduleId) {
+        BillingSchedule occurrence = billingScheduleRepository.findById(billingScheduleId).orElse(null);
+        if (occurrence == null || occurrence.getBillingConfiguration() == null) {
+            return Optional.empty();
+        }
+        return automaticBillingRunRepository
+                .findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                        occurrence.getBillingConfiguration().getBillingConfigurationId(),
+                        occurrence.getPeriodStartDate(), occurrence.getPeriodEndDate())
+                .map(run -> {
+                    UUID previous = run.getBillingScheduleId();
+                    if (billingScheduleId.equals(previous)) {
+                        return run; // created concurrently for this very occurrence
+                    }
+                    if (previous == null || billingScheduleRepository.existsById(previous)
+                            || automaticBillingRunRepository.relinkOccurrence(run.getAutomaticBillingRunId(), previous,
+                            billingScheduleId, now(), AutomaticBillingRunStatus.CLAIMABLE) != 1) {
+                        throw new GlobalExceptionHandler.ValidationException(
+                                "Billing period " + occurrence.getPeriodStartDate() + " to "
+                                        + occurrence.getPeriodEndDate() + " already has automatic billing run "
+                                        + run.getAutomaticBillingRunId() + " (" + run.getStatus()
+                                        + ") for occurrence " + previous + "; it is not re-linked to occurrence "
+                                        + billingScheduleId + ".");
+                    }
+                    log.info("[AutomaticBillingRunRelinked] run={} occurrence {} -> {} (period {} to {})",
+                            run.getAutomaticBillingRunId(), previous, billingScheduleId,
+                            occurrence.getPeriodStartDate(), occurrence.getPeriodEndDate());
+                    return automaticBillingRunRepository.findById(run.getAutomaticBillingRunId()).orElseThrow();
                 });
     }
 
