@@ -253,6 +253,7 @@ the code that needs them; every script deletes nothing and documents its prerequ
 | `V7__automatic_billing_run.sql` | new table `automatic_billing_run` | id type check (STEP 1) |
 | `V8__billing_snapshot_item_billed_source_unique.sql` | column + `uk_billing_snapshot_item_billed_source` | nullable column on a large table (MySQL 8: instant); unique index build is online; optional backfill after the duplicate check |
 | `V9__invoice_document_ready_to_send.sql` | new table `invoice_document` (PDF `LONGBLOB`) | id type check; storage grows with approved invoices |
+| `V10__recurring_renewal_approval_status.sql` | nullable `billing_subscription_configuration.renewal_approval_status` | additive; review renewals created before it (query in the script) - a renewal is now inactive until its configuration is approved |
 
 `ddl-auto=update` silently skips a unique key it cannot create (existing duplicates) — that is why the scripts'
 duplicate checks must be run and their constraints verified:
