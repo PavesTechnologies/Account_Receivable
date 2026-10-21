@@ -101,8 +101,8 @@ class RecurringOccurrenceBillabilityTest {
         private List<BillingSchedule> generate(BillingRecurringConfiguration recurring) {
             when(configurationRepository.findById(configuration.getBillingConfigurationId()))
                     .thenReturn(Optional.of(configuration));
-            when(recurringRepository.findByBillingConfigurationAndIsActiveTrue(configuration))
-                    .thenReturn(Optional.of(recurring));
+            when(recurringRepository.findAllByBillingConfigurationAndIsActiveTrue(configuration))
+                    .thenReturn(List.of(recurring));
             when(scheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurring))
                     .thenReturn(List.of());
 

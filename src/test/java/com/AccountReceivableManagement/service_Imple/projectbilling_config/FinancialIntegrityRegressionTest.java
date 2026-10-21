@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.UserDTO;
+import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationRejectRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.RenewalRequestDto;
 import com.AccountReceivableManagement.entity.automatic_billing.AutomaticBillingRun;
 import com.AccountReceivableManagement.entity.client_entity.Client;
@@ -437,12 +438,16 @@ class FinancialIntegrityRegressionTest {
     @Nested
     class G07_RecurringRenewal {
 
+        private BillingConfiguration configuration;
         private BillingRecurringConfiguration original;
+        private Map<UUID, BigDecimal> originalOccurrences;
 
         @BeforeEach
         void originalTerm() {
-            BillingConfiguration configuration = recurring("120000.00", futureMonthStart(), 4);
+            configuration = recurring("120000.00", futureMonthStart(), 4);
             original = recurringRepository.findByBillingConfigurationAndIsActiveTrue(configuration).orElseThrow();
+            originalOccurrences = amountsOfTerm(original);
+            assertThat(originalOccurrences).hasSize(4);
         }
 
         private RenewalRequestDto request(LocalDate from, LocalDate to) {
@@ -453,16 +458,149 @@ class FinancialIntegrityRegressionTest {
             return request;
         }
 
-        @Test
-        void validRenewal_createsOneRecurringConfigurationLinkedToTheOriginal() {
+        private BillingRecurringConfiguration renewForFourMonths() {
             LocalDate from = original.getRecurringEndDate().plusDays(1);
+            UUID id = recurringBillingService.renew(original.getRecurringConfigurationId(),
+                    request(from, from.plusMonths(4).minusDays(1))).getRecurringConfigurationId();
+            return recurringRepository.findById(id).orElseThrow();
+        }
 
-            recurringBillingService.renew(original.getRecurringConfigurationId(), request(from, from.plusMonths(4).minusDays(1)));
+        private Map<UUID, BigDecimal> amountsOfTerm(BillingRecurringConfiguration term) {
+            Map<UUID, BigDecimal> amounts = new LinkedHashMap<>();
+            scheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
+                            recurringRepository.findById(term.getRecurringConfigurationId()).orElseThrow())
+                    .forEach(s -> amounts.put(s.getBillingScheduleId(), s.getBillingAmount().setScale(2)));
+            return amounts;
+        }
 
-            assertThat(recurringRepository.findByRenewedFrom(original)).singleElement().satisfies(renewal -> {
-                assertThat(renewal.getRecurringStartDate()).isEqualTo(from);
-                assertThat(renewal.getContractValue()).isEqualByComparingTo(original.getContractValue());
+        @Test
+        void renewalDraft_isPendingApproval_inactive_andNotBillable() {
+            BillingRecurringConfiguration renewal = renewForFourMonths();
+
+            assertThat(renewal.getIsActive()).isFalse();
+            assertThat(renewal.getRenewalApprovalStatus()).isEqualTo(ApprovalStatus.PENDING_APPROVAL);
+            assertThat(renewal.getRenewedFrom().getRecurringConfigurationId())
+                    .isEqualTo(original.getRecurringConfigurationId());
+            assertThat(approvalStatus(configuration)).isEqualTo(ApprovalStatus.PENDING_APPROVAL);
+            assertThat(amountsOfTerm(renewal)).isEmpty();
+            // A pending renewal cannot generate occurrences.
+            assertThatThrownBy(() -> occurrenceService.generateOccurrencesForRecurring(
+                    configuration.getBillingConfigurationId()))
+                    .isInstanceOf(GlobalExceptionHandler.ValidationException.class);
+            assertThat(amountsOfTerm(renewal)).isEmpty();
+            // The original term is untouched and still active.
+            assertThat(recurringRepository.findById(original.getRecurringConfigurationId()).orElseThrow()
+                    .getIsActive()).isTrue();
+            assertThat(amountsOfTerm(original)).isEqualTo(originalOccurrences);
+        }
+
+        @Test
+        void approvingTheRenewal_activatesIt_andGeneratesItsOccurrences_withoutOverlap() {
+            BillingRecurringConfiguration renewal = renewForFourMonths();
+
+            approve(configuration);
+
+            BillingRecurringConfiguration approved = recurringRepository.findById(renewal.getRecurringConfigurationId())
+                    .orElseThrow();
+            assertThat(approved.getIsActive()).isTrue();
+            assertThat(approved.getRenewalApprovalStatus()).isEqualTo(ApprovalStatus.APPROVED);
+            List<BillingSchedule> renewalPeriods = scheduleRepository
+                    .findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(approved);
+            assertThat(renewalPeriods).hasSize(4)
+                    .allSatisfy(p -> assertThat(p.getPeriodStartDate()).isAfter(original.getRecurringEndDate()));
+            assertThat(renewalPeriods.get(0).getPeriodStartDate()).isEqualTo(original.getRecurringEndDate().plusDays(1));
+            assertThat(renewalPeriods.stream().map(BillingSchedule::getBillingAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)).isEqualByComparingTo("120000.00");
+
+            // The original term keeps its occurrences, and none lies outside its term.
+            assertThat(amountsOfTerm(original)).isEqualTo(originalOccurrences);
+            assertThat(scheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(original))
+                    .allSatisfy(p -> assertThat(p.getPeriodEndDate()).isBeforeOrEqualTo(original.getRecurringEndDate()));
+            // No two active occurrences of the configuration overlap.
+            List<BillingSchedule> all = active(configuration).stream()
+                    .sorted(java.util.Comparator.comparing(BillingSchedule::getPeriodStartDate)).toList();
+            assertThat(all).hasSize(8);
+            for (int i = 1; i < all.size(); i++) {
+                assertThat(all.get(i).getPeriodStartDate()).isAfter(all.get(i - 1).getPeriodEndDate());
+            }
+            assertThat(recurringBillingService.getRenewalHistory(original.getRecurringConfigurationId()))
+                    .singleElement().satisfies(r -> assertThat(r.getRecurringConfigurationId())
+                            .isEqualTo(renewal.getRecurringConfigurationId()));
+        }
+
+        @Test
+        void repeatedApprovalAndReconciliation_areIdempotent() {
+            renewForFourMonths();
+            approve(configuration);
+            Map<UUID, BigDecimal> afterApproval = amountsById(configuration);
+
+            reapprove(configuration);
+            reapprove(configuration);
+
+            assertThat(amountsById(configuration)).isEqualTo(afterApproval);
+            assertThat(recurringRepository.findAllByBillingConfigurationAndIsActiveTrue(
+                    configurationRepository.findById(configuration.getBillingConfigurationId()).orElseThrow()))
+                    .hasSize(2);
+            assertThat(recurringRepository.findByRenewedFrom(original)).hasSize(1);
+        }
+
+        @Test
+        void rejectedRenewal_staysInactive_andIsNotActivatedByALaterApproval() {
+            BillingRecurringConfiguration renewal = renewForFourMonths();
+            UUID id = configuration.getBillingConfigurationId();
+            lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
+            try {
+                configurationService.reject(id, new BillingConfigurationRejectRequestDto("Renewal price not agreed."));
+            } finally {
+                lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
+            }
+            assertThat(recurringRepository.findById(renewal.getRecurringConfigurationId()).orElseThrow()
+                    .getRenewalApprovalStatus()).isEqualTo(ApprovalStatus.REJECTED);
+
+            reapprove(configuration);
+
+            BillingRecurringConfiguration after = recurringRepository.findById(renewal.getRecurringConfigurationId())
+                    .orElseThrow();
+            assertThat(after.getIsActive()).isFalse();
+            assertThat(amountsOfTerm(after)).isEmpty();
+            assertThat(amountsOfTerm(original)).isEqualTo(originalOccurrences);
+        }
+
+        @Test
+        void failedRenewalApproval_rollsBack_andLeavesTheOriginalTermUnchanged() {
+            BillingRecurringConfiguration renewal = renewForFourMonths();
+            // A renewal term that cannot be generated (no positive period) makes the approval fail.
+            tx.executeWithoutResult(status -> {
+                BillingRecurringConfiguration broken = recurringRepository.findById(
+                        renewal.getRecurringConfigurationId()).orElseThrow();
+                broken.setRecurringEndDate(broken.getRecurringStartDate());
+                recurringRepository.save(broken);
             });
+
+            assertThatThrownBy(() -> approve(configuration))
+                    .isInstanceOf(GlobalExceptionHandler.ValidationException.class);
+
+            BillingRecurringConfiguration after = recurringRepository.findById(renewal.getRecurringConfigurationId())
+                    .orElseThrow();
+            assertThat(after.getIsActive()).isFalse();
+            assertThat(after.getRenewalApprovalStatus()).isEqualTo(ApprovalStatus.PENDING_APPROVAL);
+            assertThat(approvalStatus(configuration)).isEqualTo(ApprovalStatus.PENDING_APPROVAL);
+            assertThat(amountsOfTerm(original)).isEqualTo(originalOccurrences);
+        }
+
+        @Test
+        void billedOccurrenceOfTheOriginalTerm_isUnchangedByRenewal() {
+            BillingSchedule billed = active(configuration).get(0);
+            markInvoiced(billed);
+
+            renewForFourMonths();
+            approve(configuration);
+
+            BillingSchedule after = scheduleRepository.findById(billed.getBillingScheduleId()).orElseThrow();
+            assertThat(after.getPeriodStatus()).isEqualTo(BillingPeriodStatus.INVOICED);
+            assertThat(after.getIsInvoiced()).isTrue();
+            assertThat(after.getBillingAmount()).isEqualByComparingTo(billed.getBillingAmount());
+            assertThat(after.getIsActive()).isTrue();
         }
 
         @Test
@@ -474,16 +612,21 @@ class FinancialIntegrityRegressionTest {
                     .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
                     .hasMessageContaining("overlaps");
             assertThat(recurringRepository.findByRenewedFrom(original)).isEmpty();
+            assertThat(approvalStatus(configuration)).isEqualTo(ApprovalStatus.APPROVED);
         }
 
         @Test
-        void repeatedRenewal_isRejected_andLeavesOneRenewal() {
-            LocalDate from = original.getRecurringEndDate().plusDays(1);
-            recurringBillingService.renew(original.getRecurringConfigurationId(), request(from, from.plusMonths(4).minusDays(1)));
-
-            assertThatThrownBy(() -> recurringBillingService.renew(original.getRecurringConfigurationId(),
-                    request(from, from.plusMonths(4).minusDays(1))))
+        void duplicateRenewalRequests_createOneRenewal_beforeAndAfterApproval() {
+            renewForFourMonths();
+            // While the first awaits approval.
+            assertThatThrownBy(this::renewForFourMonths)
                     .isInstanceOf(GlobalExceptionHandler.ValidationException.class);
+            approve(configuration);
+            // After it was approved: the original term has already been renewed.
+            assertThatThrownBy(this::renewForFourMonths)
+                    .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                    .hasMessageContaining("already been renewed");
+
             assertThat(recurringRepository.findByRenewedFrom(original)).hasSize(1);
         }
     }

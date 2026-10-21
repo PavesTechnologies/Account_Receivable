@@ -230,8 +230,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(Optional.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(List.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(new ArrayList<>());
 
@@ -283,8 +283,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(Optional.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(List.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(new ArrayList<>());
 
@@ -598,8 +598,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(Optional.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(List.of(recurringConfig));
 
         assertThatThrownBy(() -> billingOccurrenceService.generateOccurrencesForRecurring(billingConfigId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
@@ -636,8 +636,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(Optional.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(List.of(recurringConfig));
 
         assertThatThrownBy(() -> billingOccurrenceService.generateOccurrencesForRecurring(billingConfigId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
@@ -1676,8 +1676,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(Optional.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(List.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(existingSchedules);
 
@@ -1711,8 +1711,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(Optional.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(List.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(existingSchedules);
 
@@ -1744,8 +1744,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(Optional.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(List.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(existingSchedules);
 

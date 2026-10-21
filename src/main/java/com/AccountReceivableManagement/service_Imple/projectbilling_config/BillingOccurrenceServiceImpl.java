@@ -138,11 +138,51 @@ public class BillingOccurrenceServiceImpl {
 
         validateConfigurationApproved(configuration);
 
-        BillingRecurringConfiguration recurring = billingRecurringConfigurationRepository
-                .findByBillingConfigurationAndIsActiveTrue(configuration)
-                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
-                        "Recurring Configuration not found"));
+        List<BillingRecurringConfiguration> terms = activeRecurringTerms(configuration);
+        if (terms.isEmpty()) {
+            throw new GlobalExceptionHandler.ResourceNotFoundException("Recurring Configuration not found");
+        }
+        for (BillingRecurringConfiguration recurring : terms) {
+            generateRecurringTerm(configuration, recurring);
+        }
+    }
 
+    /**
+     * The active recurring terms of a configuration, earliest first: the
+     * original term and its approved renewals. Each term has its own dates,
+     * contract value and occurrences; renewal terms never overlap
+     * (RecurringBillingServiceImpl.renew).
+     */
+    private List<BillingRecurringConfiguration> activeRecurringTerms(BillingConfiguration configuration) {
+        return billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(configuration)
+                .stream()
+                .sorted(java.util.Comparator.comparing(
+                        (BillingRecurringConfiguration term) -> term.getRecurringStartDate() != null
+                                ? term.getRecurringStartDate() : configuration.getEffectiveFrom(),
+                        java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                .toList();
+    }
+
+    /**
+     * Approval of the configuration approves its pending renewals: each
+     * becomes an active term (and so gets its occurrences); the terms it
+     * renews are left as they are and keep billing their own periods.
+     */
+    private void activateApprovedRenewals(BillingConfiguration configuration) {
+        List<BillingRecurringConfiguration> pending = billingRecurringConfigurationRepository
+                .findByBillingConfigurationAndRenewalApprovalStatus(configuration, ApprovalStatus.PENDING_APPROVAL);
+        for (BillingRecurringConfiguration renewal : pending) {
+            renewal.setRenewalApprovalStatus(ApprovalStatus.APPROVED);
+            renewal.setIsActive(true);
+            renewal.setUpdatedAt(java.time.LocalDateTime.now());
+            billingRecurringConfigurationRepository.save(renewal);
+            log.info("Renewal term {} ({} to {}) approved and activated for Billing Configuration {}",
+                    renewal.getRecurringConfigurationId(), renewal.getRecurringStartDate(),
+                    renewal.getRecurringEndDate(), configuration.getBillingConfigurationId());
+        }
+    }
+
+    private void generateRecurringTerm(BillingConfiguration configuration, BillingRecurringConfiguration recurring) {
         LocalDate effectiveFrom = recurring.getRecurringStartDate() != null
                 ? recurring.getRecurringStartDate()
                 : configuration.getEffectiveFrom();
@@ -1058,13 +1098,13 @@ public class BillingOccurrenceServiceImpl {
     }
 
     private void reconcileRecurringOccurrences(BillingConfiguration configuration) {
-        BillingRecurringConfiguration recurring = billingRecurringConfigurationRepository
-                .findByBillingConfigurationAndIsActiveTrue(configuration)
-                .orElse(null);
-
-        if (recurring == null) {
-            return;
+        activateApprovedRenewals(configuration);
+        for (BillingRecurringConfiguration recurring : activeRecurringTerms(configuration)) {
+            reconcileRecurringTerm(configuration, recurring);
         }
+    }
+
+    private void reconcileRecurringTerm(BillingConfiguration configuration, BillingRecurringConfiguration recurring) {
 
         List<BillingSchedule> existingSchedules = billingScheduleRepository
                 .findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurring);
@@ -1735,7 +1775,7 @@ public class BillingOccurrenceServiceImpl {
                     " processed billing occurrences. Please resolve these occurrences first.");
         }
         
-        generateOccurrencesForRecurring(configuration.getBillingConfigurationId());
+        generateRecurringTerm(configuration, recurring);
     }
 
     private void handleFrequencyChangeForFixedPrice(
@@ -1773,7 +1813,7 @@ public class BillingOccurrenceServiceImpl {
                     scheduledSchedules.size());
         }
         
-        generateOccurrencesForRecurring(configuration.getBillingConfigurationId());
+        generateRecurringTerm(configuration, recurring);
     }
 
     private void handleAmountChangeForFixedPrice(
@@ -1992,7 +2032,7 @@ public class BillingOccurrenceServiceImpl {
                     scheduledSchedules.size());
         }
         
-        generateOccurrencesForRecurring(configuration.getBillingConfigurationId());
+        generateRecurringTerm(configuration, recurring);
     }
 
     private void reconcileMilestonePlanOccurrences(BillingConfiguration configuration) {

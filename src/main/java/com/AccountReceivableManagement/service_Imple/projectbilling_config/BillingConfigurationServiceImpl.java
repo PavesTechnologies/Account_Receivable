@@ -480,6 +480,18 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setApprovalStatus(
                 ApprovalStatus.REJECTED);
 
+        /*
+         * A renewal awaiting this approval is rejected with it: it stays
+         * inactive and is never activated by a later approval.
+         */
+        billingRecurringConfigurationRepository
+                .findByBillingConfigurationAndRenewalApprovalStatus(configuration, ApprovalStatus.PENDING_APPROVAL)
+                .forEach(renewal -> {
+                    renewal.setRenewalApprovalStatus(ApprovalStatus.REJECTED);
+                    renewal.setUpdatedAt(LocalDateTime.now());
+                    billingRecurringConfigurationRepository.save(renewal);
+                });
+
         configuration.setBillingStatus(
                 BillingConfigurationStatus.INACTIVE);
 
@@ -790,8 +802,13 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
     private RecurringBillingResponseDto getRecurringDetails(BillingConfiguration configuration) {
         try {
+            // The current term: the latest active one (an approved renewal follows its original).
             return billingRecurringConfigurationRepository
-                    .findByBillingConfigurationAndIsActiveTrue(configuration)
+                    .findAllByBillingConfigurationAndIsActiveTrue(configuration).stream()
+                    .max(java.util.Comparator.comparing(
+                            (com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration term)
+                                    -> term.getRecurringStartDate() != null ? term.getRecurringStartDate()
+                                    : java.time.LocalDate.MIN))
                     .map(this::mapRecurringToResponse)
                     .orElse(null);
         } catch (Exception e) {

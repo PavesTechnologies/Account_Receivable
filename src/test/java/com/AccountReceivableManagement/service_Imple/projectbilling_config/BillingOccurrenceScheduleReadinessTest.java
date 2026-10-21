@@ -304,8 +304,8 @@ class BillingOccurrenceScheduleReadinessTest {
                     .isActive(true)
                     .build();
             when(billingConfigurationRepository.findById(configurationId)).thenReturn(Optional.of(configuration));
-            when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(configuration))
-                    .thenReturn(Optional.of(recurring));
+            when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(configuration))
+                    .thenReturn(List.of(recurring));
         }
 
         @Test

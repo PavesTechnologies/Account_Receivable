@@ -890,6 +890,7 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                         recurring.getRenewedFrom() != null
                                 ? recurring.getRenewedFrom().getRecurringConfigurationId()
                                 : null)
+                .renewalApprovalStatus(recurring.getRenewalApprovalStatus())
                 .build();
     }
 
@@ -1182,7 +1183,10 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                         .renewalBillingFrequency(null)
                         .renewalEffectiveFrom(null)
                         .remarks("Renewed from configuration: " + recurringConfigurationId)
-                        .isActive(true)
+                        // Not billable until approved: the existing configuration approval
+                        // activates it and generates its occurrences.
+                        .isActive(false)
+                        .renewalApprovalStatus(ApprovalStatus.PENDING_APPROVAL)
                         .createdAt(LocalDateTime.now())
                         .updatedAt(LocalDateTime.now())
                         .build();
@@ -1190,7 +1194,17 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         BillingRecurringConfiguration saved =
                 billingRecurringRepository.save(newRecurring);
 
-        log.info("Renewal created successfully. New configuration ID: {}, Renewed from: {}",
+        /*
+         * The renewal goes through the existing approval workflow: the billing
+         * configuration awaits approval, as after an edit. Approval activates
+         * the renewal and generates its occurrences; rejection marks it
+         * REJECTED. The original term is left as it is.
+         */
+        originalConfiguration.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+        originalConfiguration.setUpdatedAt(LocalDateTime.now());
+        billingConfigurationRepository.save(originalConfiguration);
+
+        log.info("Renewal created, pending approval. New configuration ID: {}, Renewed from: {}",
                 saved.getRecurringConfigurationId(), recurringConfigurationId);
 
         return mapToResponse(saved);
@@ -1225,7 +1239,8 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             LocalDate newEffectiveTo) {
 
         billingRecurringRepository.findByRenewedFrom(originalRecurring).stream()
-                .filter(renewal -> Boolean.TRUE.equals(renewal.getIsActive()))
+                .filter(renewal -> Boolean.TRUE.equals(renewal.getIsActive())
+                        || renewal.getRenewalApprovalStatus() == ApprovalStatus.PENDING_APPROVAL)
                 .findFirst()
                 .ifPresent(renewal -> {
                     throw new GlobalExceptionHandler.ValidationException(
@@ -1236,8 +1251,11 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                                     + "); renew that configuration instead.");
                 });
 
-        for (BillingRecurringConfiguration term
-                : billingRecurringRepository.findAllByBillingConfigurationAndIsActiveTrue(configuration)) {
+        List<BillingRecurringConfiguration> terms = new java.util.ArrayList<>(
+                billingRecurringRepository.findAllByBillingConfigurationAndIsActiveTrue(configuration));
+        terms.addAll(billingRecurringRepository.findByBillingConfigurationAndRenewalApprovalStatus(
+                configuration, ApprovalStatus.PENDING_APPROVAL));
+        for (BillingRecurringConfiguration term : terms) {
             LocalDate termStart = term.getRecurringStartDate() != null
                     ? term.getRecurringStartDate() : configuration.getEffectiveFrom();
             LocalDate termEnd = term.getRecurringEndDate() != null
@@ -1260,6 +1278,14 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         if (configuration.getBillingContext() != BillingContext.PRODUCT_SERVICE) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Only standalone product/service recurring configurations can be renewed.");
+        }
+
+        // Only an approved configuration is renewed: a configuration already awaiting
+        // approval (an edit or another renewal) must be decided first.
+        if (configuration.getApprovalStatus() != ApprovalStatus.APPROVED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Only an approved billing configuration can be renewed. Current status: "
+                            + configuration.getApprovalStatus() + ".");
         }
 
         // Configuration must be active

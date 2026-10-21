@@ -26,6 +26,12 @@ public interface BillingRecurringConfigurationRepository extends JpaRepository<B
     void deleteByBillingConfiguration(
             BillingConfiguration billingConfiguration);
 
+    /** Renewal terms of the configuration in the given approval state. */
+    List<BillingRecurringConfiguration>
+    findByBillingConfigurationAndRenewalApprovalStatus(
+            BillingConfiguration billingConfiguration,
+            com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus renewalApprovalStatus);
+
     List<BillingRecurringConfiguration>
     findByRenewedFrom(
             BillingRecurringConfiguration renewedFrom);
