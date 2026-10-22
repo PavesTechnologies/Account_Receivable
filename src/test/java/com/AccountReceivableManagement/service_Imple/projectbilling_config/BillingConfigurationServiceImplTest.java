@@ -9,6 +9,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeM
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PaymentStructure;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingAcquisitionRepository;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
@@ -63,6 +64,7 @@ class BillingConfigurationServiceImplTest {
     @Mock private BillingConfigurationChangeTrackingService changeTrackingService;
     @Mock private RecordActionLockService recordActionLockService;
     @Mock private BillingConfigurationSnapshotRepository snapshotRepository;
+    @Mock private BillingAcquisitionRepository billingAcquisitionRepository;
 
     private BillingConfigurationServiceImpl service;
 
@@ -94,7 +96,8 @@ class BillingConfigurationServiceImplTest {
                 billingMilestonePlanService,
                 changeTrackingService,
                 recordActionLockService,
-                snapshotRepository);
+                snapshotRepository,
+                billingAcquisitionRepository);
 
         configurationId = UUID.randomUUID();
         draftConfiguration = BillingConfiguration.builder()
