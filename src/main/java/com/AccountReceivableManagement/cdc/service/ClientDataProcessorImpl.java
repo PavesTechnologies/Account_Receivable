@@ -39,6 +39,9 @@ public class ClientDataProcessorImpl implements ClientDataProcessor {
             case "u":
                 handleUpdate(payload, clientId);
                 break;
+            case "r":
+                handleSnapshot(payload, clientId);
+                break;
             case "d":
                 handleDelete(clientId);
                 break;
@@ -93,6 +96,30 @@ public class ClientDataProcessorImpl implements ClientDataProcessor {
         
         clientRepository.save(existingClient);
         log.info("Updated client: {}", clientId);
+    }
+
+    /**
+     * Debezium snapshot read ("r"): the row already exists in RMS, so create it in AR if missing or refresh
+     * its synchronized fields if present. Idempotent: replaying the same snapshot leaves the same row.
+     */
+    private void handleSnapshot(CdcEventPayload payload, UUID clientId) {
+        if (clientId == null) {
+            throw new IllegalArgumentException("Client ID cannot be null for snapshot operations.");
+        }
+        if (payload.getAfter() == null) {
+            log.warn("Snapshot event has no after data: {}", payload.getEntityId());
+            return;
+        }
+
+        Client client = clientRepository.findById(clientId).orElseGet(Client::new);
+        boolean isNew = client.getClientId() == null;
+        updateClientFromMap(payload.getAfter(), client);
+        if (client.getClientId() == null) {
+            client.setClientId(clientId);
+        }
+
+        clientRepository.save(client);
+        log.info("{} client from snapshot: {}", isNew ? "Created" : "Updated", clientId);
     }
 
     private void updateClientFromMap(Map<String, Object> data, Client client) {
