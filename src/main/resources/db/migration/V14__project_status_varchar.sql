@@ -24,8 +24,12 @@
 --   by the first statement of the next run, or manually:  DROP PROCEDURE IF EXISTS project_status_to_varchar_v14;
 --
 -- Run:  mysql --database=<ar_db> < V14__project_status_varchar.sql      (stops at the first error; do NOT use --force)
--- Required privileges on <ar_db>: ALTER (on the table), CREATE ROUTINE and ALTER ROUTINE (the latter is needed even for
--- DROP PROCEDURE IF EXISTS). SELECT on information_schema is implicit. EXECUTE is not needed (the creator receives it).
+-- Required privileges on <ar_db>: SELECT and ALTER (on project_master_reference; the script runs SELECT COUNT(*) on it before
+-- and after the ALTER), CREATE ROUTINE and ALTER ROUTINE (the latter is needed even for DROP PROCEDURE IF EXISTS).
+-- That set is sufficient (validated on MySQL 8.4.8); INSERT, UPDATE and EXECUTE are not needed (the creator receives EXECUTE).
+-- CAUTION: an account WITHOUT SELECT does not get a privilege error. information_schema hides the column from it, so the
+-- script aborts - safely, nothing is changed - with the MISLEADING message "column project_master_reference.project_status
+-- not found". Check the account's privileges before concluding that the wrong database was selected.
 --
 -- ---------------------------------------------------------
 -- PRE-MIGRATION CHECKLIST (do before running)
@@ -44,8 +48,8 @@
 --  5. Confirm no value is outside the old ENUM or empty-string-coerced:  expect only ACTIVE / COMPLETED / ON_HOLD /
 --     CANCELLED / INACTIVE / NULL.  (An empty string '' in an ENUM column means an invalid value was stored; investigate first.)
 --  6. Confirm no index or FK uses project_status (checked 2026-10-22: none).
---  7. Confirm the account has the privileges listed above (an account without them fails with error 1044 / 1370 and the
---     column stays an ENUM).
+--  7. Confirm the account has the privileges listed above (an account without them fails - error 1044 / 1370 / 1142, or the
+--     misleading "column ... not found" message when SELECT is missing - and the column stays an ENUM).
 --
 -- ---------------------------------------------------------
 -- POST-MIGRATION VERIFICATION
