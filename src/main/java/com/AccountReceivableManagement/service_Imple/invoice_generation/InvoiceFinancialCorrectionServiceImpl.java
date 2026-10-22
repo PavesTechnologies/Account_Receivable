@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.service_Imple.invoice_generation;
 
+import com.AccountReceivableManagement.dto.billing_data_acquisition.SnapshotRebuildResult;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
@@ -92,10 +93,11 @@ public class InvoiceFinancialCorrectionServiceImpl implements InvoiceFinancialCo
          * exact snapshot. Leaves the snapshot completely untouched if
          * acquisition validation fails.
          */
-        BillingSnapshot rebuiltSnapshot =
-                billingSnapshotService.rebuildBillingSnapshot(
+        SnapshotRebuildResult rebuild =
+                billingSnapshotService.rebuildBillingSnapshotWithAudit(
                         billingSnapshotId
                 );
+        BillingSnapshot rebuiltSnapshot = rebuild.snapshot();
 
         /*
          * The existing TaxCalculation is 1:1 with the snapshot and blocks
@@ -133,6 +135,6 @@ public class InvoiceFinancialCorrectionServiceImpl implements InvoiceFinancialCo
          * correction that fed it was financial (this flow) or non-financial
          * (Phase 2C).
          */
-        return invoiceService.refreshAfterCorrection(invoiceId);
+        return invoiceService.refreshAfterCorrection(invoiceId, rebuild.repricingSummary());
     }
 }

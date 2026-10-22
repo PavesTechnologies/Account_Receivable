@@ -103,6 +103,12 @@ public interface InvoiceService {
     InvoiceResponseDto refreshAfterCorrection(UUID invoiceId);
 
     /**
+     * As {@link #refreshAfterCorrection(UUID)}, appending a repricing summary (from a snapshot rebuild) to the
+     * {@code CORRECTED} history comment. A null/blank summary records the standard comment only.
+     */
+    InvoiceResponseDto refreshAfterCorrection(UUID invoiceId, String repricingSummary);
+
+    /**
      * Phase 2C - corrects only {@code clientName} and {@code projectName} on
      * a {@code REJECTED} invoice; every financial field, the
      * BillingSnapshot, and the TaxCalculation are left untouched. Not a

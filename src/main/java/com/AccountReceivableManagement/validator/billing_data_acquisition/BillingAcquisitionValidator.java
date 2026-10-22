@@ -82,13 +82,15 @@ public class BillingAcquisitionValidator {
             }
         }
 
-        // Lines in a discount period excluded from invoicing stay on the snapshot for audit, but a snapshot
-        // with nothing payable at all (no included timesheet, no expense) would become a zero-value invoice.
+        // Lines excluded from invoicing (by the rate card's base-rate setting or by a discount period's setting)
+        // stay on the snapshot for audit, but a snapshot with nothing payable at all (no included timesheet,
+        // no expense) would become a zero-value invoice.
         boolean anyPayableTimesheet = timesheets.stream()
                 .anyMatch(t -> com.AccountReceivableManagement.util.TmRateCalculator.isIncluded(t.getIncludeInInvoice()));
         if (!timesheets.isEmpty() && !anyPayableTimesheet && !hasExpenses) {
             return ValidationResultDto.failure(
-                    "Every acquired timesheet falls in a discount period that is excluded from invoicing; "
+                    "Every acquired timesheet is excluded from invoicing, either because its rate card excludes "
+                            + "base-rate work or because it falls in a discount period that is excluded; "
                             + "there is nothing payable to bill for the requested billing period.");
         }
 

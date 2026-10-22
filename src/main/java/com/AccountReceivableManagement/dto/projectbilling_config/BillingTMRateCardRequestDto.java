@@ -2,8 +2,10 @@ package com.AccountReceivableManagement.dto.projectbilling_config;
 
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingRatePeriod;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.*;
 
 import java.math.BigDecimal;
@@ -19,6 +21,7 @@ public class BillingTMRateCardRequestDto {
 
     @NotNull(message = "Rate is required.")
     @DecimalMin(value = "0.01", message = "Rate must be greater than zero.")
+    @Digits(integer = 10, fraction = 2, message = "Rate must have at most 10 digits and 2 decimal places.")
     private BigDecimal rate;
 
     @NotNull(message = "Rate period is required.")
@@ -28,6 +31,7 @@ public class BillingTMRateCardRequestDto {
 
     private LocalDate effectiveTo;
 
+    @Size(max = 500, message = "Remarks must be at most 500 characters.")
     private String remarks;
 
     /** Bills work at the base rate when no discount period applies. Defaults to true on create; omitted on update keeps the current value. */

@@ -52,4 +52,12 @@ public interface BillingSnapshotService {
      * acquisition validation fails.
      */
     BillingSnapshot rebuildBillingSnapshot(UUID billingSnapshotId);
+
+    /**
+     * Same rebuild as {@link #rebuildBillingSnapshot(UUID)}, additionally returning a bounded summary of the
+     * repricing (line counts, previous and revised totals) so the correction workflow can record it durably in
+     * the invoice approval history.
+     */
+    com.AccountReceivableManagement.dto.billing_data_acquisition.SnapshotRebuildResult rebuildBillingSnapshotWithAudit(
+            UUID billingSnapshotId);
 }

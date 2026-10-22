@@ -20,4 +20,7 @@ public interface BillingConfigurationSnapshotRepository extends JpaRepository<Bi
 
     Optional<BillingConfigurationSnapshot> findByBillingConfigurationAndIsRestoredFalse(
             BillingConfiguration billingConfiguration);
+
+    /** Change-tracking history of a configuration (foreign key to it); blocks deleting the configuration. */
+    boolean existsByBillingConfiguration_BillingConfigurationId(UUID billingConfigurationId);
 }

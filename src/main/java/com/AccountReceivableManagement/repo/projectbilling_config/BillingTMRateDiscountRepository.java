@@ -18,6 +18,15 @@ public interface BillingTMRateDiscountRepository extends JpaRepository<BillingTM
 
     List<BillingTMRateDiscount> findByRateCard_RateCardIdAndIsActiveTrueOrderByEffectiveFromAsc(UUID rateCardId);
 
+    /**
+     * Same rows as the finder above but read with a locking read: sees the latest committed periods even under a
+     * REPEATABLE READ snapshot, and blocks a concurrent period writer until this transaction ends.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT d FROM BillingTMRateDiscount d WHERE d.rateCard.rateCardId = :rateCardId AND d.isActive = true " +
+           "ORDER BY d.effectiveFrom ASC")
+    List<BillingTMRateDiscount> findActiveByRateCardForUpdate(@Param("rateCardId") UUID rateCardId);
+
     /** Active periods of the card containing the date (both bounds inclusive). */
     @Query("SELECT d FROM BillingTMRateDiscount d WHERE d.rateCard.rateCardId = :rateCardId " +
            "AND d.isActive = true AND d.effectiveFrom <= :workDate AND d.effectiveTo >= :workDate")
@@ -39,4 +48,17 @@ public interface BillingTMRateDiscountRepository extends JpaRepository<BillingTM
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT r FROM BillingTMRateCard r WHERE r.rateCardId = :rateCardId")
     java.util.Optional<BillingTMRateCard> lockRateCard(@Param("rateCardId") UUID rateCardId);
+
+    /** Owning configuration id of a rate card (plain read, no lock). */
+    @Query("SELECT r.billingConfiguration.billingConfigurationId FROM BillingTMRateCard r WHERE r.rateCardId = :rateCardId")
+    java.util.Optional<UUID> findConfigurationIdByRateCardId(@Param("rateCardId") UUID rateCardId);
+
+    /**
+     * Row lock on the configuration. Rate-card writers lock configuration -> cards -> discounts; discount writers
+     * take the configuration lock first too, so the two paths cannot deadlock on opposite lock orders.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM BillingConfiguration c WHERE c.billingConfigurationId = :billingConfigurationId")
+    java.util.Optional<com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration> lockConfiguration(
+            @Param("billingConfigurationId") UUID billingConfigurationId);
 }

@@ -29,4 +29,7 @@ public interface BillingAcquisitionRepository extends JpaRepository<BillingAcqui
     Optional<BillingAcquisition> findFirstByBillingConfiguration_BillingConfigurationIdOrderByCreatedAtDesc(UUID billingConfigurationId);
 
     List<BillingAcquisition> findByProjectId(Long projectId);
+
+    /** Acquisition records are operational billing history; a configuration they reference must not be deleted. */
+    boolean existsByBillingConfiguration_BillingConfigurationId(UUID billingConfigurationId);
 }
