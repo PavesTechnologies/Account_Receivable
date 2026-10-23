@@ -5,6 +5,7 @@ import com.AccountReceivableManagement.entity_enums.projectbilling_config.Approv
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +16,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Component
+// Defaults to enabled; only the local-demo profile switches it off (seeded demo data must not be changed by the clock).
+@ConditionalOnProperty(name = "ar.billing.status-schedulers.enabled", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 @Slf4j
 public class BillingConfigurationStatusScheduler {
