@@ -346,6 +346,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .sellerEmail(companyProfile.getEmail())
                         .sellerPhone(companyProfile.getPhone())
                         .sellerLogoReference(companyProfile.getLogoReference())
+                        .sellerSignatureReference(companyProfile.getAuthorizedSignatureReference())
                         .invoiceNotes(companyProfile.getDefaultInvoiceNotes())
                         .termsAndConditions(companyProfile.getDefaultTermsAndConditions())
                         .paymentInstructions(companyProfile.getDefaultPaymentInstructions())
@@ -381,6 +382,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                 : snapshot.getItems()
         ) {
 
+            if (!com.AccountReceivableManagement.util.TmRateCalculator
+                    .isIncluded(snapshotItem.getIncludeInInvoice())) {
+                continue;
+            }
+
             InvoiceItem invoiceItem =
                     InvoiceItem.builder()
                             .invoice(invoice)
@@ -406,6 +412,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                             .resourceName(
                                     snapshotItem.getResourceName()
                             )
+                            .baseRate(tmRateAudit(snapshotItem, snapshotItem.getBaseRate()))
+                            .discountType(tmRateAudit(snapshotItem, snapshotItem.getDiscountType()))
+                            .discountValue(tmRateAudit(snapshotItem, snapshotItem.getDiscountValue()))
+                            .discountAmount(tmRateAudit(snapshotItem, snapshotItem.getDiscountAmount()))
+                            .discountPeriodName(tmRateAudit(snapshotItem, snapshotItem.getDiscountPeriodName()))
                             .build();
 
             invoice.getItems().add(invoiceItem);
@@ -659,6 +670,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .sellerEmail(companyProfile.getEmail())
                         .sellerPhone(companyProfile.getPhone())
                         .sellerLogoReference(companyProfile.getLogoReference())
+                        .sellerSignatureReference(companyProfile.getAuthorizedSignatureReference())
                         .invoiceNotes(companyProfile.getDefaultInvoiceNotes())
                         .termsAndConditions(companyProfile.getDefaultTermsAndConditions())
                         .paymentInstructions(companyProfile.getDefaultPaymentInstructions())
@@ -958,6 +970,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         // recomputed or aggregated); ordered by work date, then resource.
         List<BillingSnapshotItem> snapshotItems =
                 snapshot.getItems().stream()
+                        .filter(item -> com.AccountReceivableManagement.util.TmRateCalculator
+                                .isIncluded(item.getIncludeInInvoice()))
                         .sorted(java.util.Comparator
                                 .comparing(
                                         BillingSnapshotItem::getWorkDate,
@@ -985,6 +999,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                                         .amount(item.getAmount())
                                         .workDate(item.getWorkDate())
                                         .role(item.getRole())
+                                        .baseRate(tmRateAudit(item, item.getBaseRate()))
+                                        .discountType(tmRateAudit(item, item.getDiscountType()))
+                                        .discountValue(tmRateAudit(item, item.getDiscountValue()))
+                                        .discountAmount(tmRateAudit(item, item.getDiscountAmount()))
+                                        .discountPeriodName(tmRateAudit(item, item.getDiscountPeriodName()))
                                         .build();
                         })
                         .toList();
@@ -1033,6 +1052,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .sellerEmail(companyProfile != null ? companyProfile.getEmail() : null)
                 .sellerPhone(companyProfile != null ? companyProfile.getPhone() : null)
                 .sellerLogoReference(companyProfile != null ? companyProfile.getLogoReference() : null)
+                .sellerSignatureReference(companyProfile != null ? companyProfile.getAuthorizedSignatureReference() : null)
                 .invoiceNotes(companyProfile != null ? companyProfile.getDefaultInvoiceNotes() : null)
                 .termsAndConditions(companyProfile != null ? companyProfile.getDefaultTermsAndConditions() : null)
                 .paymentInstructions(companyProfile != null ? companyProfile.getDefaultPaymentInstructions() : null)
@@ -1040,6 +1060,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .sourceTaxJurisdictionCode(snapshot.getSourceTaxJurisdictionCode())
                 .destinationTaxJurisdictionCode(snapshot.getDestinationTaxJurisdictionCode())
                 .items(items)
+                .timeMaterialSubtotal(sumLinesOfType(items, BillingItemType.TIME_ENTRY))
+                .expenseSubtotal(sumLinesOfType(items, BillingItemType.EXPENSE))
                 .taxComponents(taxComponents)
                 .subtotal(taxCalculation.getTaxableAmount())
                 .totalTaxAmount(taxCalculation.getTotalTaxAmount())
@@ -1448,6 +1470,33 @@ public class InvoiceServiceImpl implements InvoiceService {
     public InvoiceResponseDto refreshAfterCorrection(
             UUID invoiceId
     ) {
+        return refreshAfterCorrection(invoiceId, null);
+    }
+
+    /** Column limit of {@code InvoiceApprovalHistory.comment}. */
+    private static final int HISTORY_COMMENT_MAX_LENGTH = 500;
+
+    private static final String REFRESH_COMMENT = "Invoice refreshed from corrected billing/tax data.";
+
+    /**
+     * Standard refresh comment plus the repricing summary when one is supplied. The summary is appended whole or
+     * not at all (never cut); if it cannot fit, the standard comment says so.
+     */
+    static String refreshComment(String repricingSummary) {
+        if (repricingSummary == null || repricingSummary.isBlank()) {
+            return REFRESH_COMMENT;
+        }
+        String combined = REFRESH_COMMENT + " " + repricingSummary.trim();
+        return combined.length() <= HISTORY_COMMENT_MAX_LENGTH
+                ? combined
+                : REFRESH_COMMENT + " Repricing summary omitted (too long); see the [SnapshotRebuildRepriced] log.";
+    }
+
+    @Override
+    public InvoiceResponseDto refreshAfterCorrection(
+            UUID invoiceId,
+            String repricingSummary
+    ) {
 
         Invoice invoice =
                 invoiceRepository.findById(invoiceId)
@@ -1530,7 +1579,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 InvoiceStatus.REJECTED,
                 InvoiceStatus.REJECTED,
                 InvoiceApprovalAction.CORRECTED,
-                "Invoice refreshed from corrected billing/tax data."
+                refreshComment(repricingSummary)
         );
 
         return mapToResponse(saved);
@@ -1607,6 +1656,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                 : snapshot.getItems()
         ) {
 
+            if (!com.AccountReceivableManagement.util.TmRateCalculator
+                    .isIncluded(snapshotItem.getIncludeInInvoice())) {
+                continue;
+            }
+
             invoice.getItems().add(
                     InvoiceItem.builder()
                             .invoice(invoice)
@@ -1632,6 +1686,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                             .resourceName(
                                     snapshotItem.getResourceName()
                             )
+                            .baseRate(tmRateAudit(snapshotItem, snapshotItem.getBaseRate()))
+                            .discountType(tmRateAudit(snapshotItem, snapshotItem.getDiscountType()))
+                            .discountValue(tmRateAudit(snapshotItem, snapshotItem.getDiscountValue()))
+                            .discountAmount(tmRateAudit(snapshotItem, snapshotItem.getDiscountAmount()))
+                            .discountPeriodName(tmRateAudit(snapshotItem, snapshotItem.getDiscountPeriodName()))
                             .build()
             );
         }
@@ -2245,6 +2304,24 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
     }
 
+    /**
+     * The T&M rate audit (base rate, discount) belongs to TIME_ENTRY lines only. An expense is billed at its approved
+     * cost basis, so none of it is ever carried onto an EXPENSE line, whatever the snapshot item holds.
+     */
+    /** Sum of the persisted line amounts of one type (null when the invoice has no line of it); never recomputed from rate x quantity. */
+    static BigDecimal sumLinesOfType(List<InvoiceItemResponseDto> items, BillingItemType type) {
+        List<BigDecimal> amounts = items.stream()
+                .filter(item -> item.getItemType() == type && item.getAmount() != null)
+                .map(InvoiceItemResponseDto::getAmount)
+                .toList();
+        return amounts.isEmpty() ? null : amounts.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private static <T> T tmRateAudit(BillingSnapshotItem item, T value) {
+        return item.getItemType() == BillingItemType.TIME_ENTRY ? value : null;
+>>>>>>> 3f2f24fecb3994375f7974fb840c01c0793e8e5d
+    }
+
     private InvoiceResponseDto mapToResponse(
             Invoice invoice
     ) {
@@ -2280,6 +2357,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                                         .resourceName(
                                                 item.getResourceName()
                                         )
+                                        .baseRate(item.getBaseRate())
+                                        .discountType(item.getDiscountType())
+                                        .discountValue(item.getDiscountValue())
+                                        .discountAmount(item.getDiscountAmount())
+                                        .discountPeriodName(item.getDiscountPeriodName())
                                         .build();
                         })
                         .toList();
@@ -2373,6 +2455,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .sellerEmail(invoice.getSellerEmail())
                 .sellerPhone(invoice.getSellerPhone())
                 .sellerLogoReference(invoice.getSellerLogoReference())
+                .sellerSignatureReference(invoice.getSellerSignatureReference())
                 .invoiceNotes(invoice.getInvoiceNotes())
                 .termsAndConditions(invoice.getTermsAndConditions())
                 .paymentInstructions(invoice.getPaymentInstructions())
@@ -2382,6 +2465,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .invoiceDate(invoice.getInvoiceDate())
                 .dueDate(invoice.getDueDate())
                 .items(items)
+                .timeMaterialSubtotal(sumLinesOfType(items, BillingItemType.TIME_ENTRY))
+                .expenseSubtotal(sumLinesOfType(items, BillingItemType.EXPENSE))
                 .taxComponents(taxComponents)
                 .subtotal(invoice.getSubtotal())
                 .totalTaxAmount(invoice.getTotalTaxAmount())

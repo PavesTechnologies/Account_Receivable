@@ -17,4 +17,12 @@ public interface EmailService {
             String attachmentFilename,
             String attachmentContentType
     );
+
+    /**
+     * {@code true} only for an implementation that never delivers anything (the {@code local-demo} profile). The
+     * delivery workflow then records SIMULATED instead of SENT. Real implementations keep this default.
+     */
+    default boolean isSimulated() {
+        return false;
+    }
 }

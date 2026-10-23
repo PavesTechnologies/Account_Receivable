@@ -151,8 +151,11 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
             return recordOutcome(claim, InvoiceDeliveryStatus.FAILED, null, ex.getMessage());
         }
 
-        // 3. Record SENT, then the receivable (its own transaction).
-        InvoiceDeliveryResponseDto sent = recordOutcome(claim, InvoiceDeliveryStatus.SENT, messageId, null);
+        // 3. Record SENT or SIMULATED, then the receivable (its own transaction).
+        InvoiceDeliveryStatus outcome = emailService.isSimulated()
+                ? InvoiceDeliveryStatus.SIMULATED
+                : InvoiceDeliveryStatus.SENT;
+        InvoiceDeliveryResponseDto sent = recordOutcome(claim, outcome, messageId, null);
         createReceivable(invoiceId, claim.invoiceNumber());
         return sent;
     }

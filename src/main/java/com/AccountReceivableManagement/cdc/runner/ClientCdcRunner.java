@@ -17,6 +17,7 @@ import java.util.concurrent.Executors;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "ar.cdc.infrastructure.enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnProperty(value = "client-cdc.enabled", havingValue = "true", matchIfMissing = false)
 public class ClientCdcRunner {
 

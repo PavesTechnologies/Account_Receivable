@@ -231,6 +231,49 @@ class InvoiceDeliveryServiceImplTest {
         assertThat(captor.getValue().getProviderMessageId()).isEqualTo("<message-id@gmail.com>");
     }
 
+    // local-demo: a simulated email service must never produce a SENT record or a sent-at time.
+    @Test
+    void sendInvoice_simulatedEmailService_recordsSimulatedNotSent() {
+        Invoice invoice = readyToSendInvoice();
+        InvoiceResponseDto response = invoiceResponse(invoice);
+        lenient().when(invoiceRepository.findByIdForUpdate(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceService.getInvoiceById(invoiceId)).thenReturn(response);
+        lenient().when(invoiceDocumentRepository.existsByInvoiceId(invoiceId)).thenReturn(true);
+        lenient().when(invoiceDocumentRepository.findByInvoiceId(invoiceId)).thenReturn(Optional.of(
+                InvoiceDocument.builder()
+                        .invoiceDocumentId(UUID.randomUUID())
+                        .invoiceId(invoiceId)
+                        .fileName("invoice-INV-20260908164549.pdf")
+                        .contentType("application/pdf")
+                        .content(STORED_PDF)
+                        .sizeBytes((long) STORED_PDF.length)
+                        .checksumSha256("x")
+                        .generatedAt(LocalDateTime.now())
+                        .build()));
+        when(emailService.sendEmailWithAttachment(
+                eq("client@example.com"), anyString(), anyString(), any(byte[].class), anyString(), anyString()
+        )).thenReturn("demo-simulated-123");
+        when(emailService.isSimulated()).thenReturn(true);
+
+        InvoiceDeliveryResponseDto result = invoiceDeliveryService.sendInvoice(invoiceId);
+
+        assertThat(result.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.SIMULATED);
+        assertThat(result.getDeliveryStatus()).isNotEqualTo(InvoiceDeliveryStatus.SENT);
+        assertThat(result.getSentAt()).as("nothing was sent, so no sent-at time").isNull();
+        assertThat(result.getFailureReason()).isNull();
+
+        ArgumentCaptor<InvoiceDelivery> captor = ArgumentCaptor.forClass(InvoiceDelivery.class);
+        verify(invoiceDeliveryRepository, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(InvoiceDeliveryStatus.SIMULATED);
+        assertThat(captor.getValue().getSentAt()).isNull();
+        assertThat(captor.getValue().getProviderMessageId()).startsWith("demo-simulated-");
+
+        // the demo workflow still continues: the receivable is created after the commit
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        verify(receivableService).createReceivableFromInvoice(invoiceId);
+    }
+
     @Test
     void sendInvoice_invoiceNotFound_throwsResourceNotFoundException() {
         when(invoiceRepository.findByIdForUpdate(invoiceId)).thenReturn(Optional.empty());

@@ -21,5 +21,13 @@ public enum InvoiceDeliveryStatus {
      * message was transmitted). Never re-sent automatically; an authorized
      * operator resolves it to SENT or FAILED after checking the mailbox.
      */
-    UNCERTAIN
+    UNCERTAIN,
+
+    /**
+     * Only ever written under the {@code local-demo} profile: the delivery ran
+     * end to end but NO email left the machine (see
+     * {@link com.AccountReceivableManagement.service_interface.email.EmailService#isSimulated()}).
+     * Never produced by a real provider, so it cannot be mistaken for {@link #SENT}.
+     */
+    SIMULATED
 }

@@ -4,6 +4,7 @@ import com.AccountReceivableManagement.cdc.config.properties.ClientCdcProperties
 import com.AccountReceivableManagement.cdc.config.properties.ProjectCdcProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -16,6 +17,9 @@ import java.sql.ResultSet;
 @Slf4j
 @Component
 @Profile("!test") // Do not run this during tests
+// CDC infrastructure (this initializer, the Debezium configurations, ClientCdcRunner) defaults to enabled; only the
+// local-demo profile switches it off. It is a single flag on purpose: these classes share the two CDC properties beans.
+@ConditionalOnProperty(name = "ar.cdc.infrastructure.enabled", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class DebeziumJdbcTableInitializer implements SmartLifecycle {
 

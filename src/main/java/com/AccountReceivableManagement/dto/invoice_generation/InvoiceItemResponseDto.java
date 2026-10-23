@@ -36,4 +36,15 @@ public class InvoiceItemResponseDto {
     private LocalDate workDate;
 
     private String role;
+
+    /** T&M lines only: the configured base rate, the discount applied to it, and the period it came from. */
+    private BigDecimal baseRate;
+
+    private String discountType;
+
+    private BigDecimal discountValue;
+
+    private BigDecimal discountAmount;
+
+    private String discountPeriodName;
 }

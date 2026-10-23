@@ -16,6 +16,8 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -86,7 +88,11 @@ public class ProjectMasterReference {
     @Column(name = "project_budget_currency")
     private String projectBudgetCurrency;
 
+    // Stored as VARCHAR(30), not a native MySQL ENUM: the value mirrors PMS and a native ENUM silently drifts
+    // from the Java enum (ddl-auto=update never alters an existing column). See V14__project_status_varchar.sql.
+    @Column(name = "project_status", length = 30)
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @JsonDeserialize(using = CdcAwareEnumDeserializer.class)
     private ProjectStatus projectStatus;
 

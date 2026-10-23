@@ -94,6 +94,9 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
                 .invoiceGenerationType(
                         epic1Configuration.getInvoiceGenerationType())
 
+//                .pricingModel(
+//                        epic1Configuration.getPricingModel())
+
                 .expenseEligible(
                         Boolean.TRUE.equals(
                                 epic1Configuration.getExpenseBillingEligible()))

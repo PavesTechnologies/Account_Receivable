@@ -45,6 +45,8 @@ class TaxRateConfigurationServiceImplTest {
     private TaxTypeMasterRepository taxTypeMasterRepository;
 
     // TaxConfigurationServiceImpl's 4th constructor dependency (resolveTaxRegime).
+    // TaxConfigurationServiceImpl resolves the legacy taxRegime string through this repository; an
+    // unmatched code resolves to no regime master (Optional.empty), which is what these tests rely on.
     @Mock
     private com.AccountReceivableManagement.repo.projectbilling_config.TaxRegimeMasterRepository taxRegimeMasterRepository;
 

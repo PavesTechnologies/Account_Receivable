@@ -21,4 +21,7 @@ public interface BillingConfigurationSnapshotRepository extends JpaRepository<Bi
     /** Snapshots not yet closed by a restore (rejection) or an approval, newest first. */
     List<BillingConfigurationSnapshot> findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(
             BillingConfiguration billingConfiguration);
+
+    /** Change-tracking history of a configuration (foreign key to it); blocks deleting the configuration. */
+    boolean existsByBillingConfiguration_BillingConfigurationId(UUID billingConfigurationId);
 }

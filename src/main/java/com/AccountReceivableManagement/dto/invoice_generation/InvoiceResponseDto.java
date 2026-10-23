@@ -110,6 +110,9 @@ public class InvoiceResponseDto {
 
     private String sellerLogoReference;
 
+    /** Frozen signature asset id (null when none was configured at generation). */
+    private String sellerSignatureReference;
+
     /**
      * Saved on the invoice at generation; on a preview (not yet generated)
      * these show the currently configured defaults that generation will copy.
@@ -138,6 +141,12 @@ public class InvoiceResponseDto {
     private List<InvoiceItemResponseDto> items;
 
     private List<InvoiceTaxComponentResponseDto> taxComponents;
+
+    /** Sum of the TIME_ENTRY line amounts; null when the invoice has none. Derived from the same lines as {@code items}. */
+    private BigDecimal timeMaterialSubtotal;
+
+    /** Sum of the EXPENSE line amounts (approved billable amounts, never T&M-discounted); null when none. */
+    private BigDecimal expenseSubtotal;
 
     private BigDecimal subtotal;
 

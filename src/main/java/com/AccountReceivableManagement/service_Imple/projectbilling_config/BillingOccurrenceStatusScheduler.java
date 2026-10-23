@@ -2,11 +2,14 @@ package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 @Component
+// Defaults to enabled; only the local-demo profile switches it off.
+@ConditionalOnProperty(name = "ar.billing.status-schedulers.enabled", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 @Slf4j
 public class BillingOccurrenceStatusScheduler {

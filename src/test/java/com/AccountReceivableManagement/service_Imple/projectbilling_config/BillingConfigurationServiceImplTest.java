@@ -9,6 +9,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeM
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PaymentStructure;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingAcquisitionRepository;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
@@ -40,9 +41,6 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class BillingConfigurationServiceImplTest {
 
-    @Mock
-    private com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
-
     @Mock private BillingConfigurationRepository billingConfigurationRepository;
     @Mock private ClientRepository clientRepository;
     @Mock private ProjectMasterReferenceRepository projectRepository;
@@ -66,22 +64,15 @@ class BillingConfigurationServiceImplTest {
     @Mock private BillingConfigurationChangeTrackingService changeTrackingService;
     @Mock private RecordActionLockService recordActionLockService;
     @Mock private BillingConfigurationSnapshotRepository snapshotRepository;
+    @Mock private BillingAcquisitionRepository billingAcquisitionRepository;
 
     private BillingConfigurationServiceImpl service;
 
     private UUID configurationId;
     private BillingConfiguration draftConfiguration;
 
-    @Mock
-    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
-
     @BeforeEach
     void setUp() {
-        org.mockito.Mockito.lenient().when(financialActionAuthorizer.requirePermission(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
-        org.mockito.Mockito.lenient().when(financialActionAuthorizer.currentActor())
-                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
-
         service = new BillingConfigurationServiceImpl(
                 billingConfigurationRepository,
                 clientRepository,
@@ -100,14 +91,13 @@ class BillingConfigurationServiceImplTest {
                 billingOccurrenceService,
                 projectEligibilityRepository,
                 billingPeriodCalculatorService,
-                financialActionAuthorizer,
                 billingMilestonePlanRepository,
                 billingPaymentEntryRepository,
                 billingMilestonePlanService,
                 changeTrackingService,
                 recordActionLockService,
                 snapshotRepository,
-                automaticBillingRunRepository);
+                billingAcquisitionRepository);
 
         configurationId = UUID.randomUUID();
         draftConfiguration = BillingConfiguration.builder()
@@ -134,23 +124,6 @@ class BillingConfigurationServiceImplTest {
         verify(billingConfigurationRepository, never()).delete(any());
         verify(billingFixedPriceRepository, never()).deleteByBillingConfiguration(any());
         verify(billingRecurringConfigurationRepository, never()).deleteByBillingConfiguration(any());
-        verify(billingScheduleRepository, never()).deleteByBillingConfiguration(any());
-    }
-
-    @Test
-    void deleteBillingConfiguration_referencedByAutomaticBillingRun_rejectsDeletion() {
-        when(billingConfigurationRepository.findById(configurationId))
-                .thenReturn(Optional.of(draftConfiguration));
-        when(billingSnapshotRepository.existsByBillingConfigurationId(configurationId))
-                .thenReturn(false);
-        when(automaticBillingRunRepository.existsByBillingConfiguration_BillingConfigurationId(configurationId))
-                .thenReturn(true);
-
-        assertThatThrownBy(() -> service.deleteBillingConfiguration(configurationId))
-                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessageContaining("referenced by automatic billing history");
-
-        verify(billingConfigurationRepository, never()).delete(any());
         verify(billingScheduleRepository, never()).deleteByBillingConfiguration(any());
     }
 

@@ -60,4 +60,12 @@ public interface BillingSnapshotService {
      * Repeated cancellation of an already cancelled snapshot is idempotent.
      */
     ApiResponse<Void> cancelBillingSnapshot(UUID billingSnapshotId);
+
+    /**
+     * Same rebuild as {@link #rebuildBillingSnapshot(UUID)}, additionally returning a bounded summary of the
+     * repricing (line counts, previous and revised totals) so the correction workflow can record it durably in
+     * the invoice approval history.
+     */
+    com.AccountReceivableManagement.dto.billing_data_acquisition.SnapshotRebuildResult rebuildBillingSnapshotWithAudit(
+            UUID billingSnapshotId);
 }
