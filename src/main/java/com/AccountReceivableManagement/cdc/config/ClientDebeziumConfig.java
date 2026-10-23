@@ -43,7 +43,6 @@ public class ClientDebeziumConfig {
         log.info("RMS Host                    : {}", clientCdcProperties.getHostname());
         log.info("RMS Port                    : {}", clientCdcProperties.getPort());
         log.info("RMS Database                : {}", clientCdcProperties.getDatabaseName());
-        log.info("RMS Username                : {}", clientCdcProperties.getUsername());
 
         log.info("Topic Prefix                : {}", clientCdcProperties.getTopicPrefix());
 
@@ -59,8 +58,7 @@ public class ClientDebeziumConfig {
         log.info("------------------------------------------------------");
         log.info("AR Database (Offset Storage)");
         log.info("------------------------------------------------------");
-        log.info("AR JDBC URL                 : {}", arJdbcUrl);
-        log.info("AR Username                 : {}", arUsername);
+        log.info("AR JDBC URL                 : {}", CdcConfigurationLogging.safeJdbcTarget(arJdbcUrl));
 
         log.info("Offset Table                : {}", clientCdcProperties.getOffsetTable());
         log.info("Schema History Table        : {}", clientCdcProperties.getSchemaHistoryTable());
