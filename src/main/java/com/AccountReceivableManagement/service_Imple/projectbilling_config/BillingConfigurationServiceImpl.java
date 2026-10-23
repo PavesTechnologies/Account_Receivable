@@ -366,6 +366,13 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         recordApprovalDecision(configuration, approver);
 
         /*
+         * The approved edit is now the approved state: its pre-edit snapshot
+         * must never be restored by a later rejection.
+         */
+        snapshotRepository.findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
+                .forEach(changeTrackingService::markSnapshotAsRestored);
+
+        /*
          * A newly approved configuration must not inherit
          * manual deactivation.
          */
@@ -480,7 +487,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // =========================================================
         // RESTORE PREVIOUS APPROVED STATE IF SNAPSHOT EXISTS
         // =========================================================
-        snapshotRepository.findByBillingConfigurationAndIsRestoredFalse(configuration)
+        /*
+         * Only a snapshot taken by the edit now being rejected - i.e. after
+         * the last approval decision - describes the state to restore. An
+         * older open snapshot belongs to an edit that was already approved
+         * (snapshots created before approvals closed them are still open in
+         * existing data) and restoring it would silently undo that approved
+         * edit.
+         */
+        LocalDateTime lastDecision = configuration.getApprovalDecidedAt();
+        snapshotRepository.findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
+                .stream()
+                .findFirst()
+                .filter(snapshot -> lastDecision == null || snapshot.getCreatedAt().isAfter(lastDecision))
                 .ifPresent(snapshot -> {
                     log.info("Restoring configuration {} from snapshot {}", id, snapshot.getSnapshotId());
                     changeTrackingService.restoreConfigurationFromSnapshot(configuration, snapshot);

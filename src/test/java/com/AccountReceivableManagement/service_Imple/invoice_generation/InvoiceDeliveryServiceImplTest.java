@@ -404,6 +404,46 @@ class InvoiceDeliveryServiceImplTest {
                 anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString());
     }
 
+    // Phase 4A (AUD-4A-03): JavaMailSenderImpl reports a read timeout after the
+    // message body as MailSendException(failedMessages) with NO cause - the
+    // timeout is only inside getFailedMessages() (verified against Spring 6.1.6
+    // with a loopback SMTP server). It must still be UNCERTAIN, never resendable.
+    @Test
+    void sendInvoice_smtpReadTimeoutAsSpringReportsIt_isUncertain_andBlocksAnotherSend() {
+        storedAndFinalized();
+        java.util.Map<Object, Exception> failedMessages = new java.util.LinkedHashMap<>();
+        failedMessages.put("message", new jakarta.mail.MessagingException("Exception reading response",
+                new java.net.SocketTimeoutException("Read timed out")));
+        when(emailService.sendEmailWithAttachment(
+                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString()))
+                .thenThrow(new EmailDeliveryException("Failed to send invoice email through the configured mail provider.",
+                        new org.springframework.mail.MailSendException(failedMessages)));
+
+        InvoiceDeliveryResponseDto result = invoiceDeliveryService.sendInvoice(invoiceId);
+
+        assertThat(result.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.UNCERTAIN);
+        verifyNoInteractions(receivableService);
+        assertThatThrownBy(() -> invoiceDeliveryService.sendInvoice(invoiceId))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("outcome is unknown");
+    }
+
+    // A connection that was never made sent nothing, however Spring wraps it.
+    @Test
+    void sendInvoice_connectTimeoutInsideFailedMessages_isFailed() {
+        storedAndFinalized();
+        java.util.Map<Object, Exception> failedMessages = new java.util.LinkedHashMap<>();
+        failedMessages.put("message", new jakarta.mail.MessagingException("Couldn't connect to host",
+                new java.net.SocketTimeoutException("Connect timed out")));
+        when(emailService.sendEmailWithAttachment(
+                anyString(), anyString(), anyString(), any(byte[].class), anyString(), anyString()))
+                .thenThrow(new EmailDeliveryException("Failed to send invoice email through the configured mail provider.",
+                        new org.springframework.mail.MailSendException(failedMessages)));
+
+        assertThat(invoiceDeliveryService.sendInvoice(invoiceId).getDeliveryStatus())
+                .isEqualTo(InvoiceDeliveryStatus.FAILED);
+    }
+
     // G-20: the email left but recording SENT failed - the delivery stays PENDING
     // (an unknown outcome), the caller is told not to resend, and a resend is refused.
     @Test

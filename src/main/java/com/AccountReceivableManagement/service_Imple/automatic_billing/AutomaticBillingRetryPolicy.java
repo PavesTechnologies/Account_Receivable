@@ -2,7 +2,9 @@ package com.AccountReceivableManagement.service_Imple.automatic_billing;
 
 import com.AccountReceivableManagement.config.properties.AutomaticBillingSchedulerProperties;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.integration.billing_data_acquisition.TmsRateLimitedException;
 import com.AccountReceivableManagement.integration.billing_data_acquisition.TmsServiceUnavailableException;
+import com.AccountReceivableManagement.integration.ums.UmsServiceUnavailableException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -26,7 +28,9 @@ import java.util.concurrent.TimeoutException;
  * last completed step and every step is find-or-create, so a retry never
  * duplicates a snapshot, tax calculation or invoice:
  * <ul>
- *   <li>TMS unavailable (5xx) or unreachable (I/O, timeout);</li>
+ *   <li>TMS unavailable (5xx), rate limited (429) or unreachable (I/O, timeout) -
+ *       a 429 is not retried before TMS's {@code Retry-After};</li>
+ *   <li>UMS service login temporarily unavailable (unreachable, 429, 5xx);</li>
  *   <li>database connectivity, lock and transient failures;</li>
  *   <li>a concurrent duplicate insert ({@code DuplicateResourceException}) -
  *       the next attempt finds and reuses the winner's record.</li>
@@ -34,7 +38,8 @@ import java.util.concurrent.TimeoutException;
  * Not retryable - they need someone to fix data or configuration:
  * business-rule and data validation ({@code ValidationException},
  * {@code ResourceNotFoundException}, {@code IllegalArgumentException} - e.g.
- * TMS 400), TMS authentication/authorization, malformed responses, and
+ * TMS 400, a TMS response of another project or period), TMS and UMS
+ * authentication/authorization (rejected credentials), malformed responses, and
  * anything unrecognised. A failure is retryable when it, or any of its
  * causes, is of a retryable type.
  * <p>
@@ -48,6 +53,7 @@ public class AutomaticBillingRetryPolicy {
     private static final Set<Class<? extends Throwable>> RETRYABLE = Set.of(
             com.AccountReceivableManagement.integration.billing_data_acquisition.TimesheetsPendingApprovalException.class,
             TmsServiceUnavailableException.class,
+            UmsServiceUnavailableException.class,
             ResourceAccessException.class,
             IOException.class,
             TimeoutException.class,
@@ -110,7 +116,23 @@ public class AutomaticBillingRetryPolicy {
         if (!retry.isEnabled() || !isRetryable(failure) || hasExhaustedAttempts(attemptCount)) {
             return null;
         }
-        return now.plus(delayAfterAttempt(attemptCount));
+        Duration delay = delayAfterAttempt(attemptCount);
+        Duration retryAfter = retryAfterOf(failure);
+        return now.plus(retryAfter != null && retryAfter.compareTo(delay) > 0 ? retryAfter : delay);
+    }
+
+    /** TMS's {@code Retry-After} of a rate-limited failure anywhere in the cause chain, if any. */
+    private static Duration retryAfterOf(Throwable failure) {
+        int depth = 0;
+        for (Throwable cause = failure; cause != null && depth < 20; cause = cause.getCause(), depth++) {
+            if (cause instanceof TmsRateLimitedException rateLimited) {
+                return rateLimited.getRetryAfter();
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return null;
     }
 
     public boolean hasExhaustedAttempts(int attemptCount) {

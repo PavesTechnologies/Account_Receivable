@@ -10,6 +10,7 @@ import com.AccountReceivableManagement.entity.automatic_billing.AutomaticBilling
 import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.company_profile.CompanyProfile;
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceApprovalHistory;
 import com.AccountReceivableManagement.entity.invoice_generation.InvoiceItem;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
@@ -32,6 +33,7 @@ import com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticB
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingItemType;
 import com.AccountReceivableManagement.entity_enums.common.LockActionType;
 import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
+import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceApprovalAction;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
@@ -47,6 +49,9 @@ import com.AccountReceivableManagement.integration.billing_data_acquisition.Time
 import com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository;
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.company_profile.CompanyProfileRepository;
+import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
+import com.AccountReceivableManagement.repo.invoice_generation.InvoiceApprovalHistoryRepository;
+import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDeliveryRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDocumentRepository;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
@@ -166,6 +171,9 @@ class AutomaticBillingEndToEndTest {
     @Autowired private InvoiceDocumentRepository documentRepository;
     @Autowired private TaxCalculationRepository taxCalculationRepository;
     @Autowired private ReceivableRepository receivableRepository;
+    @Autowired private BillingSnapshotRepository snapshotRepository;
+    @Autowired private InvoiceApprovalHistoryRepository approvalHistoryRepository;
+    @Autowired private InvoiceDeliveryRepository deliveryRepository;
     @Autowired private PlatformTransactionManager transactionManager;
 
     private TransactionTemplate tx;
@@ -323,6 +331,38 @@ class AutomaticBillingEndToEndTest {
                 .isEqualByComparingTo(subtotal);
     }
 
+    /**
+     * What automation leaves behind for each invoice it creates: taxed, submitted for approval by the
+     * system - and nothing beyond: not approved, no delivery, no receivable, no email.
+     */
+    private void assertAwaitingApprovalOnly(List<Invoice> invoices) {
+        assertThat(invoices).isNotEmpty();
+        for (Invoice invoice : invoices) {
+            assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+            List<InvoiceApprovalHistory> history =
+                    approvalHistoryRepository.findByInvoiceIdOrderByActionAtAsc(invoice.getInvoiceId());
+            assertThat(history).singleElement().satisfies(entry -> {
+                assertThat(entry.getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
+                assertThat(entry.getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
+                assertThat(entry.getActionBy()).isEqualTo("SYSTEM");
+                assertThat(entry.getActionByUserId()).isNull();
+            });
+            boolean taxed = invoice.getBillingSnapshotId() != null
+                    ? taxCalculationRepository.existsByBillingSnapshotId(invoice.getBillingSnapshotId())
+                    : taxCalculationRepository.existsByBillingScheduleId(invoice.getBillingScheduleId());
+            assertThat(taxed).as("tax calculated for invoice %s", invoice.getInvoiceNumber()).isTrue();
+            assertThat(deliveryRepository.findByInvoiceIdOrderByCreatedAtDesc(invoice.getInvoiceId())).isEmpty();
+            assertThat(receivableRepository.findByInvoiceId(invoice.getInvoiceId())).isEmpty();
+        }
+        verify(emailService, never()).sendEmailWithAttachment(any(), any(), any(), any(), any(), any());
+    }
+
+    /** Occurrences, snapshots, tax calculations, invoices and runs - a repeated tick must change none. */
+    private List<Long> financialRecordCounts() {
+        return List.of(scheduleRepository.count(), snapshotRepository.count(), taxCalculationRepository.count(),
+                invoiceRepository.count(), runRepository.count());
+    }
+
     // ================================================================ Fixed Price - the complete lifecycle
 
     @Test
@@ -371,6 +411,7 @@ class AutomaticBillingEndToEndTest {
         verify(emailService, never()).sendEmailWithAttachment(any(), any(), any(), any(), any(), any());
         assertThat(invoices).allSatisfy(invoice ->
                 assertThat(receivableRepository.findByInvoiceId(invoice.getInvoiceId())).isEmpty());
+        assertAwaitingApprovalOnly(invoicesOf(occurrences));
 
         // 4. Manual approval (with the record lock) -> document finalized -> READY_TO_SEND.
         Invoice first = invoices.get(0);
@@ -442,7 +483,9 @@ class AutomaticBillingEndToEndTest {
         assertThat(occurrences).hasSize(3);
 
         scheduler.runOnce();
+        List<Long> afterFirstTick = financialRecordCounts();
         scheduler.runOnce();
+        assertThat(financialRecordCounts()).isEqualTo(afterFirstTick);
 
         List<Invoice> invoices = invoicesOf(occurrences);
         assertThat(invoices).hasSize(2);
@@ -454,6 +497,7 @@ class AutomaticBillingEndToEndTest {
         });
         assertThat(itemsOf(invoices.get(1)).get(0).getItemName()).isEqualTo("Installment 2 of 3 — Build complete");
         assertThat(invoices).allSatisfy(i -> assertThat(i.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL));
+        assertAwaitingApprovalOnly(invoices);
     }
 
     // ================================================================ Recurring / retainer
@@ -476,10 +520,14 @@ class AutomaticBillingEndToEndTest {
         List<BillingSchedule> due = occurrences.stream().filter(o -> !o.getBillingDate().isAfter(today)).toList();
 
         scheduler.runOnce();
+        List<Long> afterFirstTick = financialRecordCounts();
         scheduler.runOnce();
+        assertThat(financialRecordCounts()).isEqualTo(afterFirstTick);
+        assertThat(occurrencesOf(configuration)).hasSize(12);
 
         List<Invoice> invoices = invoicesOf(occurrences);
         assertThat(invoices).hasSize(due.size());
+        assertAwaitingApprovalOnly(invoices);
         for (int i = 0; i < invoices.size(); i++) {
             BillingSchedule occurrence = due.get(i);
             Invoice invoice = invoices.get(i);
@@ -523,10 +571,13 @@ class AutomaticBillingEndToEndTest {
         });
 
         scheduler.runOnce();
+        List<Long> afterFirstTick = financialRecordCounts();
         scheduler.runOnce();
+        assertThat(financialRecordCounts()).isEqualTo(afterFirstTick);
 
         List<Invoice> invoices = invoicesOfProject();
         assertThat(invoices).hasSizeGreaterThanOrEqualTo(1);
+        assertAwaitingApprovalOnly(invoices);
         for (Invoice invoice : invoices) {
             assertThat(invoice.getBillingSnapshotId()).isNotNull();
             assertThat(invoice.getStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);

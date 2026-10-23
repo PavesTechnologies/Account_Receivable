@@ -55,9 +55,41 @@ A missing required variable stops the application at startup (unresolvable place
 
 | Variable → property | Default | Meaning |
 |---|---|---|
-| `TMS_API_CONNECT_TIMEOUT` / `TMS_API_READ_TIMEOUT` | `PT10S` / `PT60S` | TMS call bounds (timeouts are retried) |
+| `TMS_API_CONNECT_TIMEOUT` / `TMS_API_READ_TIMEOUT` | `PT10S` / `PT60S` | TMS call bounds (timeouts are retried by the run-level retry) |
+| `TMS_API_RETRY_MAX_ATTEMPTS` / `_INITIAL_BACKOFF` / `_MAX_BACKOFF` | `3` / `PT1S` / `PT10S` | In-call retry of TMS 429/5xx/connection refused: exponential backoff with jitter, honours `Retry-After` up to the cap (longer → run-level retry). Read timeouts are not retried in-call. |
 | `AR_LOG_LEVEL` → `logging.level.com.AccountReceivableManagement` | `INFO` | Application log level |
 | `SPRING_JPA_HIBERNATE_DDL_AUTO` | `update` | See §7 |
+
+### Service authentication for background TMS calls
+
+The scheduler has no user and no JWT. Time & Material acquisition therefore calls TMS with AR's **own** credential;
+user requests (manual snapshot creation) keep forwarding the user's JWT. With no service credential configured, a
+background T&M run fails at `SOURCE_DATA_ACQUISITION` **without calling TMS** ("TMS was not called: background TMS
+access requires service-to-service authentication…"). Fixed Price, Milestone and Recurring never call TMS.
+
+| Variable → property | Default | Meaning |
+|---|---|---|
+| `AR_UMS_SERVICE_AUTH_ENABLED` → `ar.ums.service-auth.enabled` | **`false`** | Log in to UMS as a service account. Enable only once the UMS team has approved the account for unattended login **and** TMS accepts its token. |
+| `UMS_LOGIN_URL` → `…login-url` | — | e.g. `https://<ums-host>/ums/auth/login`. Required when enabled; must be `https` (plain `http` only to a loopback test stub). |
+| `UMS_SERVICE_EMAIL` / `UMS_SERVICE_PASSWORD` | — | The **dedicated service account** — never a person's login. Required when enabled (startup fails otherwise). Secret store only. |
+| `UMS_CONNECT_TIMEOUT` / `UMS_READ_TIMEOUT` | `PT5S` / `PT15S` | Login call bounds |
+| `UMS_TOKEN_REFRESH_BEFORE_EXPIRY` | `PT2M` | Renew this long before the token's expiry (capped at half its lifetime) |
+| `UMS_CREDENTIAL_REJECTION_COOLDOWN` | `PT15M` | After UMS rejects the credentials, no login is attempted for this long (protects the account from lock-out) |
+| `TMS_SERVICE_TOKEN` → `tms.api.service-token` | empty | Legacy static token, used only when UMS service authentication is off. Prefer the UMS service account; when both are set the UMS token wins (warning at startup). |
+
+Token lifecycle (`UmsServiceTokenProvider`): `POST {UMS_LOGIN_URL}` with `{"email","password"}` → `access_token`.
+Expiry is the earlier of the response's `expires_in` and the token's JWT `exp`; nothing is assumed — a token without
+either is used for one call and not cached. One login at a time (concurrent callers share it). A TMS `401` on the
+service token drops it and logs in once more, then fails. Failures:
+
+| Situation | Result for the run | Automatic retry |
+|---|---|---|
+| UMS rejects the login (`400/401/403`), response without `access_token`, malformed response | `FAILED`, reason `UMS rejected…` / `…did not contain an access_token` | **No** — fix the secret, restart, re-queue (§6.1) |
+| UMS unreachable / timeout / `429` / `5xx` | `FAILED`, reason `UMS login temporarily unavailable…` | Yes, run-level backoff |
+| TMS refuses the fresh token again (`401`) or the account lacks permission (`403`) | `FAILED`, reason names the AR service account | No |
+
+Startup logs which background credential is in use (`[TmsIntegration] background TMS calls authenticate with …`).
+Nothing logs the password, the token, the Authorization header or a login response body.
 | `SPRING_PROFILES_ACTIVE=local` | – | **Local only**: SQL + bind values in logs. Never in shared environments. |
 | `client-cdc.enabled` / `project-cdc.enabled` (`CLIENT_CDC_ENABLED` / `PROJECT_CDC_ENABLED`) | `true` | CDC connectors (can now be disabled) |
 
@@ -78,7 +110,7 @@ kubectl -n backend patch secret ar-secrets --type merge -p '{"stringData":{"AR_A
 kubectl -n backend rollout restart deployment/ar-deployment
 kubectl -n backend rollout status deployment/ar-deployment
 
-# Enable (only after the checklist in §10)
+# Enable (only after the checklist in §9)
 kubectl -n backend patch secret ar-secrets --type merge -p '{"stringData":{"AR_AUTOMATIC_BILLING_ENABLED":"true"}}'
 kubectl -n backend rollout restart deployment/ar-deployment
 ```
@@ -116,7 +148,8 @@ Exposed actuator endpoints: `health`, `info`, `metrics` only.
 | `ar.automatic_billing.tick` | timer | duration approaching the cron interval |
 | `ar.automatic_billing.runs.processed` (`outcome`) | counter | `FAILED` / `ERROR` share |
 | `ar.automatic_billing.failures` (`step`, `retryable`) | counter | failures by step: `SOURCE_DATA_ACQUISITION` (TMS/data), `TAX_CALCULATION`, `INVOICE_CREATION`, `SUBMIT_FOR_APPROVAL` |
-| `ar.tms.request.failures` (`status`) | counter | `401`/`403` = credentials; `5xx`/`io` = TMS outage |
+| `ar.tms.request.failures` (`status`) | counter | `401`/`403` = credentials; `429` = rate limited; `5xx`/`io` = TMS outage; `malformed` = unreadable response |
+| `ar.ums.service_token.logins` (`outcome`) | counter | `rejected` = service-account credentials refused (needs a person); `unavailable` = UMS outage; `invalid_response` = UMS login contract changed |
 | `ar.invoice.document.failures` | counter | approved invoices left `APPROVED` (no document) |
 | `ar.invoice.delivery.failures` | counter | client emails not sent |
 | `ar.invoice.delivery.outcomes` (`outcome`) | counter | `UNCERTAIN` / `UNRECORDED` — resolve (§6.1) |
@@ -266,7 +299,9 @@ already made). To find runs needing a decision: `GET /paves/ar/api/v1/operations
 `automaticBillingRuns.needingIntervention`, or the `FAILED`/`next_retry_at IS NULL` query in §5.
 
 **External dependency outage** — TMS/UMS/SMTP: the app stays up (not probe dependencies). T&M runs fail at
-`SOURCE_DATA_ACQUISITION`; `5xx`/timeouts retry automatically within the limits, `401/403` do not (credentials).
+`SOURCE_DATA_ACQUISITION`; `429`/`5xx`/timeouts and UMS outages retry automatically within the limits (a `429`
+not before TMS's `Retry-After`), `401/403` and rejected UMS credentials do not. A TMS response for another
+project or period, or with a timesheet dated outside the period, is rejected whole and not retried.
 After the outage: runs with `next_retry_at` continue by themselves; exhausted ones per the query above.
 Database outage: readiness goes DOWN (traffic stops), liveness stays UP (no restart loop); runs resume afterwards.
 
@@ -368,7 +403,10 @@ Gate 1 status: the legacy failures are resolved except one test that encodes an 
 - [ ] Probes in `intranet-devops` `k8s/backend/ar/deployment.yaml` use `/actuator/health/liveness|readiness`
       (the old `/paves/ar/health` path answered 401 before this release).
 - [ ] Image deployed by immutable tag; previous tag recorded for rollback.
-- [ ] **Service-to-service TMS authentication exists** (otherwise scheduled T&M fails with 401 — non-T&M types are unaffected).
+- [ ] **Service-to-service TMS authentication exists**: UMS team has approved a dedicated service account for
+      unattended login, TMS accepts its token for `GET /api/timesheets/billing`, and `AR_UMS_SERVICE_AUTH_ENABLED`,
+      `UMS_LOGIN_URL`, `UMS_SERVICE_EMAIL`, `UMS_SERVICE_PASSWORD` are in the secret store (otherwise scheduled T&M
+      fails without calling TMS — non-T&M types are unaffected). Startup log shows the UMS service account in use.
 - [ ] `TZ` decided and set; `AR_AUTOMATIC_BILLING_BACKFILL_MAX_AGE_DAYS` decided (0 = bill every missed due event).
 - [ ] Active company profile, tax configurations and tax regions present (invoice and tax prerequisites).
 - [ ] Alert routing for the §4 conditions agreed (or a daily manual check of the §5 queries), including
@@ -378,3 +416,41 @@ Gate 1 status: the legacy failures are resolved except one test that encodes an 
       `AR_AUTH_OPERATIONS_RECOVERY`, `AR_OPERATIONS_REPORT_AUTHORITIES` set to the agreed UMS roles/permissions.
 - [ ] Finance decisions in `BUSINESS_DECISIONS.md` that block release are closed.
 - [ ] Start with one environment and a small `AR_AUTOMATIC_BILLING_BATCH_SIZE`; watch the first ticks' outcome lines.
+
+---
+
+## 10. Manual end-to-end test (test environment only)
+
+Never against production, the shared development database, real client email addresses or a person's UMS login.
+
+1. **Environment.** Disposable MySQL schema (or H2 for a smoke run); `MAIL_USERNAME`/`MAIL_PASSWORD` pointing at a
+   test mailbox or a mail sink — delivery is never triggered by the scheduler, but the app requires the settings.
+   `TMS_API_BASE_URL` → the TMS test instance or a stub answering `GET /tms/api/timesheets/billing`.
+2. **Authentication.** Set `AR_UMS_SERVICE_AUTH_ENABLED=true`, `UMS_LOGIN_URL`, `UMS_SERVICE_EMAIL`,
+   `UMS_SERVICE_PASSWORD` for the approved **test** service account. Start AR; expect
+   `[UmsServiceToken] UMS service-account authentication enabled` and
+   `[TmsIntegration] background TMS calls authenticate with the UMS service account.`
+3. **Billing switch.** `AR_AUTOMATIC_BILLING_ENABLED=true`, and a short cron in this environment only
+   (e.g. `AR_AUTOMATIC_BILLING_CRON=0 */2 * * * *`).
+4. **Data.** Create and approve (as a second user — maker-checker) a T&M Billing Configuration with
+   `invoiceGenerationType=AUTOMATIC`, rate cards per role, currency, tax region and payment term; its period must
+   be complete (end date before today). In TMS, approve billable timesheets for that project and period.
+5. **Wait for a tick.** Expect `[UmsServiceToken] service token obtained; expires at …` once, then
+   `[AutomaticBillingRunOutcome] … type=TIME_AND_MATERIAL … status=PENDING_APPROVAL … invoice=<id>`.
+6. **Verify** (SQL / API, §5): one `automatic_billing_run` for the configuration and period, `PENDING_APPROVAL`,
+   `last_completed_step=SUBMIT_FOR_APPROVAL`; its snapshot's items = the TMS timesheet ids; tax calculation
+   components as configured; invoice lines = hours × rate; `subtotal + tax = grand_total`; due date from the
+   payment term; `invoice_approval_history` holds exactly one `SUBMITTED` row with `action_by='SYSTEM'`; the invoice
+   is in the Finance Manager approval queue; no `invoice_delivery` row exists.
+7. **Repeat** the tick (wait for the next one): no new run, invoice, snapshot or TMS call for that period.
+8. **Failure paths.** (a) Set a wrong `UMS_SERVICE_PASSWORD`, restart, create a new eligible period: the run fails
+   with `UMS rejected the service-account login`, `next_retry_at` empty, one UMS login only; restore the secret,
+   restart, re-queue (§6.1) → `PENDING_APPROVAL`. (b) Stop TMS: the run fails with `next_retry_at` set and completes
+   by itself after TMS returns.
+9. **Occurrence-based billing** separately: an approved AUTOMATIC Fixed Price / Milestone / Recurring configuration
+   with a due occurrence → one run per occurrence → `PENDING_APPROVAL`; no TMS call.
+10. Set `AR_AUTOMATIC_BILLING_ENABLED=false` again when done.
+
+The same flow is covered without a live UMS/TMS by `AutomaticBillingServiceAuthIntegrationTest` (loopback UMS and
+TMS stubs, H2) — that is test evidence for the code path, not a substitute for steps 1–9 against the real services.
+

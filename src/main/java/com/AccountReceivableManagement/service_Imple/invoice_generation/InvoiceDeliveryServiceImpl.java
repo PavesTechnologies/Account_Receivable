@@ -322,6 +322,11 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
      * send failed: a read timeout while waiting for its reply. A connection
      * that was never established (connect timeout, refused, authentication)
      * definitely sent nothing.
+     * <p>
+     * JavaMailSenderImpl reports a failure while sending (as opposed to while
+     * connecting) as a {@code MailSendException} without a cause: the
+     * underlying exception is only in {@code getFailedMessages()}, so those
+     * are inspected too.
      */
     static boolean mayHaveBeenAccepted(Throwable failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
@@ -332,6 +337,11 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
             if (cause instanceof java.net.ConnectException
                     || cause instanceof org.springframework.mail.MailAuthenticationException) {
                 return false;
+            }
+            if (cause instanceof org.springframework.mail.MailSendException sendFailure
+                    && sendFailure.getFailedMessages().values().stream()
+                            .anyMatch(InvoiceDeliveryServiceImpl::mayHaveBeenAccepted)) {
+                return true;
             }
             if (cause.getCause() == cause) {
                 break;

@@ -2,6 +2,8 @@ package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.UserDTO;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationRejectRequestDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.BillingMilestonePlanRequestDto;
+import com.AccountReceivableManagement.dto.projectbilling_config.BillingPaymentEntryRequestDto;
 import com.AccountReceivableManagement.dto.projectbilling_config.RenewalRequestDto;
 import com.AccountReceivableManagement.entity.automatic_billing.AutomaticBillingRun;
 import com.AccountReceivableManagement.entity.client_entity.Client;
@@ -60,6 +62,7 @@ import com.AccountReceivableManagement.service_interface.concurrency_approval.Re
 import com.AccountReceivableManagement.service_interface.email.EmailService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
+import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingMilestonePlanService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.RecurringBillingService;
 import com.AccountReceivableManagement.service_interface.tax_calculation.TaxCalculationService;
 import org.junit.jupiter.api.BeforeEach;
@@ -122,6 +125,7 @@ class FinancialIntegrityRegressionTest {
 
     @Autowired private BillingConfigurationService configurationService;
     @Autowired private RecurringBillingService recurringBillingService;
+    @Autowired private BillingMilestonePlanService milestonePlanService;
     @Autowired private BillingOccurrenceServiceImpl occurrenceService;
     @Autowired private TaxCalculationService taxCalculationService;
     @Autowired private InvoiceService invoiceService;
@@ -1243,6 +1247,137 @@ class FinancialIntegrityRegressionTest {
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
             }
+        }
+    }
+
+    // ================================================================ Phase 4A: rejecting an edit of an approved configuration
+
+    /**
+     * Phase 4A audit (2026-10-22). Editing an APPROVED+ACTIVE configuration
+     * snapshots its approved state; rejecting the edit restores from that
+     * snapshot. Edits go through the real milestone plan service.
+     */
+    @Nested
+    class EditRejection {
+
+        private BillingConfiguration configuration;
+        private UUID planId;
+
+        @BeforeEach
+        void approvedMilestonePlan() {
+            configuration = milestonePlan(today.plusMonths(1), today.plusMonths(2));
+            planId = milestonePlanRepository.findAll().get(0).getMilestonePlanId();
+        }
+
+        /** AUD-4A-01: a second approved-edit cycle left two outstanding snapshots and reject failed. */
+        @Test
+        void editRejectedAfterAnEarlierEditWasApproved_isRejected() {
+            editInstallments("50.00", "50.00");
+            approve(configuration);
+            editInstallments("30.00", "70.00");
+
+            reject(configuration);
+
+            assertThat(approvalStatus(configuration)).isEqualTo(ApprovalStatus.REJECTED);
+        }
+
+        /**
+         * AUD-4A-02: an edit that takes no snapshot (Fixed Price, Recurring,
+         * rate-card and full configuration updates) must not be "restored"
+         * from the snapshot of an earlier, already approved edit.
+         */
+        @Test
+        void rejectingAnEditWithoutSnapshot_doesNotRevertAnEarlierApprovedEdit() {
+            editInstallments("50.00", "50.00", "360000.00");
+            approve(configuration);
+            assertThat(contractValue()).isEqualByComparingTo("360000.00");
+            updateConfiguration(configuration, c -> c.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL));
+
+            reject(configuration);
+
+            assertThat(contractValue()).isEqualByComparingTo("360000.00");
+        }
+
+        /** AUD-4A-02, data written before approvals closed snapshots: an open snapshot older than the last approval. */
+        @Test
+        void staleOpenSnapshotFromBeforeTheLastApproval_isNotRestored() {
+            editInstallments("50.00", "50.00", "360000.00");
+            approve(configuration);
+            jdbc.update("UPDATE billing_configuration_snapshot SET is_restored = FALSE");
+            updateConfiguration(configuration, c -> c.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL));
+
+            reject(configuration);
+
+            assertThat(contractValue()).isEqualByComparingTo("360000.00");
+        }
+
+        /** The edit being rejected is still undone. */
+        @Test
+        void rejectedEdit_restoresTheApprovedContractValue() {
+            editInstallments("50.00", "50.00", "360000.00");
+            approve(configuration);
+            editInstallments("50.00", "50.00", "420000.00");
+
+            reject(configuration);
+
+            assertThat(contractValue()).isEqualByComparingTo("360000.00");
+        }
+
+        /**
+         * AUD-4A-05: an installment plan edited after an installment was
+         * invoiced must still bill exactly its contract value (Fixed Price and
+         * Recurring refuse such an edit; the milestone plan does not).
+         */
+        @Test
+        void installmentEditAfterAnInvoice_neverBillsMoreOrLessThanTheContract() {
+            markInvoiced(active(configuration).get(0));
+            editInstallments("40.00", "60.00", "360000.00");
+
+            try {
+                approve(configuration);
+            } catch (GlobalExceptionHandler.ValidationException refused) {
+                return;
+            }
+
+            BigDecimal billedAndScheduled = allOccurrences(configuration).stream()
+                    .map(BillingSchedule::getBillingAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            assertThat(billedAndScheduled).isEqualByComparingTo(contractValue());
+        }
+
+        private BigDecimal contractValue() {
+            return configurationRepository.findById(configuration.getBillingConfigurationId()).orElseThrow()
+                    .getContractValue();
+        }
+
+        private void editInstallments(String first, String second) {
+            editInstallments(first, second, "300000.00");
+        }
+
+        private void editInstallments(String first, String second, String total) {
+            milestonePlanService.update(planId, BillingMilestonePlanRequestDto.builder()
+                    .totalContractValue(new BigDecimal(total))
+                    .paymentStructure(PaymentStructure.INSTALLMENTS)
+                    .entries(List.of(
+                            BillingPaymentEntryRequestDto.builder().sequence(1).percentage(new BigDecimal(first))
+                                    .billingDate(today.plusMonths(1)).build(),
+                            BillingPaymentEntryRequestDto.builder().sequence(2).percentage(new BigDecimal(second))
+                                    .billingDate(today.plusMonths(2)).build()))
+                    .build());
+        }
+    }
+
+    private void reject(BillingConfiguration configuration) {
+        UUID id = configuration.getBillingConfigurationId();
+        actAs(APPROVER);
+        try {
+            lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, id, LockActionType.APPROVAL);
+            try {
+                configurationService.reject(id, new BillingConfigurationRejectRequestDto("Edit not agreed."));
+            } finally {
+                lockService.releaseLock(LockResourceType.BILLING_CONFIGURATION, id);
+            }
+        } finally {
+            actAs(MAKER);
         }
     }
 

@@ -135,4 +135,49 @@ class AutomaticBillingRetryPolicyTest {
         assertThat(policy.nextRetryAt(temporary, 4)).isEqualTo(NOW.plusHours(1));
         assertThat(policy.nextRetryAt(temporary, 5)).isNull();
     }
+
+    // ================================================================ UMS service authentication and TMS 429
+
+    @Test
+    void umsTemporarilyUnavailable_isRetryable_butRejectedCredentialsAreNot() {
+        assertThat(policy.isRetryable(new com.AccountReceivableManagement.integration.ums
+                .UmsServiceUnavailableException("UMS login temporarily unavailable (status 503)."))).isTrue();
+        assertThat(policy.isRetryable(new com.AccountReceivableManagement.integration.ums
+                .UmsAuthenticationException("UMS rejected the service-account login (status 401)."))).isFalse();
+        assertThat(policy.nextRetryAt(new com.AccountReceivableManagement.integration.ums
+                .UmsAuthenticationException("rejected"), 1, NOW)).isNull();
+    }
+
+    @Test
+    void tmsResponseOfAnotherProjectOrPeriod_isNotRetryable() {
+        assertThat(policy.isRetryable(new com.AccountReceivableManagement.integration.billing_data_acquisition
+                .TmsInvalidResponseException("TMS returned timesheets of project 8 for a request for project 7")))
+                .isFalse();
+    }
+
+    @Test
+    void rateLimited_isRetryable_andNotBeforeTmsRetryAfter() {
+        var rateLimited = new com.AccountReceivableManagement.integration.billing_data_acquisition
+                .TmsRateLimitedException("TMS rate limit reached (status 429).", Duration.ofHours(2));
+
+        assertThat(policy.isRetryable(rateLimited)).isTrue();
+        // The backoff after the first attempt (15 minutes) is shorter than TMS asked for.
+        assertThat(policy.nextRetryAt(rateLimited, 1, NOW)).isEqualTo(NOW.plusHours(2));
+    }
+
+    @Test
+    void rateLimited_withoutRetryAfter_usesTheNormalBackoff() {
+        var rateLimited = new com.AccountReceivableManagement.integration.billing_data_acquisition
+                .TmsRateLimitedException("TMS rate limit reached (status 429).", null);
+
+        assertThat(policy.nextRetryAt(rateLimited, 1, NOW)).isEqualTo(NOW.plusMinutes(15));
+    }
+
+    @Test
+    void rateLimited_shortRetryAfter_neverShortensTheBackoff() {
+        var rateLimited = new com.AccountReceivableManagement.integration.billing_data_acquisition
+                .TmsRateLimitedException("TMS rate limit reached (status 429).", Duration.ofSeconds(30));
+
+        assertThat(policy.nextRetryAt(rateLimited, 1, NOW)).isEqualTo(NOW.plusMinutes(15));
+    }
 }

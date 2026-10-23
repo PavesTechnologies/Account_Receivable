@@ -18,6 +18,7 @@ public interface BillingConfigurationSnapshotRepository extends JpaRepository<Bi
     Optional<BillingConfigurationSnapshot> findFirstByBillingConfigurationOrderByCreatedAtDesc(
             BillingConfiguration billingConfiguration);
 
-    Optional<BillingConfigurationSnapshot> findByBillingConfigurationAndIsRestoredFalse(
+    /** Snapshots not yet closed by a restore (rejection) or an approval, newest first. */
+    List<BillingConfigurationSnapshot> findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(
             BillingConfiguration billingConfiguration);
 }
