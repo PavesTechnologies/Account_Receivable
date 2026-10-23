@@ -110,8 +110,13 @@ public class InvoiceDeliveryServiceImpl implements InvoiceDeliveryService {
             return markFailed(delivery, ex.getMessage());
         }
 
-        delivery.setStatus(InvoiceDeliveryStatus.SENT);
-        delivery.setSentAt(LocalDateTime.now());
+        if (emailService.isSimulated()) {
+            // local-demo: nothing left the machine, so never record SENT or a sent-at time.
+            delivery.setStatus(InvoiceDeliveryStatus.SIMULATED);
+        } else {
+            delivery.setStatus(InvoiceDeliveryStatus.SENT);
+            delivery.setSentAt(LocalDateTime.now());
+        }
         delivery.setProviderMessageId(messageId);
 
         InvoiceDelivery saved = invoiceDeliveryRepository.save(delivery);

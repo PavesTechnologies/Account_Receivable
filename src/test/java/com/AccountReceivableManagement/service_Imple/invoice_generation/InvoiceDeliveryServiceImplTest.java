@@ -188,6 +188,38 @@ class InvoiceDeliveryServiceImplTest {
         assertThat(subjectCaptor.getValue()).contains("Example Global Infotech Private Limited");
     }
 
+    // local-demo: a simulated email service must never produce a SENT record or a sent-at time.
+    @Test
+    void sendInvoice_simulatedEmailService_recordsSimulatedNotSent() {
+        Invoice invoice = approvedInvoice();
+        InvoiceResponseDto response = invoiceResponse(invoice);
+
+        when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
+        when(invoiceService.getInvoiceById(invoiceId)).thenReturn(response);
+        when(invoiceDocumentService.generateInvoicePdf(response)).thenReturn(new byte[]{1, 2, 3});
+        when(emailService.sendEmailWithAttachment(
+                eq("client@example.com"), anyString(), anyString(), any(byte[].class), anyString(), anyString()
+        )).thenReturn("demo-simulated-123");
+        when(emailService.isSimulated()).thenReturn(true);
+
+        InvoiceDeliveryResponseDto result = invoiceDeliveryService.sendInvoice(invoiceId);
+
+        assertThat(result.getDeliveryStatus()).isEqualTo(InvoiceDeliveryStatus.SIMULATED);
+        assertThat(result.getDeliveryStatus()).isNotEqualTo(InvoiceDeliveryStatus.SENT);
+        assertThat(result.getSentAt()).as("nothing was sent, so no sent-at time").isNull();
+        assertThat(result.getFailureReason()).isNull();
+
+        ArgumentCaptor<InvoiceDelivery> captor = ArgumentCaptor.forClass(InvoiceDelivery.class);
+        verify(invoiceDeliveryRepository, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(InvoiceDeliveryStatus.SIMULATED);
+        assertThat(captor.getValue().getSentAt()).isNull();
+        assertThat(captor.getValue().getProviderMessageId()).startsWith("demo-simulated-");
+
+        // the demo workflow still continues: the receivable is created after the commit
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        verify(receivableService).createReceivableFromInvoice(invoiceId);
+    }
+
     // 2. Invoice not found.
     @Test
     void sendInvoice_invoiceNotFound_throwsResourceNotFoundException() {

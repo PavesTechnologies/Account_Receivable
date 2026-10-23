@@ -194,8 +194,11 @@ public class ReceivableServiceImpl implements ReceivableService {
             );
         }
 
+        // SIMULATED exists only under the local-demo profile (no real email); production never writes it.
         if (!invoiceDeliveryRepository.existsByInvoiceIdAndStatus(
-                invoice.getInvoiceId(), InvoiceDeliveryStatus.SENT)) {
+                invoice.getInvoiceId(), InvoiceDeliveryStatus.SENT)
+                && !invoiceDeliveryRepository.existsByInvoiceIdAndStatus(
+                invoice.getInvoiceId(), InvoiceDeliveryStatus.SIMULATED)) {
             throw new GlobalExceptionHandler.ValidationException(
                     "A receivable cannot be created because this invoice has not been sent to the client."
             );
