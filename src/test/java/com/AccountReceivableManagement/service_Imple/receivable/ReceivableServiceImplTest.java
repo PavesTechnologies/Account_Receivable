@@ -154,4 +154,71 @@ class ReceivableServiceImplTest {
         assertThatThrownBy(negative::prePersist).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(negative::preUpdate).isInstanceOf(IllegalStateException.class);
     }
+
+    private static final com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus SENT =
+            com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus.SENT;
+    private static final com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus SIMULATED =
+            com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus.SIMULATED;
+
+    private Invoice approvedInvoice(UUID id) {
+        return Invoice.builder().invoiceId(id)
+                .status(com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus.APPROVED).build();
+    }
+
+    @Test
+    void create_invoiceNeverSentOrSimulated_isRefused() {
+        UUID id = UUID.randomUUID();
+        when(invoiceRepository.findByIdForUpdate(id)).thenReturn(Optional.of(approvedInvoice(id)));
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(id, SENT)).thenReturn(false);
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(id, SIMULATED)).thenReturn(false);
+
+        assertThatThrownBy(() -> receivableService.createReceivableFromInvoice(id))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("has not been sent");
+    }
+
+    @Test
+    void create_invoiceWithSimulatedDelivery_passesTheDispatchedCheck() {
+        UUID id = UUID.randomUUID();
+        Receivable existing = receivable(today, today.plusDays(30), "100.00", ReceivableStatus.OUTSTANDING);
+        when(invoiceRepository.findByIdForUpdate(id)).thenReturn(Optional.of(approvedInvoice(id)));
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(id, SENT)).thenReturn(false);
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(id, SIMULATED)).thenReturn(true);
+        when(receivableRepository.findByInvoiceId(id)).thenReturn(Optional.of(existing));
+
+        assertThat(receivableService.createReceivableFromInvoice(id).getReceivableId())
+                .isEqualTo(existing.getReceivableId());
+    }
+
+    @Test
+    void create_invoiceWithSentDelivery_neverConsultsTheSimulatedStatus() {
+        UUID id = UUID.randomUUID();
+        Receivable existing = receivable(today, today.plusDays(30), "100.00", ReceivableStatus.OUTSTANDING);
+        when(invoiceRepository.findByIdForUpdate(id)).thenReturn(Optional.of(approvedInvoice(id)));
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(id, SENT)).thenReturn(true);
+        when(receivableRepository.findByInvoiceId(id)).thenReturn(Optional.of(existing));
+
+        receivableService.createReceivableFromInvoice(id);
+
+        verify(invoiceDeliveryRepository, org.mockito.Mockito.never()).existsByInvoiceIdAndStatus(id, SIMULATED);
+    }
+
+    @Test
+    void create_onlySentOrSimulatedDeliveriesCanSatisfyTheDispatchedCheck() {
+        UUID id = UUID.randomUUID();
+        when(invoiceRepository.findByIdForUpdate(id)).thenReturn(Optional.of(approvedInvoice(id)));
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(id, SENT)).thenReturn(false);
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(id, SIMULATED)).thenReturn(false);
+
+        assertThatThrownBy(() -> receivableService.createReceivableFromInvoice(id))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class);
+
+        // a FAILED or PENDING delivery is never consulted, so it can never allow a receivable
+        for (com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus other
+                : com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus.values()) {
+            if (other != SENT && other != SIMULATED) {
+                verify(invoiceDeliveryRepository, org.mockito.Mockito.never()).existsByInvoiceIdAndStatus(id, other);
+            }
+        }
+    }
 }

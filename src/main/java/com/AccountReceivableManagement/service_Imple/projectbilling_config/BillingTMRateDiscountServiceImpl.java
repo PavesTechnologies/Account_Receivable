@@ -37,8 +37,7 @@ public class BillingTMRateDiscountServiceImpl implements BillingTMRateDiscountSe
 
     @Override
     public BillingTMRateDiscountResponseDto addDiscount(UUID rateCardId, BillingTMRateDiscountRequestDto request) {
-        BillingTMRateCard rateCard = discountRepository.lockRateCard(rateCardId)
-                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException("Rate Card not found."));
+        BillingTMRateCard rateCard = lockRateCardInOrder(rateCardId);
         BillingConfiguration configuration = prepareChange(rateCard);
 
         validate(rateCard, configuration, request, null);
@@ -65,8 +64,7 @@ public class BillingTMRateDiscountServiceImpl implements BillingTMRateDiscountSe
     @Override
     public BillingTMRateDiscountResponseDto updateDiscount(UUID discountId, BillingTMRateDiscountRequestDto request) {
         BillingTMRateDiscount discount = findActive(discountId);
-        BillingTMRateCard rateCard = discountRepository.lockRateCard(discount.getRateCard().getRateCardId())
-                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException("Rate Card not found."));
+        BillingTMRateCard rateCard = lockRateCardInOrder(discount.getRateCard().getRateCardId());
         BillingConfiguration configuration = prepareChange(rateCard);
 
         validate(rateCard, configuration, request, discountId);
@@ -77,7 +75,11 @@ public class BillingTMRateDiscountServiceImpl implements BillingTMRateDiscountSe
         discount.setEffectiveFrom(request.getEffectiveFrom());
         discount.setEffectiveTo(request.getEffectiveTo());
         discount.setNotes(request.getNotes());
-        discount.setIncludeInInvoice(request.getIncludeInInvoice() == null || request.getIncludeInInvoice());
+        // An omitted flag keeps the saved setting (an explicit false is never turned back into true by a PUT
+        // that simply does not mention it). A legacy null still reads as included.
+        if (request.getIncludeInInvoice() != null) {
+            discount.setIncludeInInvoice(request.getIncludeInInvoice());
+        }
         discount.setUpdatedAt(LocalDateTime.now());
 
         BillingTMRateDiscount saved = discountRepository.save(discount);
@@ -89,7 +91,9 @@ public class BillingTMRateDiscountServiceImpl implements BillingTMRateDiscountSe
     @Transactional(readOnly = true)
     public List<BillingTMRateDiscountResponseDto> getDiscounts(UUID rateCardId) {
         return discountRepository.findByRateCard_RateCardIdAndIsActiveTrueOrderByEffectiveFromAsc(rateCardId)
-                .stream().map(this::toResponse).toList();
+                .stream()
+                .filter(discount -> belongsToActiveCard(discount))
+                .map(this::toResponse).toList();
     }
 
     @Override
@@ -101,8 +105,7 @@ public class BillingTMRateDiscountServiceImpl implements BillingTMRateDiscountSe
     @Override
     public void deleteDiscount(UUID discountId) {
         BillingTMRateDiscount discount = findActive(discountId);
-        BillingTMRateCard rateCard = discountRepository.lockRateCard(discount.getRateCard().getRateCardId())
-                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException("Rate Card not found."));
+        BillingTMRateCard rateCard = lockRateCardInOrder(discount.getRateCard().getRateCardId());
         BillingConfiguration configuration = prepareChange(rateCard);
 
         // Soft delete, like rate cards: snapshots already taken keep their own frozen copy.
@@ -112,13 +115,28 @@ public class BillingTMRateDiscountServiceImpl implements BillingTMRateDiscountSe
         touchConfiguration(configuration);
     }
 
+    /** Lock order configuration -> rate card, matching the rate-card service, so concurrent writers cannot deadlock. */
+    private BillingTMRateCard lockRateCardInOrder(UUID rateCardId) {
+        discountRepository.findConfigurationIdByRateCardId(rateCardId).ifPresent(discountRepository::lockConfiguration);
+        return discountRepository.lockRateCard(rateCardId)
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException("Rate Card not found."));
+    }
+
     private BillingTMRateDiscount findActive(UUID discountId) {
         BillingTMRateDiscount discount = discountRepository.findById(discountId)
                 .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException("Discount period not found."));
-        if (!Boolean.TRUE.equals(discount.getIsActive())) {
+        if (!Boolean.TRUE.equals(discount.getIsActive()) || !belongsToActiveCard(discount)) {
             throw new GlobalExceptionHandler.ResourceNotFoundException("Discount period not found.");
         }
         return discount;
+    }
+
+    /**
+     * A period under a deleted rate card is not an active schedule. New deletions soft-delete the periods with
+     * the card; this also hides periods left active by cards deleted before that rule existed.
+     */
+    private boolean belongsToActiveCard(BillingTMRateDiscount discount) {
+        return discount.getRateCard() == null || !Boolean.FALSE.equals(discount.getRateCard().getIsActive());
     }
 
     private BillingConfiguration prepareChange(BillingTMRateCard rateCard) {

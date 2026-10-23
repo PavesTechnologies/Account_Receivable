@@ -78,4 +78,25 @@ public class InvoiceItem {
 
     @Column(name = "role", length = 100)
     private String role;
+
+    // ---- T&M rate audit, frozen from the BillingSnapshotItem of a TIME_ENTRY line ----
+    // "rate" above stays the effective NET rate and "amount" the final line amount. These fields only describe
+    // how the net rate came about; they are never used to recompute amounts. All null on EXPENSE lines (a T&M
+    // discount never applies to an expense) and on invoices generated before these columns existed.
+
+    @Column(name = "base_rate", precision = 19, scale = 2)
+    private BigDecimal baseRate;
+
+    @Column(name = "discount_type", length = 20)
+    private String discountType;
+
+    @Column(name = "discount_value", precision = 19, scale = 2)
+    private BigDecimal discountValue;
+
+    /** Discount per rate unit (baseRate - rate), as calculated at acquisition. */
+    @Column(name = "discount_amount", precision = 19, scale = 2)
+    private BigDecimal discountAmount;
+
+    @Column(name = "discount_period_name", length = 150)
+    private String discountPeriodName;
 }

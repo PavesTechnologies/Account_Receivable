@@ -142,6 +142,12 @@ public class InvoiceResponseDto {
 
     private List<InvoiceTaxComponentResponseDto> taxComponents;
 
+    /** Sum of the TIME_ENTRY line amounts; null when the invoice has none. Derived from the same lines as {@code items}. */
+    private BigDecimal timeMaterialSubtotal;
+
+    /** Sum of the EXPENSE line amounts (approved billable amounts, never T&M-discounted); null when none. */
+    private BigDecimal expenseSubtotal;
+
     private BigDecimal subtotal;
 
     private BigDecimal totalTaxAmount;

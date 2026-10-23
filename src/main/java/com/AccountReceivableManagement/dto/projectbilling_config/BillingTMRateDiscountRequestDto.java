@@ -2,6 +2,7 @@ package com.AccountReceivableManagement.dto.projectbilling_config;
 
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.DiscountType;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -26,6 +27,7 @@ public class BillingTMRateDiscountRequestDto {
 
     @NotNull(message = "Discount value is required.")
     @DecimalMin(value = "0.01", message = "Discount value must be greater than zero.")
+    @Digits(integer = 10, fraction = 2, message = "Discount value must have at most 10 digits and 2 decimal places.")
     private BigDecimal discountValue;
 
     @NotNull(message = "Effective From is required.")

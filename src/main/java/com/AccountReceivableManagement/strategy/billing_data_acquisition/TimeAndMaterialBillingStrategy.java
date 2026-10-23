@@ -109,17 +109,34 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
                 throw new GlobalExceptionHandler.ValidationException("Timesheet ["
                         + timesheet.getSourceReferenceId() + "] has no role, which role-based billing requires.");
             }
-            card = candidates.stream()
+            List<BillingTMRateCard> matching = candidates.stream()
                     .filter(c -> c.getRoleName() != null && c.getRoleName().trim().equalsIgnoreCase(role.trim()))
-                    .findFirst()
-                    .orElseThrow(() -> new GlobalExceptionHandler.ValidationException(
-                            "No active rate found for role '" + role.trim() + "' on " + workDate
-                                    + " in billing configuration " + configId + "."));
+                    .toList();
+            if (matching.isEmpty()) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "No active rate found for role '" + role.trim() + "' on " + workDate
+                                + " in billing configuration " + configId + ".");
+            }
+            if (matching.size() > 1) {
+                // Never pick one silently: the save paths reject overlapping same-role cards, so this can only be
+                // legacy data, and a guessed rate would put a wrong amount on the invoice.
+                throw new GlobalExceptionHandler.ValidationException(
+                        "More than one active rate card matches role '" + role.trim() + "' on " + workDate
+                                + "; the rate schedule is ambiguous. Correct the overlapping rate cards.");
+            }
+            card = matching.get(0);
         } else {
-            card = candidates.stream()
+            List<BillingTMRateCard> roleLess = candidates.stream()
                     .filter(c -> c.getRoleName() == null || c.getRoleName().isBlank())
-                    .findFirst()
-                    .orElse(null);
+                    .toList();
+            if (roleLess.size() > 1) {
+                // No precedence rule between overlapping Standard cards is defined anywhere (the query's
+                // newest-first order was incidental), so a guessed rate could put a wrong amount on the invoice.
+                throw new GlobalExceptionHandler.ValidationException(
+                        "More than one active Standard rate card applies on " + workDate
+                                + "; the rate schedule is ambiguous. Correct the overlapping rate cards.");
+            }
+            card = roleLess.isEmpty() ? null : roleLess.get(0);
         }
 
         BigDecimal baseRate;
