@@ -27,6 +27,18 @@ public interface BillingScheduleRepository extends JpaRepository<BillingSchedule
     List<BillingSchedule> findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
             BillingConfiguration billingConfiguration);
 
+    /**
+     * The configuration's active occurrences, each row locked (SELECT ... FOR UPDATE) until the surrounding transaction
+     * ends, in ascending id order. A locking read returns the latest COMMITTED row, not the transaction's repeatable-read
+     * snapshot, so the status read here is current. The occurrence scheduler locks one row of this set at a time
+     * ({@link #findByIdForUpdate}) before moving it SCHEDULED -> TAX_PENDING, so a plan edit that holds these locks and one
+     * transition are serialised, and because the scheduler never holds a second lock there is no lock cycle.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from BillingSchedule s where s.billingConfiguration = :configuration and s.isActive = true "
+            + "order by s.billingScheduleId asc")
+    List<BillingSchedule> findActiveByConfigurationForUpdate(@Param("configuration") BillingConfiguration configuration);
+
     List<BillingSchedule> findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
             BillingRecurringConfiguration recurringConfiguration);
 

@@ -3,6 +3,8 @@ package com.AccountReceivableManagement.entity.projectbilling_config;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PaymentStructure;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -39,7 +41,10 @@ public class BillingMilestonePlan {
     )
     private BigDecimal totalContractValue;
 
+    // JdbcTypeCode(VARCHAR): without it Hibernate's MySQL dialect creates a native ENUM frozen to the constants that existed
+    // at table-creation time, which cannot store MILESTONES (see migration V16__milestone_billing_support.sql).
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(
             name = "payment_structure",
             nullable = false,

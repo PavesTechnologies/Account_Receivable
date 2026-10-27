@@ -43,7 +43,6 @@ public class ProjectDebeziumConfig {
         log.info("PMS Host                    : {}", projectCdcProperties.getHostname());
         log.info("PMS Port                    : {}", projectCdcProperties.getPort());
         log.info("PMS Database                : {}", projectCdcProperties.getDatabaseName());
-        log.info("PMS Username                : {}", projectCdcProperties.getUsername());
 
         log.info("Topic Prefix                : {}", projectCdcProperties.getTopicPrefix());
 
@@ -59,8 +58,7 @@ public class ProjectDebeziumConfig {
         log.info("------------------------------------------------------");
         log.info("AR Database (Offset Storage)");
         log.info("------------------------------------------------------");
-        log.info("AR JDBC URL                 : {}", arJdbcUrl);
-        log.info("AR Username                 : {}", arUsername);
+        log.info("AR JDBC URL                 : {}", CdcConfigurationLogging.safeJdbcTarget(arJdbcUrl));
 
         log.info("Offset Table                : {}", projectCdcProperties.getOffsetTable());
         log.info("Schema History Table        : {}", projectCdcProperties.getSchemaHistoryTable());

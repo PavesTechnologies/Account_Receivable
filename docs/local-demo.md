@@ -4,6 +4,31 @@ Run the Account Receivable backend on your machine for API development and demos
 infrastructure**. The `local-demo` profile uses a dedicated local MySQL schema, starts no CDC consumer, writes nothing to
 the shared AR database, and cannot call TMS, PMS, RMS, XMS, UMS or a real SMTP server.
 
+## Prerequisites (Windows, PowerShell 5.1 or later)
+
+* **Java 21** (the project targets Java 21 / Spring Boot 3.2.5) and **Maven 3.9+** with `mvn` on the PATH (the wrapper calls `mvn`; tested with 3.9.11).
+* **MySQL Server 8.4.x** (tested with 8.4.8) **and the `mysql` command-line client on the PATH.** A server may already be installed
+  without its client on the PATH - check with `mysql --version`.
+* Git, and a clone of this repository on the branch that contains this document.
+* **You do not need a `.env` file**, and the demo never reads one. Do not point it at one.
+
+## Quick start
+
+```
+# 1. start your own MySQL on 127.0.0.1:3399 (section 1), then, from the repository root:
+.\scripts\local-demo\setup-demo-env.ps1 -GenerateAll -Remember -ProvisionDatabase   # your own credentials + ar_demo schema/user
+.\scripts\local-demo\start-demo.ps1                                                   # starts the backend (local-demo only)
+# 2. once, after the backend has started and created the tables. The backend keeps running in terminal 1, so use a SECOND terminal
+#    and first re-run .\scripts\local-demo\setup-demo-env.ps1 there (with -Remember it reloads your stored values):
+$env:MYSQL_PWD = $env:AR_DEMO_DB_PASSWORD   # the mysql client reads the password from the session; it is never typed, printed or put on the command line
+mysql --host=127.0.0.1 --port=3399 --user=ar_demo_app --database=ar_demo < src\main\resources\sql\demo\local_demo_seed.sql
+Remove-Item Env:MYSQL_PWD
+# 3. a token for the API calls in section 5:
+.\scripts\local-demo\new-token.ps1
+```
+
+`setup-demo-env.ps1` is described in section 2. Each person creates their own credentials; never share or commit them.
+
 ## What is isolated
 
 | Concern | In `local-demo` |
@@ -56,16 +81,54 @@ instance - fine for a throw-away local server, never for anything reachable):
 mysql --host=127.0.0.1 --port=3399 --user=root
 CREATE DATABASE ar_demo CHARACTER SET utf8mb4;
 CREATE USER 'ar_demo_app'@'localhost' IDENTIFIED BY '<choose a password>';
+CREATE USER 'ar_demo_app'@'127.0.0.1' IDENTIFIED BY '<the same password>';
 GRANT ALL PRIVILEGES ON ar_demo.* TO 'ar_demo_app'@'localhost';
+GRANT ALL PRIVILEGES ON ar_demo.* TO 'ar_demo_app'@'127.0.0.1';
 ```
 
-## 2. Environment (set in the shell, **not** in `.env`)
+Both accounts are created because, depending on the server's name-resolution settings, a connection to `127.0.0.1` can match either.
+`setup-demo-env.ps1 -ProvisionDatabase` (section 2) does exactly this for you - and nothing more.
+
+## 2. Credentials (set in the shell, **not** in `.env`)
+
+Two values are required, and each person makes their own: `AR_DEMO_DB_PASSWORD` (the password of the MySQL user `ar_demo_app`)
+and `AR_DEMO_JWT_SECRET` (signs the demo tokens: at least 32 characters, at least 10 different characters, no `<` or `>`, and not
+the same as the database password). Optional: `AR_DEMO_DB_URL` (loopback only; default `jdbc:mysql://127.0.0.1:3399/ar_demo`),
+`AR_DEMO_DB_USERNAME` (default `ar_demo_app`), `AR_DEMO_SERVER_PORT` (default 8080).
+
+**Recommended - the setup script** (`scripts\local-demo\setup-demo-env.ps1`):
 
 ```
-$env:AR_DEMO_DB_PASSWORD = '<the password you chose above>'
-$env:AR_DEMO_JWT_SECRET  = '<random string, 32+ characters, not the DB password>'   # also used by scripts\local-demo\new-token.ps1
-# optional: AR_DEMO_DB_URL (loopback only), AR_DEMO_DB_USERNAME (default ar_demo_app), AR_DEMO_SERVER_PORT (default 8080)
+.\scripts\local-demo\setup-demo-env.ps1                        # prompts (hidden); press Enter to have a strong random value generated
+.\scripts\local-demo\setup-demo-env.ps1 -GenerateAll -Remember  # no prompts; generate both and remember them (encrypted, this Windows user only)
+.\scripts\local-demo\setup-demo-env.ps1 -ProvisionDatabase     # optional: also create schema ar_demo and the app user on YOUR local MySQL
+.\scripts\local-demo\setup-demo-env.ps1 -Forget                # delete the remembered credentials and clear the session variables
 ```
+
+* It sets the two variables for **this PowerShell session only**; run it again in each new shell (with `-Remember` it reloads your
+  stored values, so a generated database password keeps matching your MySQL user).
+* Values are generated with a cryptographic random number generator, are never printed, never written to the repository, never
+  passed on a command line. `-Remember` stores them under `%LOCALAPPDATA%\ar-local-demo\credentials.xml`, outside the repository,
+  encrypted with Windows DPAPI (readable only by your Windows user on this machine).
+* It then runs `start-demo.ps1 -CheckOnly`, so the real isolation rules are applied, and removes what it set if they refuse.
+  It starts nothing and cannot select any profile other than `local-demo`.
+* `-ProvisionDatabase` is optional and additive: it creates `ar_demo` and the user (for `localhost` and `127.0.0.1`) with
+  `CREATE ... IF NOT EXISTS` and `GRANT ... ON ar_demo.*`, and **never drops, alters, deletes or seeds anything**. It first verifies
+  that the target is loopback, the schema is exactly `ar_demo`, the server is on the expected port and bound to loopback only, and
+  you typed `ar_demo` to confirm. It asks for the MySQL admin password (hidden; or use `MYSQL_PWD` / `-AdminNoPassword` for a fresh
+  `--initialize-insecure` server), then proves the app user can log in. If the user already exists with a different password it
+  stops and tells you; it will not change it.
+* `scripts\local-demo\test-setup-demo-env.ps1` tests all of this without contacting any database.
+
+**Manual alternative** (what the script does for you):
+
+```
+$env:AR_DEMO_DB_PASSWORD = Read-Host -Prompt 'DB password (hidden)' -AsSecureString | ForEach-Object { [System.Net.NetworkCredential]::new('', $_).Password }
+$env:AR_DEMO_JWT_SECRET  = Read-Host -Prompt 'JWT secret (hidden, 32+ characters)' -AsSecureString | ForEach-Object { [System.Net.NetworkCredential]::new('', $_).Password }
+```
+
+Do not combine `local-demo` with another environment profile; the guard refuses `dev`, `prod`, `production`, `staging`,
+`stage`, `qa` and `uat`.
 
 > **Why the wrapper matters.** `.env` is loaded in every profile and contains `spring.profiles.active=local`, so a plain
 > `mvn spring-boot:run` starts the **`local`** profile (the shared-infrastructure one), not the demo. Always start the demo
@@ -100,7 +163,9 @@ backend before seeding or leave it running; the seed only inserts rows.
 ## 4. Seed the demo data - first run only
 
 ```
-mysql --host=127.0.0.1 --port=3399 --user=ar_demo_app --password --database=ar_demo < src\main\resources\sql\demo\local_demo_seed.sql
+$env:MYSQL_PWD = $env:AR_DEMO_DB_PASSWORD   # the mysql client reads the password from the session; it is never typed, printed or put on the command line
+mysql --host=127.0.0.1 --port=3399 --user=ar_demo_app --database=ar_demo < src\main\resources\sql\demo\local_demo_seed.sql
+Remove-Item Env:MYSQL_PWD
 ```
 
 Do **not** add `--force`. **The seed is not re-runnable.** It never deletes or updates any data. Before it inserts anything
@@ -122,7 +187,7 @@ DROP DATABASE ar_demo;  CREATE DATABASE ar_demo CHARACTER SET utf8mb4;   -- then
 start the backend once so Hibernate creates the tables, stop it, and run the seed again. Never run it against a shared
 database. In any schema not named `ar_demo` the script prints a refusal and stops at its first statement, before creating anything.
 
-**Verified on a disposable local MySQL 8.4.8** (Phase 3D): run 1 inserted 61 rows into 20 tables; run 2 was refused (exit 1) and the row counts and
+**Verified on a disposable local MySQL 8.4.8:** run 1 inserted 61 rows into 20 tables; run 2 was refused (exit 1) and the row counts and
 `CHECKSUM TABLE` of all 45 tables were identical afterwards; a wrong schema was refused with nothing created. **One side effect:** a refusal that happens
 *after* the schema check (tables missing, not InnoDB, or data already present) leaves the empty stored procedure `ar_demo_seed_guard` in `ar_demo`. It holds
 no data, the next run drops it first, and recreating the schema removes it.

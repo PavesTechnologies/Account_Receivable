@@ -30,4 +30,7 @@ public class BillingPaymentEntryRequestDto {
 
     private String remarks;
 
+    /** Required (and only allowed) when the payment structure is MILESTONES: the PMS id of the milestone this entry bills. */
+    private Long pmsMilestoneId;
+
 }

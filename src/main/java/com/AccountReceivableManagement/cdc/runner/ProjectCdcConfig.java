@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.cdc.runner;
 
+import com.AccountReceivableManagement.cdc.config.CdcConfigurationLogging;
 import com.AccountReceivableManagement.cdc.listener.ProjectCdcHandler;
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
@@ -33,10 +34,8 @@ public class ProjectCdcConfig {
 
         Properties props = configuration.asProperties();
 
-        log.info("========== Project Debezium Configuration ==========");
-        props.forEach((key, value) ->
-                log.info("{} = {}", key, value));
-        log.info("====================================================");
+        // Never log the whole property map: it holds the source and offset-store passwords. Allowlisted metadata only.
+        CdcConfigurationLogging.logSafeSummary(log, "Project Debezium Configuration", props);
 
         return DebeziumEngine.create(Json.class)
                 .using(props)

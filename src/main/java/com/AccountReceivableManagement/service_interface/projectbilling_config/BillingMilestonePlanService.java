@@ -21,4 +21,13 @@ public interface BillingMilestonePlanService {
 
     void delete(UUID milestonePlanId);
 
+    /**
+     * Re-checks, under the milestone row locks, that no other live billing configuration has claimed any milestone this
+     * configuration's active MILESTONES plan holds. Called at submission and at approval, because the claim made when the
+     * plan was saved can have been overtaken since. Does nothing for configurations without an active MILESTONES plan.
+     *
+     * @throws com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler.ValidationException on a conflict
+     */
+    void revalidateMilestoneClaims(BillingConfiguration configuration);
+
 }
