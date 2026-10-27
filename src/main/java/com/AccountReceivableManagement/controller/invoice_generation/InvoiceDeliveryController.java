@@ -41,13 +41,17 @@ public class InvoiceDeliveryController {
         InvoiceDeliveryResponseDto response = invoiceDeliveryService.sendInvoice(invoiceId);
 
         boolean delivered = response.getDeliveryStatus() == InvoiceDeliveryStatus.SENT;
+        // SIMULATED only occurs under the local-demo profile: the workflow completed but no email was sent.
+        boolean simulated = response.getDeliveryStatus() == InvoiceDeliveryStatus.SIMULATED;
 
         return ResponseEntity.ok(
                 ApiResponse.<InvoiceDeliveryResponseDto>builder()
-                        .success(delivered)
+                        .success(delivered || simulated)
                         .message(
                                 delivered
                                         ? "Invoice sent to client successfully."
+                                        : simulated
+                                        ? "Invoice delivery SIMULATED (local-demo): no email was sent."
                                         : "Invoice delivery failed: " + response.getFailureReason()
                         )
                         .data(response)

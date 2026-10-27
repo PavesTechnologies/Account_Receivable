@@ -23,6 +23,7 @@ import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation;
 import com.AccountReceivableManagement.entity.tax_calculation.TaxCalculationComponent;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingItemType;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
+import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceApprovalAction;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
@@ -35,8 +36,10 @@ import com.AccountReceivableManagement.repo.projectbilling_config.BillingSchedul
 import com.AccountReceivableManagement.repo.projectbilling_config.PaymentTermsMasterRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
 import com.AccountReceivableManagement.service_interface.company_profile.CompanyProfileService;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -126,13 +129,16 @@ public class InvoiceServiceImpl implements InvoiceService {
 
         private final CompanyProfileService companyProfileService;
 
+        private final RecordActionLockService recordActionLockService;
+
         public InvoiceServiceImpl(
                         InvoiceRepository invoiceRepository,
                         InvoiceApprovalHistoryRepository invoiceApprovalHistoryRepository,
                         BillingSnapshotRepository billingSnapshotRepository,
                         TaxCalculationRepository taxCalculationRepository,
                         BillingConfigurationService billingConfigurationService,
-                        PaymentTermsMasterRepository paymentTermsMasterRepository
+                        PaymentTermsMasterRepository paymentTermsMasterRepository,
+                        RecordActionLockService recordActionLockService
         ) {
                 this.invoiceRepository = invoiceRepository;
                 this.invoiceApprovalHistoryRepository = invoiceApprovalHistoryRepository;
@@ -142,6 +148,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 this.paymentTermsMasterRepository = paymentTermsMasterRepository;
                 this.billingScheduleRepository = null;
                 this.companyProfileService = null;
+                this.recordActionLockService = recordActionLockService;
         }
 
     @Override
@@ -289,6 +296,10 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .sellerEmail(companyProfile.getEmail())
                         .sellerPhone(companyProfile.getPhone())
                         .sellerLogoReference(companyProfile.getLogoReference())
+                        .sellerSignatureReference(companyProfile.getAuthorizedSignatureReference())
+                        .invoiceNotes(companyProfile.getDefaultInvoiceNotes())
+                        .termsAndConditions(companyProfile.getDefaultTermsAndConditions())
+                        .paymentInstructions(companyProfile.getDefaultPaymentInstructions())
                         .taxRegionCode(snapshot.getTaxRegionCode())
                         .sourceTaxJurisdictionCode(
                                 snapshot.getSourceTaxJurisdictionCode()
@@ -321,6 +332,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                 : snapshot.getItems()
         ) {
 
+            if (!com.AccountReceivableManagement.util.TmRateCalculator
+                    .isIncluded(snapshotItem.getIncludeInInvoice())) {
+                continue;
+            }
+
             InvoiceItem invoiceItem =
                     InvoiceItem.builder()
                             .invoice(invoice)
@@ -346,6 +362,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                             .resourceName(
                                     snapshotItem.getResourceName()
                             )
+                            .baseRate(tmRateAudit(snapshotItem, snapshotItem.getBaseRate()))
+                            .discountType(tmRateAudit(snapshotItem, snapshotItem.getDiscountType()))
+                            .discountValue(tmRateAudit(snapshotItem, snapshotItem.getDiscountValue()))
+                            .discountAmount(tmRateAudit(snapshotItem, snapshotItem.getDiscountAmount()))
+                            .discountPeriodName(tmRateAudit(snapshotItem, snapshotItem.getDiscountPeriodName()))
                             .build();
 
             invoice.getItems().add(invoiceItem);
@@ -546,6 +567,10 @@ public class InvoiceServiceImpl implements InvoiceService {
                         .sellerEmail(companyProfile.getEmail())
                         .sellerPhone(companyProfile.getPhone())
                         .sellerLogoReference(companyProfile.getLogoReference())
+                        .sellerSignatureReference(companyProfile.getAuthorizedSignatureReference())
+                        .invoiceNotes(companyProfile.getDefaultInvoiceNotes())
+                        .termsAndConditions(companyProfile.getDefaultTermsAndConditions())
+                        .paymentInstructions(companyProfile.getDefaultPaymentInstructions())
                         // The schedule tax path does not persist the jurisdictions
                         // it compared, so only the Tax Region is frozen here.
                         .taxRegionCode(configuration.getTaxRegionCode())
@@ -675,6 +700,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         // recomputed or aggregated); ordered by work date, then resource.
         List<BillingSnapshotItem> snapshotItems =
                 snapshot.getItems().stream()
+                        .filter(item -> com.AccountReceivableManagement.util.TmRateCalculator
+                                .isIncluded(item.getIncludeInInvoice()))
                         .sorted(java.util.Comparator
                                 .comparing(
                                         BillingSnapshotItem::getWorkDate,
@@ -702,6 +729,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                                         .amount(item.getAmount())
                                         .workDate(item.getWorkDate())
                                         .role(item.getRole())
+                                        .baseRate(tmRateAudit(item, item.getBaseRate()))
+                                        .discountType(tmRateAudit(item, item.getDiscountType()))
+                                        .discountValue(tmRateAudit(item, item.getDiscountValue()))
+                                        .discountAmount(tmRateAudit(item, item.getDiscountAmount()))
+                                        .discountPeriodName(tmRateAudit(item, item.getDiscountPeriodName()))
                                         .build();
                         })
                         .toList();
@@ -727,6 +759,8 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .clientId(snapshot.getClientId())
                 .clientName(configuration.getClientName())
                 .countryCode(configuration.getCountryCode())
+                .clientCountryName(configuration.getCountryName())
+                .clientCountryCode(configuration.getCountryCode())
                 .email(configuration.getEmail())
                 .phone(configuration.getPhone())
                 .projectId(snapshot.getProjectId())
@@ -748,10 +782,16 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .sellerEmail(companyProfile != null ? companyProfile.getEmail() : null)
                 .sellerPhone(companyProfile != null ? companyProfile.getPhone() : null)
                 .sellerLogoReference(companyProfile != null ? companyProfile.getLogoReference() : null)
+                .sellerSignatureReference(companyProfile != null ? companyProfile.getAuthorizedSignatureReference() : null)
+                .invoiceNotes(companyProfile != null ? companyProfile.getDefaultInvoiceNotes() : null)
+                .termsAndConditions(companyProfile != null ? companyProfile.getDefaultTermsAndConditions() : null)
+                .paymentInstructions(companyProfile != null ? companyProfile.getDefaultPaymentInstructions() : null)
                 .taxRegionCode(snapshot.getTaxRegionCode())
                 .sourceTaxJurisdictionCode(snapshot.getSourceTaxJurisdictionCode())
                 .destinationTaxJurisdictionCode(snapshot.getDestinationTaxJurisdictionCode())
                 .items(items)
+                .timeMaterialSubtotal(sumLinesOfType(items, BillingItemType.TIME_ENTRY))
+                .expenseSubtotal(sumLinesOfType(items, BillingItemType.EXPENSE))
                 .taxComponents(taxComponents)
                 .subtotal(taxCalculation.getTaxableAmount())
                 .totalTaxAmount(taxCalculation.getTotalTaxAmount())
@@ -863,6 +903,45 @@ public class InvoiceServiceImpl implements InvoiceService {
             }
         }
 
+        // Candidates without a snapshot: schedules whose tax calculation is
+        // complete (the schedule-based flow never creates a BillingSnapshot).
+        // Eligibility is the lifecycle stage only - not the billing type.
+        java.util.Set<UUID> invoicedScheduleIds =
+                invoices.stream()
+                        .map(Invoice::getBillingScheduleId)
+                        .filter(java.util.Objects::nonNull)
+                        .collect(Collectors.toSet());
+
+        for (BillingSchedule schedule
+                : billingScheduleRepository
+                .findByPeriodStatusAndTaxStatusAndIsActiveTrue(
+                        BillingPeriodStatus.TAX_CALCULATED,
+                        BillingPeriodStatus.TAX_CALCULATED)) {
+
+            if (Boolean.TRUE.equals(schedule.getIsInvoiced())
+                    || invoicedScheduleIds.contains(schedule.getBillingScheduleId())
+                    || schedule.getBillingConfiguration() == null) {
+                continue;
+            }
+
+            // A schedule that has a snapshot is represented by that snapshot.
+            if (billingSnapshotRepository
+                    .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                            schedule.getBillingConfiguration().getBillingConfigurationId(),
+                            schedule.getPeriodStartDate(),
+                            schedule.getPeriodEndDate())
+                    .isPresent()) {
+                continue;
+            }
+
+            var row = mapScheduleCandidateToWorkspaceRow(schedule);
+            rows.add(row);
+
+            if (row.getGrandTotal() != null) {
+                readyAmount = readyAmount.add(row.getGrandTotal());
+            }
+        }
+
         long readyCount = rows.size();
         long generated = 0, pending = 0, approved = 0, rejected = 0;
         BigDecimal invoicedAmount = BigDecimal.ZERO;
@@ -935,6 +1014,40 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .billingPeriodEnd(snapshot.getBillingPeriodEnd())
                 .currencyCode(snapshot.getCurrencyCode())
                 .amount(tax != null ? tax.getTaxableAmount() : snapshot.getTotalAmount())
+                .totalTaxAmount(tax != null ? tax.getTotalTaxAmount() : null)
+                .grandTotal(tax != null ? tax.getGrandTotal() : null)
+                .build();
+    }
+
+    private com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto
+    mapScheduleCandidateToWorkspaceRow(BillingSchedule schedule) {
+
+        TaxCalculation tax =
+                taxCalculationRepository
+                        .findByBillingScheduleId(schedule.getBillingScheduleId())
+                        .orElse(null);
+
+        BillingConfigurationResponseDto configuration = null;
+        try {
+            configuration =
+                    billingConfigurationService.getBillingConfiguration(
+                            schedule.getBillingConfiguration().getBillingConfigurationId());
+        } catch (RuntimeException ex) {
+            // Row is still returned; names are simply unavailable.
+        }
+
+        return com.AccountReceivableManagement.dto.invoice_generation.InvoiceGenerationWorkspaceRowDto.builder()
+                .workspaceStatus(
+                        com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus.READY_FOR_INVOICE)
+                .billingScheduleId(schedule.getBillingScheduleId())
+                .clientName(configuration != null ? configuration.getClientName() : null)
+                .projectName(configuration != null ? configuration.getProjectName() : null)
+                .projectCode(configuration != null ? configuration.getProjectCode() : null)
+                .billingType(configuration != null ? configuration.getBillingTypeName() : null)
+                .billingPeriodStart(schedule.getPeriodStartDate())
+                .billingPeriodEnd(schedule.getPeriodEndDate())
+                .currencyCode(configuration != null ? configuration.getCurrencyCode() : null)
+                .amount(tax != null ? tax.getTaxableAmount() : schedule.getBillingAmount())
                 .totalTaxAmount(tax != null ? tax.getTotalTaxAmount() : null)
                 .grandTotal(tax != null ? tax.getGrandTotal() : null)
                 .build();
@@ -1045,6 +1158,15 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 )
                         );
 
+        // =========================================================
+        // VALIDATE APPROVAL LOCK
+        // =========================================================
+
+        recordActionLockService.validateLockOwner(
+                LockResourceType.INVOICE,
+                invoiceId
+        );
+
         if (invoice.getStatus()
                 != InvoiceStatus.PENDING_APPROVAL) {
 
@@ -1074,6 +1196,33 @@ public class InvoiceServiceImpl implements InvoiceService {
     @Override
     public InvoiceResponseDto refreshAfterCorrection(
             UUID invoiceId
+    ) {
+        return refreshAfterCorrection(invoiceId, null);
+    }
+
+    /** Column limit of {@code InvoiceApprovalHistory.comment}. */
+    private static final int HISTORY_COMMENT_MAX_LENGTH = 500;
+
+    private static final String REFRESH_COMMENT = "Invoice refreshed from corrected billing/tax data.";
+
+    /**
+     * Standard refresh comment plus the repricing summary when one is supplied. The summary is appended whole or
+     * not at all (never cut); if it cannot fit, the standard comment says so.
+     */
+    static String refreshComment(String repricingSummary) {
+        if (repricingSummary == null || repricingSummary.isBlank()) {
+            return REFRESH_COMMENT;
+        }
+        String combined = REFRESH_COMMENT + " " + repricingSummary.trim();
+        return combined.length() <= HISTORY_COMMENT_MAX_LENGTH
+                ? combined
+                : REFRESH_COMMENT + " Repricing summary omitted (too long); see the [SnapshotRebuildRepriced] log.";
+    }
+
+    @Override
+    public InvoiceResponseDto refreshAfterCorrection(
+            UUID invoiceId,
+            String repricingSummary
     ) {
 
         Invoice invoice =
@@ -1157,7 +1306,7 @@ public class InvoiceServiceImpl implements InvoiceService {
                 InvoiceStatus.REJECTED,
                 InvoiceStatus.REJECTED,
                 InvoiceApprovalAction.CORRECTED,
-                "Invoice refreshed from corrected billing/tax data."
+                refreshComment(repricingSummary)
         );
 
         return mapToResponse(saved);
@@ -1234,6 +1383,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                 : snapshot.getItems()
         ) {
 
+            if (!com.AccountReceivableManagement.util.TmRateCalculator
+                    .isIncluded(snapshotItem.getIncludeInInvoice())) {
+                continue;
+            }
+
             invoice.getItems().add(
                     InvoiceItem.builder()
                             .invoice(invoice)
@@ -1259,6 +1413,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                             .resourceName(
                                     snapshotItem.getResourceName()
                             )
+                            .baseRate(tmRateAudit(snapshotItem, snapshotItem.getBaseRate()))
+                            .discountType(tmRateAudit(snapshotItem, snapshotItem.getDiscountType()))
+                            .discountValue(tmRateAudit(snapshotItem, snapshotItem.getDiscountValue()))
+                            .discountAmount(tmRateAudit(snapshotItem, snapshotItem.getDiscountAmount()))
+                            .discountPeriodName(tmRateAudit(snapshotItem, snapshotItem.getDiscountPeriodName()))
                             .build()
             );
         }
@@ -1429,6 +1588,15 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 )
                         );
 
+        // =========================================================
+        // VALIDATE APPROVAL LOCK
+        // =========================================================
+
+        recordActionLockService.validateLockOwner(
+                LockResourceType.INVOICE,
+                invoiceId
+        );
+
         if (invoice.getStatus()
                 != InvoiceStatus.PENDING_APPROVAL) {
 
@@ -1441,6 +1609,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         InvoiceStatus previousStatus = invoice.getStatus();
 
         invoice.setStatus(InvoiceStatus.APPROVED);
+
 
         Invoice saved = invoiceRepository.save(invoice);
 
@@ -1616,6 +1785,23 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .orElse(null);
     }
 
+    /**
+     * The T&M rate audit (base rate, discount) belongs to TIME_ENTRY lines only. An expense is billed at its approved
+     * cost basis, so none of it is ever carried onto an EXPENSE line, whatever the snapshot item holds.
+     */
+    /** Sum of the persisted line amounts of one type (null when the invoice has no line of it); never recomputed from rate x quantity. */
+    static BigDecimal sumLinesOfType(List<InvoiceItemResponseDto> items, BillingItemType type) {
+        List<BigDecimal> amounts = items.stream()
+                .filter(item -> item.getItemType() == type && item.getAmount() != null)
+                .map(InvoiceItemResponseDto::getAmount)
+                .toList();
+        return amounts.isEmpty() ? null : amounts.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private static <T> T tmRateAudit(BillingSnapshotItem item, T value) {
+        return item.getItemType() == BillingItemType.TIME_ENTRY ? value : null;
+    }
+
     private InvoiceResponseDto mapToResponse(
             Invoice invoice
     ) {
@@ -1644,6 +1830,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                                         .resourceName(
                                                 item.getResourceName()
                                         )
+                                        .baseRate(item.getBaseRate())
+                                        .discountType(item.getDiscountType())
+                                        .discountValue(item.getDiscountValue())
+                                        .discountAmount(item.getDiscountAmount())
+                                        .discountPeriodName(item.getDiscountPeriodName())
                                         .build();
                         })
                         .toList();
@@ -1737,12 +1928,18 @@ public class InvoiceServiceImpl implements InvoiceService {
                 .sellerEmail(invoice.getSellerEmail())
                 .sellerPhone(invoice.getSellerPhone())
                 .sellerLogoReference(invoice.getSellerLogoReference())
+                .sellerSignatureReference(invoice.getSellerSignatureReference())
+                .invoiceNotes(invoice.getInvoiceNotes())
+                .termsAndConditions(invoice.getTermsAndConditions())
+                .paymentInstructions(invoice.getPaymentInstructions())
                 .taxRegionCode(invoice.getTaxRegionCode())
                 .sourceTaxJurisdictionCode(invoice.getSourceTaxJurisdictionCode())
                 .destinationTaxJurisdictionCode(invoice.getDestinationTaxJurisdictionCode())
                 .invoiceDate(invoice.getInvoiceDate())
                 .dueDate(invoice.getDueDate())
                 .items(items)
+                .timeMaterialSubtotal(sumLinesOfType(items, BillingItemType.TIME_ENTRY))
+                .expenseSubtotal(sumLinesOfType(items, BillingItemType.EXPENSE))
                 .taxComponents(taxComponents)
                 .subtotal(invoice.getSubtotal())
                 .totalTaxAmount(invoice.getTotalTaxAmount())

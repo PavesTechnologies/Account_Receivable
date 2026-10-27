@@ -56,8 +56,26 @@ public class CompanyProfile {
     @Column(name = "phone", length = 30)
     private String phone;
 
+    /** Opaque id of the current authorized-signatory signature asset (company_signature_asset); null when none. */
+    @Column(name = "authorized_signature_reference", length = 36)
+    private String authorizedSignatureReference;
+
     @Column(name = "logo_reference", length = 500)
     private String logoReference;
+
+    /**
+     * Configurable defaults copied onto each newly generated invoice. Null
+     * until a business user configures them - never populated with
+     * invented wording.
+     */
+    @Column(name = "default_invoice_notes", columnDefinition = "TEXT")
+    private String defaultInvoiceNotes;
+
+    @Column(name = "default_terms_and_conditions", columnDefinition = "TEXT")
+    private String defaultTermsAndConditions;
+
+    @Column(name = "default_payment_instructions", columnDefinition = "TEXT")
+    private String defaultPaymentInstructions;
 
     @Column(name = "is_active", nullable = false)
     @Builder.Default

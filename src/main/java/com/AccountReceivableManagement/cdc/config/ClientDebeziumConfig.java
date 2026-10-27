@@ -3,6 +3,7 @@ package com.AccountReceivableManagement.cdc.config;
 import com.AccountReceivableManagement.cdc.config.properties.ClientCdcProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 @Slf4j
 @RequiredArgsConstructor
 @Configuration
+@ConditionalOnProperty(name = "ar.cdc.infrastructure.enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(ClientCdcProperties.class)
 public class ClientDebeziumConfig {
 
@@ -41,7 +43,6 @@ public class ClientDebeziumConfig {
         log.info("RMS Host                    : {}", clientCdcProperties.getHostname());
         log.info("RMS Port                    : {}", clientCdcProperties.getPort());
         log.info("RMS Database                : {}", clientCdcProperties.getDatabaseName());
-        log.info("RMS Username                : {}", clientCdcProperties.getUsername());
 
         log.info("Topic Prefix                : {}", clientCdcProperties.getTopicPrefix());
 
@@ -57,8 +58,7 @@ public class ClientDebeziumConfig {
         log.info("------------------------------------------------------");
         log.info("AR Database (Offset Storage)");
         log.info("------------------------------------------------------");
-        log.info("AR JDBC URL                 : {}", arJdbcUrl);
-        log.info("AR Username                 : {}", arUsername);
+        log.info("AR JDBC URL                 : {}", CdcConfigurationLogging.safeJdbcTarget(arJdbcUrl));
 
         log.info("Offset Table                : {}", clientCdcProperties.getOffsetTable());
         log.info("Schema History Table        : {}", clientCdcProperties.getSchemaHistoryTable());

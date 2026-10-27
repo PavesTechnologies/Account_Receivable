@@ -12,6 +12,8 @@ import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionH
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingFixedPriceRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingFixedPriceService;
+import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,6 +34,7 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
     private final BillingFixedPriceRepository billingFixedPriceRepository;
     private final BillingConfigurationRepository billingConfigurationRepository;
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
+    private final RecordActionLockService recordActionLockService;
 //    private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingConfigurationChangeTrackingService changeTrackingService;
 
     @Override
@@ -46,6 +49,12 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Billing Configuration not found."
                                 ));
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         validateBillingConfiguration(configuration);
 
@@ -148,6 +157,12 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
         BillingConfiguration configuration =
                 fixedPrice.getBillingConfiguration();
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                configuration.getBillingConfigurationId()
+        );
 
         validateBillingConfiguration(configuration);
 
@@ -290,6 +305,12 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
         BillingConfiguration configuration =
                 fixedPrice.getBillingConfiguration();
+
+        // Block if another user holds the parent BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                configuration.getBillingConfigurationId()
+        );
 
         validateBillingConfiguration(configuration);
 

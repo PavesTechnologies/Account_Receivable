@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.service_Imple.invoice_generation;
 
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceItemResponseDto;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingItemType;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceTaxComponentResponseDto;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDocumentService;
@@ -8,6 +9,8 @@ import com.lowagie.text.*;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
+import com.AccountReceivableManagement.service_interface.company_profile.CompanySignatureService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.awt.Color;
@@ -45,6 +48,21 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
 
     private static final Color HEADER_BACKGROUND = new Color(51, 51, 51);
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(InvoiceDocumentServiceImpl.class);
+
+    /** Null when constructed without Spring (e.g. layout-only tests): no signature is rendered. */
+    private final CompanySignatureService signatureService;
+
+    public InvoiceDocumentServiceImpl() {
+        this.signatureService = null;
+    }
+
+    @Autowired
+    public InvoiceDocumentServiceImpl(CompanySignatureService signatureService) {
+        this.signatureService = signatureService;
+    }
+
     @Override
     public byte[] generateInvoicePdf(InvoiceResponseDto invoice) {
 
@@ -73,6 +91,12 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
 
             addTotals(document, invoice);
 
+            addTextSection(document, "Notes", invoice.getInvoiceNotes());
+            addTextSection(document, "Payment Instructions", invoice.getPaymentInstructions());
+            addTextSection(document, "Terms & Conditions", invoice.getTermsAndConditions());
+
+            addAuthorizedSignatory(document, invoice);
+
             document.close();
 
             return outputStream.toByteArray();
@@ -89,6 +113,44 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
                 document.close();
             }
         }
+    }
+
+    /**
+     * Prints the invoice's own frozen signature image above a plain
+     * "Authorized Signatory" caption. Nothing is printed when the invoice has
+     * no signature, or the stored asset is missing or unreadable - in which
+     * case the PDF is still produced. No claim of digital signing or approval
+     * is made.
+     */
+    private void addAuthorizedSignatory(Document document, InvoiceResponseDto invoice) throws DocumentException {
+        String reference = invoice.getSellerSignatureReference();
+        if (reference == null || reference.isBlank() || signatureService == null) {
+            return;
+        }
+        Image image;
+        try {
+            image = signatureService.findImage(reference)
+                    .map(stored -> {
+                        try {
+                            return Image.getInstance(stored.content());
+                        } catch (Exception ex) {
+                            return null;
+                        }
+                    })
+                    .orElse(null);
+        } catch (RuntimeException ex) {
+            image = null;
+        }
+        if (image == null) {
+            log.warn("[InvoicePdf] signature asset {} for invoice {} is unavailable; rendering without it.",
+                    reference, invoice.getInvoiceNumber());
+            return;
+        }
+        image.scaleToFit(150, 60);
+        image.setAlignment(Image.LEFT);
+        document.add(Chunk.NEWLINE);
+        document.add(image);
+        document.add(new Paragraph("Authorized Signatory", BODY_FONT));
     }
 
     private void addSellerAndBuyer(
@@ -165,40 +227,155 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
         table.addCell(valueCell);
     }
 
+    /**
+     * Lines are grouped the way the invoice preview shows them: time & material services, expenses (never carrying a
+     * T&M discount) and any other charge type, each in its own table. Every figure is the persisted line value.
+     */
     private void addItemsTable(
             Document document,
             List<InvoiceItemResponseDto> items
     ) throws DocumentException {
 
-        document.add(new Paragraph("Invoice Items", SECTION_FONT));
+        List<InvoiceItemResponseDto> all = items != null ? items : List.of();
 
-        PdfPTable table = new PdfPTable(5);
+        if (all.isEmpty()) {
+            document.add(new Paragraph("Invoice Items", SECTION_FONT));
+            document.add(new Paragraph("No billable line items on this invoice.", BODY_FONT));
+            return;
+        }
+
+        List<InvoiceItemResponseDto> timeLines = linesOfType(all, BillingItemType.TIME_ENTRY);
+        List<InvoiceItemResponseDto> expenseLines = linesOfType(all, BillingItemType.EXPENSE);
+        List<InvoiceItemResponseDto> otherLines = all.stream()
+                .filter(item -> item.getItemType() != BillingItemType.TIME_ENTRY
+                        && item.getItemType() != BillingItemType.EXPENSE)
+                .toList();
+
+        boolean first = true;
+        if (!timeLines.isEmpty()) {
+            addTimeLinesTable(document, timeLines);
+            first = false;
+        }
+        if (!expenseLines.isEmpty()) {
+            if (!first) {
+                document.add(Chunk.NEWLINE);
+            }
+            addExpenseLinesTable(document, expenseLines);
+            first = false;
+        }
+        if (!otherLines.isEmpty()) {
+            if (!first) {
+                document.add(Chunk.NEWLINE);
+            }
+            addOtherLinesTable(document, otherLines);
+        }
+    }
+
+    private static List<InvoiceItemResponseDto> linesOfType(List<InvoiceItemResponseDto> items, BillingItemType type) {
+        return items.stream().filter(item -> item.getItemType() == type).toList();
+    }
+
+    private static BigDecimal sumOfAmounts(List<InvoiceItemResponseDto> lines) {
+        return lines.stream()
+                .map(InvoiceItemResponseDto::getAmount)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private void addTimeLinesTable(Document document, List<InvoiceItemResponseDto> lines) throws DocumentException {
+        document.add(new Paragraph("Professional Services (Time & Material)", SECTION_FONT));
+
+        PdfPTable table = new PdfPTable(7);
         table.setWidthPercentage(100);
-        table.setWidths(new float[]{2.5f, 1.5f, 1f, 1f, 1f});
+        table.setWidths(new float[]{1.1f, 2.4f, 0.8f, 1f, 1.6f, 1f, 1.1f});
+        table.setHeaderRows(1);
 
-        addHeaderCell(table, "Resource / Item");
-        addHeaderCell(table, "Type");
-        addHeaderCell(table, "Quantity");
-        addHeaderCell(table, "Rate");
+        addHeaderCell(table, "Date");
+        addHeaderCell(table, "Description");
+        addHeaderCell(table, "Hours");
+        addHeaderCell(table, "Base Rate");
+        addHeaderCell(table, "Discount");
+        addHeaderCell(table, "Net Rate");
         addHeaderCell(table, "Amount");
 
-        if (items != null) {
-            for (InvoiceItemResponseDto item : items) {
+        for (InvoiceItemResponseDto item : lines) {
+            String name = item.getResourceName() != null && !item.getResourceName().isBlank()
+                    ? item.getResourceName()
+                    : nullToDash(item.getItemName());
+            String description = item.getRole() != null && !item.getRole().isBlank()
+                    ? name + "\n" + item.getRole()
+                    : name;
 
-                String displayName =
-                        item.getResourceName() != null && !item.getResourceName().isBlank()
-                                ? item.getResourceName()
-                                : nullToDash(item.getItemName());
-
-                addBodyCell(table, displayName);
-                addBodyCell(table, item.getItemType() != null ? item.getItemType().name() : "-");
-                addBodyCell(table, formatAmount(item.getQuantity()));
-                addBodyCell(table, formatAmount(item.getRate()));
-                addBodyCell(table, formatAmount(item.getAmount()));
-            }
+            addBodyCell(table, formatDate(item.getWorkDate()));
+            addBodyCell(table, description);
+            addBodyCell(table, formatAmount(item.getQuantity()));
+            addBodyCell(table, item.getBaseRate() != null ? formatAmount(item.getBaseRate()) : "-");
+            addBodyCell(table, describeDiscount(item));
+            addBodyCell(table, formatAmount(item.getRate()));
+            addBodyCell(table, formatAmount(item.getAmount()));
         }
 
         document.add(table);
+    }
+
+    private void addExpenseLinesTable(Document document, List<InvoiceItemResponseDto> lines) throws DocumentException {
+        document.add(new Paragraph("Expenses", SECTION_FONT));
+
+        PdfPTable table = new PdfPTable(4);
+        table.setWidthPercentage(100);
+        table.setWidths(new float[]{1.1f, 4f, 0.8f, 1.3f});
+        table.setHeaderRows(1);
+
+        addHeaderCell(table, "Date");
+        addHeaderCell(table, "Expense");
+        addHeaderCell(table, "Qty");
+        addHeaderCell(table, "Amount");
+
+        for (InvoiceItemResponseDto item : lines) {
+            addBodyCell(table, formatDate(item.getWorkDate()));
+            addBodyCell(table, nullToDash(item.getItemName()));
+            addBodyCell(table, formatAmount(item.getQuantity()));
+            addBodyCell(table, formatAmount(item.getAmount()));
+        }
+
+        document.add(table);
+    }
+
+    private void addOtherLinesTable(Document document, List<InvoiceItemResponseDto> lines) throws DocumentException {
+        document.add(new Paragraph("Invoice Items", SECTION_FONT));
+
+        PdfPTable table = new PdfPTable(4);
+        table.setWidthPercentage(100);
+        table.setWidths(new float[]{4f, 0.8f, 1.2f, 1.3f});
+        table.setHeaderRows(1);
+
+        addHeaderCell(table, "Description");
+        addHeaderCell(table, "Qty");
+        addHeaderCell(table, "Rate");
+        addHeaderCell(table, "Amount");
+
+        for (InvoiceItemResponseDto item : lines) {
+            addBodyCell(table, nullToDash(item.getItemName()));
+            addBodyCell(table, formatAmount(item.getQuantity()));
+            addBodyCell(table, formatAmount(item.getRate()));
+            addBodyCell(table, formatAmount(item.getAmount()));
+        }
+
+        document.add(table);
+    }
+
+    /** "10%" / "20.00 off" plus the period name; "-" when no discount applied (always so for expenses). */
+    static String describeDiscount(InvoiceItemResponseDto item) {
+        if (item.getDiscountValue() == null
+                || item.getDiscountValue().signum() <= 0
+                || item.getDiscountType() == null) {
+            return "-";
+        }
+        String value = "PERCENTAGE".equalsIgnoreCase(item.getDiscountType())
+                ? item.getDiscountValue().stripTrailingZeros().toPlainString() + "%"
+                : item.getDiscountValue().setScale(2, java.math.RoundingMode.HALF_UP).toPlainString() + " off";
+        String period = item.getDiscountPeriodName();
+        return period != null && !period.isBlank() ? value + " (" + period + ")" : value;
     }
 
     private void addTaxTable(
@@ -251,13 +428,21 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
     ) throws DocumentException {
 
         PdfPTable table = new PdfPTable(2);
-        table.setWidthPercentage(50);
+        table.setWidthPercentage(65);
         table.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        table.setWidths(new float[]{1f, 1f});
+        table.setWidths(new float[]{1.7f, 1f});
 
-        addTotalRow(table, "Subtotal", invoice.getSubtotal(), invoice.getCurrencyCode());
+        List<InvoiceItemResponseDto> items = invoice.getItems() != null ? invoice.getItems() : List.of();
+        List<InvoiceItemResponseDto> timeLines = linesOfType(items, BillingItemType.TIME_ENTRY);
+        List<InvoiceItemResponseDto> expenseLines = linesOfType(items, BillingItemType.EXPENSE);
+        if (!timeLines.isEmpty() && !expenseLines.isEmpty()) {
+            // Sums of the persisted line amounts shown above; the subtotal below stays the backend's figure.
+            addTotalRow(table, "Time & Material Subtotal", invoice.getTimeMaterialSubtotal() != null ? invoice.getTimeMaterialSubtotal() : sumOfAmounts(timeLines), invoice.getCurrencyCode());
+            addTotalRow(table, "Expenses Subtotal", invoice.getExpenseSubtotal() != null ? invoice.getExpenseSubtotal() : sumOfAmounts(expenseLines), invoice.getCurrencyCode());
+        }
+        addTotalRow(table, "Taxable Subtotal", invoice.getSubtotal(), invoice.getCurrencyCode());
         addTotalRow(table, "Total Tax", invoice.getTotalTaxAmount(), invoice.getCurrencyCode());
-        addTotalRow(table, "Grand Total", invoice.getGrandTotal(), invoice.getCurrencyCode());
+        addTotalRow(table, "Total Invoice Amount", invoice.getGrandTotal(), invoice.getCurrencyCode());
 
         document.add(table);
     }
@@ -295,6 +480,22 @@ public class InvoiceDocumentServiceImpl implements InvoiceDocumentService {
         PdfPCell cell = new PdfPCell(new Phrase(text != null ? text : "-", TABLE_BODY_FONT));
         cell.setPadding(4f);
         table.addCell(cell);
+    }
+
+    /** Printed only when the invoice carries saved content - never a placeholder. */
+    private void addTextSection(
+            Document document,
+            String heading,
+            String text
+    ) throws DocumentException {
+
+        if (text == null || text.isBlank()) {
+            return;
+        }
+
+        document.add(Chunk.NEWLINE);
+        document.add(new Paragraph(heading, SECTION_FONT));
+        document.add(new Paragraph(text, BODY_FONT));
     }
 
     private void addLineIfPresent(Document document, String value) throws DocumentException {

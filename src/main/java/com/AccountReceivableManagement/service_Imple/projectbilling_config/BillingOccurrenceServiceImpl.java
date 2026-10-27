@@ -730,6 +730,16 @@ public class BillingOccurrenceServiceImpl {
 
         LocalDate today = LocalDate.now();
 
+        // Same rule as the scheduler's transition (one shared helper): a Milestone Plan configuration that is EXPIRED, INACTIVE
+        // (e.g. approved before its effective-from date) or not yet effective promotes nothing; its due occurrences stay
+        // SCHEDULED and progress, overdue ones included, once the configuration starts.
+        String notBillable = BillingOccurrenceTransactionServiceImpl.milestoneNotYetBillableReason(configuration, today);
+        if (notBillable != null) {
+            log.warn("Configuration {}: due milestone occurrences are not moved to TAX_PENDING because {}",
+                    configuration.getBillingConfigurationId(), notBillable);
+            return;
+        }
+
         for (BillingSchedule schedule : billingScheduleRepository
                 .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration)) {
             if (schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED

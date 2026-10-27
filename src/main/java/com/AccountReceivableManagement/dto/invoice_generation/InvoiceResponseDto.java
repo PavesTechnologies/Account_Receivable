@@ -50,6 +50,16 @@ public class InvoiceResponseDto {
 
     private String countryCode;
 
+    /**
+     * Client country as stored on the Client (the only client location data
+     * available - no city/state/address). Populated on the pre-generation
+     * preview only; display data, never used for tax determination. Not the
+     * seller location.
+     */
+    private String clientCountryName;
+
+    private String clientCountryCode;
+
     private String billingAddress;
 
     private String gstinOrTaxId;
@@ -100,6 +110,19 @@ public class InvoiceResponseDto {
 
     private String sellerLogoReference;
 
+    /** Frozen signature asset id (null when none was configured at generation). */
+    private String sellerSignatureReference;
+
+    /**
+     * Saved on the invoice at generation; on a preview (not yet generated)
+     * these show the currently configured defaults that generation will copy.
+     */
+    private String invoiceNotes;
+
+    private String termsAndConditions;
+
+    private String paymentInstructions;
+
     /**
      * Tax context frozen on the invoice at generation - the Tax Region code,
      * and the supplier (source) and customer (destination) tax jurisdiction
@@ -118,6 +141,12 @@ public class InvoiceResponseDto {
     private List<InvoiceItemResponseDto> items;
 
     private List<InvoiceTaxComponentResponseDto> taxComponents;
+
+    /** Sum of the TIME_ENTRY line amounts; null when the invoice has none. Derived from the same lines as {@code items}. */
+    private BigDecimal timeMaterialSubtotal;
+
+    /** Sum of the EXPENSE line amounts (approved billable amounts, never T&M-discounted); null when none. */
+    private BigDecimal expenseSubtotal;
 
     private BigDecimal subtotal;
 

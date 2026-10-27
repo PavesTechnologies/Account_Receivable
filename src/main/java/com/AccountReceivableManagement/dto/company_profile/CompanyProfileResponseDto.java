@@ -36,6 +36,15 @@ public class CompanyProfileResponseDto {
 
     private String logoReference;
 
+    /** Opaque id of the current authorized signature (null when none); the image is served by the signature API. */
+    private String authorizedSignatureReference;
+
+    private String defaultInvoiceNotes;
+
+    private String defaultTermsAndConditions;
+
+    private String defaultPaymentInstructions;
+
     private Boolean isActive;
 
     private LocalDateTime createdAt;

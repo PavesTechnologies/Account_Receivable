@@ -53,6 +53,10 @@ public class Invoice {
     @Column(name = "invoice_id")
     private UUID invoiceId;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     @Column(
             name = "invoice_number",
             nullable = false,
@@ -202,8 +206,28 @@ public class Invoice {
     @Column(name = "seller_phone", length = 30)
     private String sellerPhone;
 
+    /** Signature asset id frozen at generation; null on invoices issued before this existed or without a signature. */
+    @Column(name = "seller_signature_reference", length = 36)
+    private String sellerSignatureReference;
+
     @Column(name = "seller_logo_reference", length = 500)
     private String sellerLogoReference;
+
+    /**
+     * Notes, Terms & Conditions and Payment Instructions frozen at
+     * generation from the Company Profile defaults. Never re-derived, so
+     * later changes to the defaults do not alter an existing invoice. Null
+     * on invoices generated before these columns existed or when no
+     * default was configured.
+     */
+    @Column(name = "invoice_notes", columnDefinition = "TEXT")
+    private String invoiceNotes;
+
+    @Column(name = "terms_and_conditions", columnDefinition = "TEXT")
+    private String termsAndConditions;
+
+    @Column(name = "payment_instructions", columnDefinition = "TEXT")
+    private String paymentInstructions;
 
     /**
      * Tax context the invoice's tax was calculated under, frozen at

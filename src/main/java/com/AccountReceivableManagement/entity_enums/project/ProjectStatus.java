@@ -7,5 +7,8 @@ public enum ProjectStatus {
     COMPLETED,
     ACTIVE,
     CANCELLED,
-    DELAYED
+    DELAYED,
+    // PMS project status values (pms.projects.status: ACTIVE, ARCHIVED, PLANNING, COMPLETED); kept as-is, not mapped.
+    PLANNING,
+    ARCHIVED
 }

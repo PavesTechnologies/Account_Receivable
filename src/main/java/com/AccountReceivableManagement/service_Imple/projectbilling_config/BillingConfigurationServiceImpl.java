@@ -5,6 +5,7 @@ import com.AccountReceivableManagement.entity.client_entity.Client;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
 import com.AccountReceivableManagement.entity.projectbilling_config.*;
 import com.AccountReceivableManagement.entity_enums.client.RecordStatus;
+import com.AccountReceivableManagement.entity_enums.common.LockResourceType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingContext;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
@@ -13,7 +14,9 @@ import com.AccountReceivableManagement.entity_enums.projectbilling_config.Pricin
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.*;
+import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
+import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingMilestonePlanService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingPeriodCalculatorService;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler.ResourceNotFoundException;
@@ -56,8 +59,11 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingPeriodCalculatorService billingPeriodCalculatorService;
     private final BillingMilestonePlanRepository billingMilestonePlanRepository;
     private final BillingPaymentEntryRepository billingPaymentEntryRepository;
+    private final BillingMilestonePlanService billingMilestonePlanService;
     private final BillingConfigurationChangeTrackingService changeTrackingService;
+    private final RecordActionLockService recordActionLockService;
     private final com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationSnapshotRepository snapshotRepository;
+    private final com.AccountReceivableManagement.repo.billing_data_acquisition.BillingAcquisitionRepository billingAcquisitionRepository;
 
     // =========================================================
     // CREATE BILLING CONFIGURATION
@@ -327,6 +333,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+        // =========================================================
+        // VALIDATE APPROVAL LOCK
+        // =========================================================
+
+        recordActionLockService.validateLockOwner(
+                LockResourceType.BILLING_CONFIGURATION,
+                id
+        );
+
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.PENDING_APPROVAL) {
 
@@ -335,6 +350,20 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         validateEffectiveDates(configuration);
+
+        validateTimeAndMaterialRateCards(configuration);
+
+        /*
+         * The milestone claim made when the plan was saved can have been overtaken since (another plan claimed the
+         * milestone while this one waited). Re-check under the milestone locks before approving.
+         */
+        revalidateMilestoneClaims(configuration);
+
+        /*
+         * The edit this snapshot guarded is now accepted. Close it, so a later rejection can never restore it
+         * (or an older generation) over a newer state.
+         */
+        closePendingSnapshots(configuration);
 
         /*
          * Approval is successful.
@@ -424,6 +453,81 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         return mapToResponse(saved);
     }
 
+    private void revalidateMilestoneClaims(BillingConfiguration configuration) {
+        if (configuration.getBillingType() != null
+                && "Milestone Plan".equalsIgnoreCase(configuration.getBillingType().getBillingTypeName())) {
+            billingMilestonePlanService.revalidateMilestoneClaims(configuration);
+        }
+    }
+
+    private void closePendingSnapshots(BillingConfiguration configuration) {
+        List<BillingConfigurationSnapshot> open =
+                snapshotRepository.findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration);
+        if (open != null && !open.isEmpty()) {
+            open.forEach(s -> s.setIsRestored(true));
+            snapshotRepository.saveAll(open);
+        }
+    }
+
+    /**
+     * Approval gate for Time &amp; Material rate data, so an inconsistent configuration is refused here with a
+     * clear message instead of failing later, during snapshot creation.
+     *
+     * ROLE_BASED: at least one active card; every card has a role and an HOURLY rate; no role has two cards
+     * whose (inclusive) date windows overlap. STANDARD: role-specific cards are ignored by Standard billing, so
+     * a configuration that still carries them is contradictory and must be cleaned up before approval. Other
+     * billing types and configurations without a pricing model are not checked.
+     */
+    private void validateTimeAndMaterialRateCards(BillingConfiguration configuration) {
+        if (configuration.getBillingType() == null
+                || configuration.getBillingType().getBillingTypeName() == null
+                || !"Timesheet Based".equalsIgnoreCase(configuration.getBillingType().getBillingTypeName().trim())) {
+            return;
+        }
+        PricingModel model = configuration.getPricingModel();
+        if (model == null) {
+            return;
+        }
+
+        List<BillingTMRateCard> cards = billingTMRateCardRepository
+                .findByBillingConfiguration_BillingConfigurationIdAndIsActiveTrue(
+                        configuration.getBillingConfigurationId());
+        if (cards == null) {
+            cards = List.of();
+        }
+
+        if (model == PricingModel.ROLE_BASED) {
+            if (cards.isEmpty()) {
+                throw new ValidationException(
+                        "Role-Based pricing requires at least one active role rate card before approval.");
+            }
+            for (BillingTMRateCard card : cards) {
+                String role = com.AccountReceivableManagement.util.TmRateCardRules.normalizeRole(card.getRoleName());
+                if (role == null) {
+                    throw new ValidationException(
+                            "Role-Based pricing requires a role name on every rate card; a rate card has none.");
+                }
+                if (card.getRatePeriod() != com.AccountReceivableManagement.entity_enums.projectbilling_config
+                        .BillingRatePeriod.HOURLY) {
+                    throw new ValidationException("The rate card for role '" + role + "' uses a "
+                            + card.getRatePeriod() + " rate; Role-Based timesheet billing needs an HOURLY rate.");
+                }
+                com.AccountReceivableManagement.util.TmRateCardRules.assertNoRoleConflict(
+                        cards, card.getRateCardId(), role, card.getEffectiveFrom(), card.getEffectiveTo());
+            }
+        } else if (model == PricingModel.STANDARD) {
+            for (BillingTMRateCard card : cards) {
+                if (com.AccountReceivableManagement.util.TmRateCardRules.normalizeRole(card.getRoleName()) != null) {
+                    throw new ValidationException("Standard pricing does not use role-specific rate cards, but the "
+                            + "rate card for role '" + card.getRoleName().trim() + "' is still active. Delete it or "
+                            + "switch the configuration to Role-Based pricing before approval.");
+                }
+                com.AccountReceivableManagement.util.TmRateCardRules.assertNoRoleConflict(
+                        cards, card.getRateCardId(), null, card.getEffectiveFrom(), card.getEffectiveTo());
+            }
+        }
+    }
+
 
     // =========================================================
     // REJECT
@@ -441,6 +545,11 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+        recordActionLockService.validateLockOwner(
+                LockResourceType.BILLING_CONFIGURATION,
+                id
+        );
+
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.PENDING_APPROVAL) {
 
@@ -451,7 +560,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // =========================================================
         // RESTORE PREVIOUS APPROVED STATE IF SNAPSHOT EXISTS
         // =========================================================
-        snapshotRepository.findByBillingConfigurationAndIsRestoredFalse(configuration)
+        snapshotRepository.findFirstByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
                 .ifPresent(snapshot -> {
                     log.info("Restoring configuration {} from snapshot {}", id, snapshot.getSnapshotId());
                     changeTrackingService.restoreConfigurationFromSnapshot(configuration, snapshot);
@@ -513,6 +622,11 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 ? configuration.getClient().getCountryCode()
                                 : null)
 
+                .countryName(
+                        configuration.getClient() != null
+                                ? configuration.getClient().getCountryName()
+                                : null)
+
                 .email(
                         configuration.getClient() != null
                                 ? configuration.getClient().getEmail()
@@ -524,6 +638,10 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 : null)
 
                 .projectId(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getPmsProjectId()
+                                : null)
+                .pmsProjectId(
                         configuration.getProject() != null
                                 ? configuration.getProject().getPmsProjectId()
                                 : null)
@@ -683,6 +801,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 builder.tmRateCards(getTMRateCards(configuration));
             } else if ("Milestone Plan".equalsIgnoreCase(billingTypeName)) {
                 builder.milestoneSchedules(getMilestoneSchedules(configuration));
+
+                BillingMilestonePlanResponseDto milestonePlan = getMilestonePlanDetails(configuration);
+                if (milestonePlan != null) {
+                    builder.milestonePlanDetails(milestonePlan);
+                    builder.paymentStructure(milestonePlan.getPaymentStructure());
+                }
             }
         }
 
@@ -834,6 +958,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 .effectiveFrom(rateCard.getEffectiveFrom())
                 .effectiveTo(rateCard.getEffectiveTo())
                 .remarks(rateCard.getRemarks())
+                .includeBaseRateInInvoice(com.AccountReceivableManagement.util.TmRateCalculator
+                        .isIncluded(rateCard.getIncludeBaseRateInInvoice()))
                 .createdAt(rateCard.getCreatedAt())
                 .updatedAt(rateCard.getUpdatedAt())
                 .build();
@@ -852,6 +978,18 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             log.error("Error fetching milestone schedules for configuration: {}",
                     configuration.getBillingConfigurationId(), e);
             return java.util.Collections.emptyList();
+        }
+    }
+
+    private BillingMilestonePlanResponseDto getMilestonePlanDetails(BillingConfiguration configuration) {
+        try {
+            return billingMilestonePlanService
+                    .findActiveByBillingConfiguration(configuration)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.error("Error fetching milestone plan details for configuration: {}",
+                    configuration.getBillingConfigurationId(), e);
+            return null;
         }
     }
 
@@ -964,6 +1102,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
                     return ProjectResponseDto.builder()
                             .projectId(
+                                    project.getPmsProjectId()
+                            )
+                            .pmsProjectId(
                                     project.getPmsProjectId()
                             )
                             .projectName(
@@ -1106,6 +1247,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+        // =========================================================
+        // VALIDATE EDIT LOCK
+        // This endpoint serves both the new-configuration wizard
+        // (final save before submit, no lock held) and the Edit
+        // session on existing records (EDIT lock held). Only block
+        // when another user holds the BILLING_CONFIGURATION lock;
+        // @Version still guards concurrent writes without a lock.
+        // =========================================================
+
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         Client client =
                 clientRepository.findById(request.getClientId())
@@ -1341,6 +1495,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+        // Block if another user holds the BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
+
         /*
          * Only APPROVED configurations can be manually deactivated.
          */
@@ -1407,11 +1567,21 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     @Transactional
     public void deleteBillingConfiguration(UUID billingConfigurationId) {
 
+        // Row lock first: rate-card and discount writers take configuration -> cards -> discounts, and this
+        // method deletes discounts and cards before the configuration row, so locking the configuration up front
+        // keeps one order and stops a concurrent card insert from slipping in between the checks and the delete.
         BillingConfiguration configuration =
-                billingConfigurationRepository.findById(billingConfigurationId)
+                billingTMRateCardRepository.lockConfiguration(billingConfigurationId)
+                        .or(() -> billingConfigurationRepository.findById(billingConfigurationId))
                         .orElseThrow(() ->
                                 new GlobalExceptionHandler.ResourceNotFoundException(
                                         "Billing configuration not found."));
+
+        // Block if another user holds the BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         // Only allow deletion of drafts
         if (configuration.getApprovalStatus() != ApprovalStatus.DRAFT) {
@@ -1425,6 +1595,18 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         if (billingSnapshotRepository.existsByBillingConfigurationId(billingConfigurationId)) {
             throw new GlobalExceptionHandler.ValidationException(
                     "This billing configuration cannot be deleted because it is referenced by historical Billing Snapshot data.");
+        }
+
+        // Acquisition records and configuration change-tracking rows reference the configuration (non-null foreign
+        // keys) and are billing/audit history. They are never deleted here, so a configuration that has them is
+        // refused with a clear message instead of failing on the foreign key.
+        if (billingAcquisitionRepository.existsByBillingConfiguration_BillingConfigurationId(billingConfigurationId)) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "This billing configuration cannot be deleted because billing acquisition records reference it.");
+        }
+        if (snapshotRepository.existsByBillingConfiguration_BillingConfigurationId(billingConfigurationId)) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "This billing configuration cannot be deleted because it has configuration change history.");
         }
 
         // Delete child configurations first
@@ -1446,6 +1628,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         billingScheduleRepository
                 .deleteByBillingConfiguration(configuration);
+
+        // Discount periods reference their rate card (foreign key), so they go first. Reaching this point means
+        // the configuration is a DRAFT that no snapshot references; snapshots/invoices keep their own frozen
+        // copy of every discount, so no billing history is removed.
+        billingTMRateCardRepository
+                .deleteDiscountsByConfiguration(configuration);
 
         billingTMRateCardRepository
                 .deleteByBillingConfiguration(configuration);
@@ -1545,6 +1733,15 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         configuration.setHourlyRate(
                 request.getHourlyRate());
 
+        // Currency comes from the project/PMS. T&M rate cards and discount periods are saved
+        // right after draft creation, and the discount service requires the configuration's currency.
+        if (project.getProjectBudgetCurrency() != null
+                && !project.getProjectBudgetCurrency().isBlank()) {
+            currencyRepository
+                    .findByCurrencyCodeIgnoreCase(project.getProjectBudgetCurrency())
+                    .ifPresent(configuration::setCurrency);
+        }
+
         // =========================================================
         // SAVE
         // =========================================================
@@ -1576,6 +1773,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
+
+        // =========================================================
+        // VALIDATE EDIT LOCK
+        // Draft saves are section-level saves (wizard steps, rate
+        // card, etc.) inside the editing session, so only block
+        // when another user holds the BILLING_CONFIGURATION lock.
+        // @Version still guards concurrent writes without a lock.
+        // =========================================================
+
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                billingConfigurationId
+        );
 
         // =========================================================
         // VALIDATE EDITABLE STATUS
@@ -1705,19 +1915,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // =========================================================
         // CURRENCY
         // =========================================================
-        if (request.getCurrencyId() != null) {
+        // The wizard's currencyId comes from the Expense Management currency service, so it need not
+        // exist in currency_master; fall back to the currency code before giving up.
+        boolean hasCurrencyCode = request.getCurrency() != null
+                && !request.getCurrency().isBlank();
+        CurrencyMaster currencyById = request.getCurrencyId() == null
+                ? null
+                : currencyRepository.findById(request.getCurrencyId()).orElse(null);
 
-            CurrencyMaster currency =
-                    currencyRepository
-                            .findById(request.getCurrencyId())
-                            .orElseThrow(() ->
-                                    new ResourceNotFoundException(
-                                            "Currency not found."));
+        if (currencyById != null) {
 
-            configuration.setCurrency(currency);
+            configuration.setCurrency(currencyById);
 
-        } else if (request.getCurrency() != null
-                && !request.getCurrency().isBlank()) {
+        } else if (hasCurrencyCode) {
 
             CurrencyMaster currency =
                     currencyRepository
@@ -1729,6 +1939,10 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                                     + request.getCurrency()));
 
             configuration.setCurrency(currency);
+
+        } else if (request.getCurrencyId() != null) {
+
+            throw new ResourceNotFoundException("Currency not found.");
         }
 
         // =========================================================
@@ -1891,6 +2105,10 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                         configuration.getProject() != null
                                 ? configuration.getProject().getPmsProjectId()
                                 : null)
+                .pmsProjectId(
+                        configuration.getProject() != null
+                                ? configuration.getProject().getPmsProjectId()
+                                : null)
 
                 .billingTypeId(
                         configuration.getBillingType() != null
@@ -1975,6 +2193,12 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
+        // Block if another user holds the BILLING_CONFIGURATION edit lock
+        recordActionLockService.validateNotLockedByAnotherUser(
+                LockResourceType.BILLING_CONFIGURATION,
+                id
+        );
+
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.DRAFT) {
 
@@ -1983,6 +2207,10 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         validateEffectiveDates(configuration);
+
+        // A REJECTED configuration returns to DRAFT on edit; it must not slip back into approval holding a milestone
+        // another plan has claimed since.
+        revalidateMilestoneClaims(configuration);
 
         configuration.setApprovalStatus(
                 ApprovalStatus.PENDING_APPROVAL);
@@ -2204,6 +2432,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 .map(project ->
                         ProjectResponseDto.builder()
                                 .projectId(project.getPmsProjectId())
+                                .pmsProjectId(project.getPmsProjectId())
                                 .projectName(project.getProjectName())
                                 .projectCode(project.getProjectCode())
                                 .projectDuration(

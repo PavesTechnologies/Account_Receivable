@@ -1,0 +1,3 @@
+# Early layer of the local-demo isolation guard (no-op unless the local-demo profile is active).
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.AccountReceivableManagement.demo.LocalDemoIsolationEnvironmentPostProcessor

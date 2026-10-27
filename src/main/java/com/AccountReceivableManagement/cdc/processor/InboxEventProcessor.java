@@ -8,6 +8,7 @@ import com.AccountReceivableManagement.cdc.service.MilestoneDataProcessor;
 import com.AccountReceivableManagement.cdc.service.ProjectDataProcessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +16,8 @@ import java.util.List;
 
 @Slf4j
 @Component
+// Defaults to enabled; only the local-demo profile switches it off (it must never poll a shared cdc_inbox).
+@ConditionalOnProperty(name = "ar.cdc.inbox-processor.enabled", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class InboxEventProcessor {
 

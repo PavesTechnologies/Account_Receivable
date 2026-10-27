@@ -15,7 +15,9 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Field;
+import java.math.BigDecimal;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Slf4j
@@ -62,6 +64,14 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
                 projectMasterReferenceRepository.findBypmsProjectId(pmsProjectIdUpdate).ifPresent(project -> {
                     refreshClientBudgetAsync(project.getClientId());
                 });
+                break;
+            case "r":
+                data = payload.getAfter();
+                if (data == null) {
+                    log.warn("After payload is null for snapshot operation and entityId '{}'", payload.getEntityId());
+                    return;
+                }
+                handleSnapshot(data);
                 break;
             case "d":
                 data = payload.getBefore();
@@ -117,6 +127,56 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
                 savedProject.getPmsProjectId());
         
         log.info("[PROJECT-CDC] CREATE COMPLETE - Created project with PMS ID: {}", project.getPmsProjectId());
+    }
+
+    /**
+     * Debezium snapshot read ("r"): create the project if AR does not have it, otherwise refresh its
+     * synchronized fields. Idempotent. The client budget is refreshed only when the project is new or its
+     * client, budget or currency changed, so replayed snapshots do not trigger a refresh per project.
+     * The client reference is a plain UUID column with no foreign key, so a project is stored even when
+     * its client has not been synchronized yet; the budget refresh then logs and skips (it never throws).
+     */
+    private void handleSnapshot(Map<String, Object> data) {
+        Long pmsProjectId = getPmsProjectId(data);
+        if (pmsProjectId == null) {
+            log.error("PMS Project ID is null for snapshot operation.");
+            throw new IllegalArgumentException("PMS Project ID cannot be null for snapshot operations.");
+        }
+
+        ProjectMasterReference project = projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId).orElse(null);
+        boolean isNew = project == null;
+        UUID previousClientId = isNew ? null : project.getClientId();
+        BigDecimal previousBudget = isNew ? null : project.getProjectBudget();
+        String previousCurrency = isNew ? null : project.getProjectBudgetCurrency();
+
+        if (isNew) {
+            project = new ProjectMasterReference();
+        }
+        updateProjectFromMap(data, project);
+        project.setPmsProjectId(pmsProjectId);
+        projectMasterReferenceRepository.save(project);
+        log.info("[PROJECT-CDC] {} project from snapshot - pmsProjectId: {}, clientId: {}",
+                isNew ? "Created" : "Updated", pmsProjectId, project.getClientId());
+
+        boolean budgetAffected = isNew
+                || !Objects.equals(previousClientId, project.getClientId())
+                || !Objects.equals(previousCurrency, project.getProjectBudgetCurrency())
+                || compareBudgets(previousBudget, project.getProjectBudget()) != 0;
+        if (budgetAffected) {
+            if (previousClientId != null && !Objects.equals(previousClientId, project.getClientId())) {
+                refreshClientBudgetAsync(previousClientId);
+            }
+            if (project.getClientId() != null) {
+                refreshClientBudgetAsync(project.getClientId());
+            }
+        }
+    }
+
+    private int compareBudgets(BigDecimal a, BigDecimal b) {
+        if (a == null || b == null) {
+            return a == b ? 0 : 1;
+        }
+        return a.compareTo(b);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

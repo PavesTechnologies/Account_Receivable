@@ -4,6 +4,7 @@ import com.AccountReceivableManagement.cdc.config.properties.ClientCdcProperties
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ExecutorService;
@@ -11,6 +12,7 @@ import java.util.concurrent.Executors;
 
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "ar.cdc.infrastructure.enabled", havingValue = "true", matchIfMissing = true)
 public class ClientCdcRunner {
 
     private final ClientCdcProperties clientCdcProperties;
