@@ -354,6 +354,18 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         validateTimeAndMaterialRateCards(configuration);
 
         /*
+         * The milestone claim made when the plan was saved can have been overtaken since (another plan claimed the
+         * milestone while this one waited). Re-check under the milestone locks before approving.
+         */
+        revalidateMilestoneClaims(configuration);
+
+        /*
+         * The edit this snapshot guarded is now accepted. Close it, so a later rejection can never restore it
+         * (or an older generation) over a newer state.
+         */
+        closePendingSnapshots(configuration);
+
+        /*
          * Approval is successful.
          */
         configuration.setApprovalStatus(
@@ -439,6 +451,22 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         return mapToResponse(saved);
+    }
+
+    private void revalidateMilestoneClaims(BillingConfiguration configuration) {
+        if (configuration.getBillingType() != null
+                && "Milestone Plan".equalsIgnoreCase(configuration.getBillingType().getBillingTypeName())) {
+            billingMilestonePlanService.revalidateMilestoneClaims(configuration);
+        }
+    }
+
+    private void closePendingSnapshots(BillingConfiguration configuration) {
+        List<BillingConfigurationSnapshot> open =
+                snapshotRepository.findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration);
+        if (open != null && !open.isEmpty()) {
+            open.forEach(s -> s.setIsRestored(true));
+            snapshotRepository.saveAll(open);
+        }
     }
 
     /**
@@ -532,7 +560,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // =========================================================
         // RESTORE PREVIOUS APPROVED STATE IF SNAPSHOT EXISTS
         // =========================================================
-        snapshotRepository.findByBillingConfigurationAndIsRestoredFalse(configuration)
+        snapshotRepository.findFirstByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
                 .ifPresent(snapshot -> {
                     log.info("Restoring configuration {} from snapshot {}", id, snapshot.getSnapshotId());
                     changeTrackingService.restoreConfigurationFromSnapshot(configuration, snapshot);
@@ -2179,6 +2207,10 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         validateEffectiveDates(configuration);
+
+        // A REJECTED configuration returns to DRAFT on edit; it must not slip back into approval holding a milestone
+        // another plan has claimed since.
+        revalidateMilestoneClaims(configuration);
 
         configuration.setApprovalStatus(
                 ApprovalStatus.PENDING_APPROVAL);

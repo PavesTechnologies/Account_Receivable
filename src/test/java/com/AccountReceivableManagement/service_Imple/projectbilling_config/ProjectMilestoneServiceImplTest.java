@@ -2,9 +2,15 @@ package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.projectbilling_config.ProjectMilestoneResponseDto;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMilestoneReference;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.MilestoneBillingState;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMilestoneReferenceRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingPaymentEntryRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.MilestoneAssignmentRow;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,9 +21,11 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -27,6 +35,7 @@ import static org.mockito.Mockito.when;
 class ProjectMilestoneServiceImplTest {
 
     private static final Long PROJECT_ID = 9002L;
+    private static final UUID CONFIG_ID = UUID.fromString("00000000-0000-0000-0000-0000000000c1");
 
     @Mock
     private ProjectMilestoneReferenceRepository milestoneRepository;
@@ -34,11 +43,70 @@ class ProjectMilestoneServiceImplTest {
     @Mock
     private ProjectMasterReferenceRepository projectRepository;
 
+    @Mock
+    private BillingPaymentEntryRepository paymentEntryRepository;
+
     private ProjectMilestoneServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new ProjectMilestoneServiceImpl(milestoneRepository, projectRepository);
+        service = new ProjectMilestoneServiceImpl(milestoneRepository, projectRepository, paymentEntryRepository);
+    }
+
+    private static MilestoneAssignmentRow row(long milestoneId, BillingPeriodStatus status, Boolean invoiced) {
+        return new MilestoneAssignmentRow(milestoneId, CONFIG_ID, ApprovalStatus.APPROVED, BillingConfigurationStatus.ACTIVE,
+                status == null ? null : UUID.randomUUID(), status, invoiced);
+    }
+
+    private List<ProjectMilestoneResponseDto> listWith(List<ProjectMilestoneReference> milestones, List<MilestoneAssignmentRow> rows) {
+        projectExists();
+        when(milestoneRepository.findByPmsProjectIdAndSourceDeletedFalseOrderByPmsMilestoneIdAsc(PROJECT_ID)).thenReturn(milestones);
+        when(paymentEntryRepository.findMilestoneAssignmentRows(anyCollection(), anyCollection())).thenReturn(rows);
+        return service.getMilestones(PROJECT_ID, null, false);
+    }
+
+    @Test
+    void anUnclaimedReadyBillableMilestoneIsAvailableAndEligible() {
+        ProjectMilestoneResponseDto dto = listWith(List.of(milestone(5, "READY_FOR_BILLING", true, false)), List.of()).get(0);
+
+        assertThat(dto.getBillingState()).isEqualTo(MilestoneBillingState.AVAILABLE);
+        assertThat(dto.getEligibleForBilling()).isTrue();
+        assertThat(dto.getIneligibilityReason()).isNull();
+        assertThat(dto.getBillingConfigurationId()).isNull();
+    }
+
+    @Test
+    void aMilestoneThatIsNotReadyOrNotBillableIsNotEligibleButStaysListedSoItCanBecomeEligibleLater() {
+        List<ProjectMilestoneResponseDto> result = listWith(List.of(
+                milestone(5, "NOT_READY", true, false), milestone(6, "NOT_BILLABLE", false, false)), List.of());
+
+        assertThat(result).extracting(ProjectMilestoneResponseDto::getEligibleForBilling).containsExactly(false, false);
+        assertThat(result.get(0).getIneligibilityReason()).contains("not ready for billing");
+        assertThat(result.get(1).getIneligibilityReason()).contains("not billable");
+        assertThat(result).extracting(ProjectMilestoneResponseDto::getBillingState).containsOnly(MilestoneBillingState.AVAILABLE);
+    }
+
+    @Test
+    void theBillingStateFollowsTheClaimingEntrysOccurrenceAndMakesTheMilestoneIneligible() {
+        List<ProjectMilestoneResponseDto> result = listWith(List.of(
+                        milestone(1, "READY_FOR_BILLING", true, false), milestone(2, "READY_FOR_BILLING", true, false),
+                        milestone(3, "READY_FOR_BILLING", true, false), milestone(4, "READY_FOR_BILLING", true, false)),
+                List.of(row(1, null, null), row(2, BillingPeriodStatus.TAX_CALCULATED, false), row(3, BillingPeriodStatus.INVOICED, true)));
+
+        assertThat(result).extracting(ProjectMilestoneResponseDto::getBillingState).containsExactly(
+                MilestoneBillingState.RESERVED, MilestoneBillingState.IN_BILLING, MilestoneBillingState.INVOICED,
+                MilestoneBillingState.AVAILABLE);
+        assertThat(result).extracting(ProjectMilestoneResponseDto::getEligibleForBilling).containsExactly(false, false, false, true);
+        assertThat(result.get(2).getIneligibilityReason()).contains("invoiced");
+        assertThat(result.get(0).getBillingConfigurationId()).isEqualTo(CONFIG_ID);
+    }
+
+    @Test
+    void anInvoicedFlagWinsOverAnEarlierOccurrenceStatusAndOverAnotherPlansReservation() {
+        assertThat(ProjectMilestoneServiceImpl.billingState(List.of(row(1, BillingPeriodStatus.SCHEDULED, false), row(1, BillingPeriodStatus.SCHEDULED, true))))
+                .isEqualTo(MilestoneBillingState.INVOICED);
+        assertThat(ProjectMilestoneServiceImpl.billingState(List.of(row(1, null, null), row(1, BillingPeriodStatus.TAX_PENDING, false))))
+                .isEqualTo(MilestoneBillingState.IN_BILLING);
     }
 
     private static ProjectMilestoneReference milestone(long id, String readiness, Boolean billable, boolean deleted) {
