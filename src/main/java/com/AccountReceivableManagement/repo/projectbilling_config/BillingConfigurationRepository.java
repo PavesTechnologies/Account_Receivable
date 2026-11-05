@@ -49,6 +49,18 @@ public interface BillingConfigurationRepository extends JpaRepository<BillingCon
     findByProjectPmsProjectId(Long projectId);
 
     /**
+     * Every configuration of the project, row-locked, in a fixed order. A
+     * locking read sees the latest committed state and serializes concurrent
+     * approvals on the same project, so two of them cannot both pass the
+     * one-live-configuration check.
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM BillingConfiguration c WHERE c.project.pmsProjectId = :projectId "
+            + "ORDER BY c.billingConfigurationId")
+    List<BillingConfiguration> findByProjectIdForUpdate(
+            @org.springframework.data.repository.query.Param("projectId") Long projectId);
+
+    /**
      * Approved, AUTOMATIC, not manually deactivated configurations whose
      * billing type is one of {@code lowerCaseBillingTypeNames} - the automatic
      * billing scheduler's Time &amp; Material configurations.

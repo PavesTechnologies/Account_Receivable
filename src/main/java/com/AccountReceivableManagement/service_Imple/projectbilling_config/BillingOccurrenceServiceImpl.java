@@ -1504,8 +1504,14 @@ public class BillingOccurrenceServiceImpl {
             }
         }
 
-        log.info("Completed transition of SCHEDULED occurrences to TAX_PENDING: {} succeeded, {} failed", 
-                successCount, failureCount);
+        if (scheduledOccurrences.isEmpty()) {
+            // Not a failure: occurrences due on approval are already promoted then, and
+            // tax itself is calculated by automatic billing (or manually), never here.
+            log.debug("No SCHEDULED occurrence is due on or before {}; nothing to transition to TAX_PENDING", today);
+        } else {
+            log.info("Completed transition of SCHEDULED occurrences to TAX_PENDING (due on or before {}): "
+                    + "{} found, {} succeeded, {} failed", today, scheduledOccurrences.size(), successCount, failureCount);
+        }
     }
 
     private static class ConfigurationChangeDetector {

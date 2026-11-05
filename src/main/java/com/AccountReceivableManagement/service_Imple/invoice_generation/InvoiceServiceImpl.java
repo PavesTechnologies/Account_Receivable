@@ -51,7 +51,6 @@ import com.AccountReceivableManagement.service_interface.company_profile.Company
 import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService;
-import com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -920,7 +919,10 @@ public class InvoiceServiceImpl implements InvoiceService {
                 invoiceRepository.findByBillingSnapshotId(billingSnapshotId);
 
         if (existing.isPresent()) {
-            return mapToResponse(existing.get());
+            InvoiceResponseDto response = mapToResponse(existing.get());
+            // The invoice was found by this snapshot, so it shares its configuration.
+            response.setBillingConfigurationId(snapshot.getBillingConfigurationId());
+            return response;
         }
 
         if (snapshot.getStatus() != BillingSnapshotStatus.TAX_COMPLETED) {
@@ -1024,6 +1026,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         return InvoiceResponseDto.builder()
                 .generated(false)
                 .billingSnapshotId(snapshot.getId())
+                .billingConfigurationId(snapshot.getBillingConfigurationId())
                 .billingSnapshotNumber(snapshot.getSnapshotNumber())
                 .taxCalculationId(taxCalculation.getTaxCalculationId())
                 .clientId(snapshot.getClientId())
@@ -1114,7 +1117,11 @@ public class InvoiceServiceImpl implements InvoiceService {
                                 )
                         );
 
-        return mapToResponse(invoice);
+        // Detail only: the owning configuration is looked up from the source,
+        // which the other invoice operations do not need to read.
+        InvoiceResponseDto response = mapToResponse(invoice);
+        response.setBillingConfigurationId(billingConfigurationIdOf(invoice));
+        return response;
     }
 
     @Override
@@ -2319,7 +2326,27 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     private static <T> T tmRateAudit(BillingSnapshotItem item, T value) {
         return item.getItemType() == BillingItemType.TIME_ENTRY ? value : null;
->>>>>>> 3f2f24fecb3994375f7974fb840c01c0793e8e5d
+    }
+
+    /**
+     * The billing configuration the invoice was generated under, through its
+     * source - the snapshot (T&amp;M) or the occurrence. Invoices do not store
+     * it; a project can have several configurations over time. Null when the
+     * source cannot be read.
+     */
+    private UUID billingConfigurationIdOf(Invoice invoice) {
+        if (invoice.getBillingSnapshotId() != null && billingSnapshotRepository != null) {
+            return billingSnapshotRepository.findById(invoice.getBillingSnapshotId())
+                    .map(BillingSnapshot::getBillingConfigurationId)
+                    .orElse(null);
+        }
+        if (invoice.getBillingScheduleId() != null && billingScheduleRepository != null) {
+            return billingScheduleRepository.findById(invoice.getBillingScheduleId())
+                    .map(BillingSchedule::getBillingConfiguration)
+                    .map(com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration::getBillingConfigurationId)
+                    .orElse(null);
+        }
+        return null;
     }
 
     private InvoiceResponseDto mapToResponse(

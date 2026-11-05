@@ -1611,4 +1611,129 @@ class BillingSnapshotServiceImplTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.createBillingSnapshot(request))
                 .isInstanceOf(org.springframework.dao.TransientDataAccessException.class);
     }
+
+    // =========================================================
+    // Historical T&M snapshots by Billing Configuration
+    // (GET /api/v1/billing-snapshots?billingConfigurationId=)
+    // =========================================================
+
+    private BillingSnapshot snapshotOf(UUID configurationId, LocalDate start, LocalDate end) {
+        return BillingSnapshot.builder()
+                .id(UUID.randomUUID())
+                .snapshotNumber("BS-" + start)
+                .billingConfigurationId(configurationId)
+                .clientId(UUID.randomUUID())
+                .projectId(PROJECT_ID)
+                .billingPeriodStart(start)
+                .billingPeriodEnd(end)
+                .status(BillingSnapshotStatus.INVOICED)
+                .totalAmount(BigDecimal.valueOf(500))
+                .items(new ArrayList<>(existingSnapshot.getItems()))
+                .build();
+    }
+
+    @Test
+    void getByBillingConfiguration_deactivatedConfiguration_returnsItsSnapshotsWithTheirOriginalIdentity() {
+        UUID deactivatedConfigurationId = UUID.randomUUID();
+        BillingSnapshot september = snapshotOf(deactivatedConfigurationId,
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30));
+        BillingSnapshot august = snapshotOf(deactivatedConfigurationId,
+                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31));
+        when(billingSnapshotRepository.findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(
+                deactivatedConfigurationId)).thenReturn(List.of(september, august));
+        // The by-id lookup has no status filter, so a deactivated configuration still resolves.
+        when(billingConfigurationIntegration.getApprovedBillingConfigurationById(deactivatedConfigurationId))
+                .thenReturn(BillingConfigurationResponseDto.builder()
+                        .billingConfigurationId(deactivatedConfigurationId)
+                        .billingTypeName("Timesheet Based").currencyCode("USD").build());
+
+        ApiResponse<List<BillingSnapshotResponseDto>> response =
+                service.getByBillingConfiguration(deactivatedConfigurationId);
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getData()).extracting(BillingSnapshotResponseDto::getSnapshotId)
+                .containsExactly(september.getId(), august.getId());
+        assertThat(response.getData()).allSatisfy(dto -> {
+            assertThat(dto.getBillingConfigurationId()).isEqualTo(deactivatedConfigurationId);
+            assertThat(dto.getProjectId()).isEqualTo(PROJECT_ID);
+            assertThat(dto.getBillingTypeName()).isEqualTo("Timesheet Based");
+            assertThat(dto.getTimesheets()).hasSize(1);
+        });
+        // Resolved once for the whole list; read-only.
+        verify(billingConfigurationIntegration, times(1)).getApprovedBillingConfigurationById(deactivatedConfigurationId);
+        verify(billingSnapshotRepository, never()).save(any());
+        verify(billingSnapshotRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(billingAcquisitionService);
+    }
+
+    @Test
+    void getByBillingConfiguration_neverWidensToOtherSnapshotsOfTheProject() {
+        UUID configurationId = UUID.randomUUID();
+        when(billingSnapshotRepository.findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(configurationId))
+                .thenReturn(List.of());
+
+        service.getByBillingConfiguration(configurationId);
+
+        verify(billingSnapshotRepository).findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(configurationId);
+        verify(billingSnapshotRepository, never()).findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+                any(), any(), any());
+        verify(billingSnapshotRepository, never()).findAll();
+        verify(billingConfigurationIntegration, never()).getApprovedBillingConfiguration(any());
+    }
+
+    @Test
+    void getByBillingConfiguration_noSnapshots_returnsSuccessWithEmptyList() {
+        UUID configurationId = UUID.randomUUID();
+        when(billingSnapshotRepository.findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(configurationId))
+                .thenReturn(List.of());
+
+        ApiResponse<List<BillingSnapshotResponseDto>> response = service.getByBillingConfiguration(configurationId);
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getData()).isEmpty();
+        verifyNoInteractions(billingConfigurationIntegration);
+    }
+
+    @Test
+    void getByBillingConfiguration_configurationNoLongerResolvable_stillReturnsSnapshots() {
+        when(billingSnapshotRepository.findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(
+                orphanedConfigurationId)).thenReturn(List.of(existingSnapshot));
+        when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
+                .thenThrow(new GlobalExceptionHandler.ResourceNotFoundException("not found"));
+
+        ApiResponse<List<BillingSnapshotResponseDto>> response =
+                service.getByBillingConfiguration(orphanedConfigurationId);
+
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getData()).singleElement().satisfies(dto -> {
+            assertThat(dto.getSnapshotId()).isEqualTo(snapshotId);
+            assertThat(dto.getBillingConfigurationId()).isEqualTo(orphanedConfigurationId);
+            assertThat(dto.getBillingTypeName()).isNull();
+        });
+        assertThat(existingSnapshot.getBillingConfigurationId()).isEqualTo(orphanedConfigurationId);
+    }
+
+    // Current by-period view is unchanged: a replacement configuration does not see the deactivated
+    // configuration's snapshot, while the deactivated configuration's own id still retrieves it.
+    @Test
+    void getByProjectAndPeriod_deactivatedVsReplacementConfiguration_returnsOnlyTheRecordedOwner() {
+        UUID deactivatedConfigurationId = orphanedConfigurationId;
+        UUID replacementConfigurationId = UUID.randomUUID();
+        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingConfigurationIntegration.getApprovedBillingConfigurationById(deactivatedConfigurationId))
+                .thenReturn(BillingConfigurationResponseDto.builder()
+                        .billingConfigurationId(deactivatedConfigurationId).build());
+
+        ApiResponse<BillingSnapshotResponseDto> own = service.getByProjectAndPeriod(
+                PROJECT_ID, PERIOD_START, PERIOD_END, deactivatedConfigurationId);
+        ApiResponse<BillingSnapshotResponseDto> replacement = service.getByProjectAndPeriod(
+                PROJECT_ID, PERIOD_START, PERIOD_END, replacementConfigurationId);
+
+        assertThat(own.isSuccess()).isTrue();
+        assertThat(own.getData().getBillingConfigurationId()).isEqualTo(deactivatedConfigurationId);
+        assertThat(replacement.isSuccess()).isFalse();
+        assertThat(replacement.getData()).isNull();
+        assertThat(existingSnapshot.getBillingConfigurationId()).isEqualTo(deactivatedConfigurationId);
+    }
 }

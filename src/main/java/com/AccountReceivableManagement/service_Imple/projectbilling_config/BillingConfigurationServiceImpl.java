@@ -330,6 +330,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     @Transactional
     public BillingConfigurationResponseDto approve(UUID id) {
 
+        com.AccountReceivableManagement.security.Actor approver = financialActionAuthorizer.requirePermission(
+                com.AccountReceivableManagement.security.FinancialAction.BILLING_CONFIGURATION_APPROVAL);
+
         BillingConfiguration configuration =
                 billingConfigurationRepository.findById(id)
                         .orElseThrow(() ->
@@ -357,6 +360,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 configuration.getSubmittedByUserId(), approver, "billing configuration");
 
         validateTimeAndMaterialRateCards(configuration);
+
+        requireNoOtherLiveConfigurationForProject(configuration);
 
         /*
          * Approval is successful.
@@ -452,6 +457,52 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         return mapToResponse(saved);
+    }
+
+    /**
+     * A project has at most one live billing configuration on any date: the
+     * project is read as "the" APPROVED + ACTIVE configuration
+     * ({@link #getApprovedByProjectId}, T&amp;M snapshot resolution), and two
+     * of them would both be billed. Live means APPROVED, not manually
+     * deactivated and not EXPIRED - an approved configuration that is not yet
+     * effective counts, because the status scheduler activates it on its
+     * effective date. Only one whose effective period overlaps this one
+     * conflicts, so a replacement can follow a deactivated, expired or ending
+     * configuration. Configurations without a project are not checked.
+     * <p>
+     * The project's configurations are read with a row lock, so concurrent
+     * approvals on the same project are serialized and see each other.
+     */
+    private void requireNoOtherLiveConfigurationForProject(BillingConfiguration configuration) {
+        if (configuration.getProject() == null || configuration.getProject().getPmsProjectId() == null) {
+            return;
+        }
+        Long projectId = configuration.getProject().getPmsProjectId();
+        for (BillingConfiguration other : billingConfigurationRepository.findByProjectIdForUpdate(projectId)) {
+            if (other.getBillingConfigurationId().equals(configuration.getBillingConfigurationId())
+                    || other.getApprovalStatus() != ApprovalStatus.APPROVED
+                    || Boolean.TRUE.equals(other.getManuallyDeactivated())
+                    || other.getBillingStatus() == BillingConfigurationStatus.EXPIRED
+                    || !effectivePeriodsOverlap(configuration, other)) {
+                continue;
+            }
+            throw new ValidationException(
+                    "Project " + projectId + " already has a live billing configuration ("
+                            + other.getBillingConfigurationId() + ", " + other.getBillingStatus()
+                            + ", effective " + other.getEffectiveFrom() + " to "
+                            + (other.getEffectiveTo() == null ? "open-ended" : other.getEffectiveTo())
+                            + ") whose effective period overlaps this one. Deactivate it, or end it before "
+                            + "this configuration starts, before approving this configuration.");
+        }
+    }
+
+    /** Inclusive date ranges; a missing start or end is unbounded. */
+    private static boolean effectivePeriodsOverlap(BillingConfiguration a, BillingConfiguration b) {
+        boolean aStartsAfterBEnds = a.getEffectiveFrom() != null && b.getEffectiveTo() != null
+                && a.getEffectiveFrom().isAfter(b.getEffectiveTo());
+        boolean bStartsAfterAEnds = b.getEffectiveFrom() != null && a.getEffectiveTo() != null
+                && b.getEffectiveFrom().isAfter(a.getEffectiveTo());
+        return !aStartsAfterBEnds && !bStartsAfterAEnds;
     }
 
     /**

@@ -176,7 +176,7 @@ class OperationalReadinessTest {
     void unexpectedErrors_neverReturnTheirInternalMessage() {
         var response = new com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler()
                 .handleException(new IllegalMonitorStateException(
-                        "Communications link failure: jdbc:mysql://db.internal:3306/ar user=ar_app"));
+                        "Communications link failure: jdbc:mysql://db.internal:3306/ar user=ar_app"), null);
 
         assertThat(response.getStatusCode().value()).isEqualTo(500);
         assertThat(response.getBody().getMessage()).doesNotContain("jdbc", "db.internal", "ar_app");

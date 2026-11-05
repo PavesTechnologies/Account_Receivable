@@ -153,8 +153,11 @@ public class AutomaticBillingScheduler {
             log.info("[AutomaticBillingScheduler] enabled - cron '{}', batch size {}.",
                     properties.getCron(), properties.getBatchSize());
         } else {
-            log.info("[AutomaticBillingScheduler] disabled (ar.automatic-billing.enabled=false); "
-                    + "no automatic billing will be processed.");
+            // WARN, not INFO: while disabled, due occurrences of AUTOMATIC configurations are never
+            // taxed or invoiced by anything else - they wait in TAX_PENDING until billed manually.
+            log.warn("[AutomaticBillingScheduler] DISABLED (ar.automatic-billing.enabled=false / "
+                    + "AR_AUTOMATIC_BILLING_ENABLED): due occurrences of AUTOMATIC billing configurations will NOT "
+                    + "be taxed, invoiced or submitted for approval until it is enabled.");
         }
     }
 
@@ -215,8 +218,16 @@ public class AutomaticBillingScheduler {
                     BillingSchedule.UNBILLED_STATUSES, PageRequest.of(0, remaining));
             for (UUID occurrenceId : occurrenceIds) {
                 summary.newOccurrences++;
-                process(summary, "occurrence " + occurrenceId, () -> automaticBillingRunService
-                        .findOrCreateForOccurrence(occurrenceId).getAutomaticBillingRunId());
+                process(summary, "occurrence " + occurrenceId, () -> {
+                    AutomaticBillingRun run = automaticBillingRunService.findOrCreateForOccurrence(occurrenceId);
+                    log.info("[AutomaticBillingDiscovery] due occurrence={} configuration={} billingPeriod={}..{} "
+                                    + "-> run={} ({}).", occurrenceId,
+                            run.getBillingConfiguration() != null
+                                    ? run.getBillingConfiguration().getBillingConfigurationId() : null,
+                            run.getBillingPeriodStart(), run.getBillingPeriodEnd(),
+                            run.getAutomaticBillingRunId(), run.getStatus());
+                    return run.getAutomaticBillingRunId();
+                });
             }
             remaining -= occurrenceIds.size();
         }
@@ -238,7 +249,9 @@ public class AutomaticBillingScheduler {
         if (summary.handled() > 0 || summary.errors > 0) {
             log.info("[AutomaticBillingScheduler] tick done in {} ms - {}", summary.durationMillis, summary);
         } else {
-            log.debug("[AutomaticBillingScheduler] tick done in {} ms - nothing due.", summary.durationMillis);
+            log.info("[AutomaticBillingScheduler] tick done in {} ms - nothing due: no unbilled occurrence or "
+                    + "T&M period of an approved AUTOMATIC configuration is due on or before {} without a run.",
+                    summary.durationMillis, today);
         }
         return summary;
     }

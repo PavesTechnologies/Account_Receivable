@@ -39,6 +39,16 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
     Optional<BillingSnapshot> findFirstByBillingConfigurationIdOrderByCreatedDateDesc(UUID billingConfigurationId);
 
     /**
+     * Every snapshot recorded against one Billing Configuration, latest
+     * billing period first, whatever the configuration's current state - the
+     * history of a deactivated or replaced configuration included. Items are
+     * fetched eagerly for the same reason as the by-period lookup.
+     */
+    @EntityGraph(attributePaths = "items")
+    java.util.List<BillingSnapshot> findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(
+            UUID billingConfigurationId);
+
+    /**
      * Backs the Invoice Generation workspace - snapshots in a given lifecycle
      * status, newest first.
      */

@@ -61,6 +61,11 @@ public class BillingOccurrenceTransactionServiceImpl implements BillingOccurrenc
         current.setPeriodStatus(BillingPeriodStatus.TAX_PENDING);
         current.setTaxStatus(BillingPeriodStatus.TAX_PENDING);
         billingScheduleRepository.save(current);
-        log.info("Transitioned occurrence {} to TAX_PENDING", current.getBillingScheduleId());
+        log.info("[BillingOccurrenceTransition] occurrence={} configuration={} period={} billingDate={} "
+                        + "SCHEDULED -> TAX_PENDING",
+                current.getBillingScheduleId(),
+                current.getBillingConfiguration() != null
+                        ? current.getBillingConfiguration().getBillingConfigurationId() : null,
+                current.getPeriodNumber(), current.getBillingDate());
     }
 }

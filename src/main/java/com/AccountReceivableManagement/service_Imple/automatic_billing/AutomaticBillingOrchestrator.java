@@ -5,6 +5,7 @@ import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnaps
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnapshotResponseDto;
 import com.AccountReceivableManagement.dto.common.ApiResponse;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
+import com.AccountReceivableManagement.dto.tax_calculation.TaxCalculationResponseDto;
 import com.AccountReceivableManagement.entity.automatic_billing.AutomaticBillingRun;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticBillingRunStatus;
@@ -183,10 +184,18 @@ public class AutomaticBillingOrchestrator {
 
         if (!isCompleted(run, AutomaticBillingStep.TAX_CALCULATION)) {
             startStep(runId, claimToken, AutomaticBillingStep.TAX_CALCULATION);
-            if (source.timeAndMaterial()) {
-                taxCalculationService.findOrCalculateTax(requireSnapshot(run));
-            } else {
-                taxCalculationService.findOrCalculateTaxForSchedule(run.getBillingScheduleId());
+            log.info("[AutomaticBillingTax] run={} configuration={} occurrence={} snapshot={} tax calculation started.",
+                    runId, MDC.get(MDC_CONFIGURATION_ID), MDC.get(MDC_OCCURRENCE_ID),
+                    run.getBillingSnapshotId() != null ? run.getBillingSnapshotId() : "-");
+            TaxCalculationResponseDto tax = source.timeAndMaterial()
+                    ? taxCalculationService.findOrCalculateTax(requireSnapshot(run))
+                    : taxCalculationService.findOrCalculateTaxForSchedule(run.getBillingScheduleId());
+            if (tax != null) {
+                log.info("[AutomaticBillingTax] run={} configuration={} occurrence={} tax calculation {} completed: "
+                                + "taxable={} tax={} grandTotal={} currency={}",
+                        runId, MDC.get(MDC_CONFIGURATION_ID), MDC.get(MDC_OCCURRENCE_ID),
+                        tax.getTaxCalculationId(), tax.getTaxableAmount(), tax.getTotalTaxAmount(),
+                        tax.getGrandTotal(), tax.getCurrencyCode());
             }
             run = automaticBillingRunService.completeStep(runId, claimToken,
                     AutomaticBillingStep.TAX_CALCULATION, null, null);
@@ -358,6 +367,11 @@ public class AutomaticBillingOrchestrator {
      */
     private UUID prepareOccurrenceForTax(BillingSource source) {
         BillingSchedule occurrence = source.occurrence();
+        log.info("[AutomaticBillingOccurrence] configuration={} occurrence={} type={} installment={} billingDate={} "
+                        + "amount={} status={} taxStatus={} - eligible, preparing for tax.",
+                MDC.get(MDC_CONFIGURATION_ID), occurrence.getBillingScheduleId(), source.billingType(),
+                occurrence.getPeriodNumber(), occurrence.getBillingDate(), occurrence.getBillingAmount(),
+                occurrence.getPeriodStatus(), occurrence.getTaxStatus());
         if (source.billingType() == BillingType.FIXED_PRICE) {
             billingOccurrenceService.requireFixedPriceOccurrenceBillable(occurrence.getBillingScheduleId());
         } else if (source.billingType() == BillingType.MILESTONE) {

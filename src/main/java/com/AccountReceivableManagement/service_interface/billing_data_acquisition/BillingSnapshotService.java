@@ -28,6 +28,15 @@ public interface BillingSnapshotService {
     ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd, UUID billingConfigurationId);
 
     /**
+     * Read-only: every snapshot recorded against {@code billingConfigurationId},
+     * latest billing period first, whether that configuration is active,
+     * deactivated or expired. Only snapshots whose own
+     * {@code billingConfigurationId} matches are returned - never other
+     * snapshots of the same project. Empty when there are none.
+     */
+    ApiResponse<java.util.List<BillingSnapshotResponseDto>> getByBillingConfiguration(UUID billingConfigurationId);
+
+    /**
      * Phase 2B financial correction - rebuilds an already-persisted
      * {@code BillingSnapshot} in place from freshly re-acquired authoritative
      * source data (TMS, for Time &amp; Material), rather than creating a new

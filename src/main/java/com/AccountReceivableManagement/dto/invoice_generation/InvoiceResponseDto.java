@@ -26,6 +26,9 @@ public class InvoiceResponseDto {
 
     private UUID billingScheduleId;
 
+    /** Billing configuration the invoice was generated under (derived from its snapshot or occurrence). */
+    private UUID billingConfigurationId;
+
     private String billingSnapshotNumber;
 
     private UUID taxCalculationId;

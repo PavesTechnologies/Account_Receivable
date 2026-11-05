@@ -299,6 +299,24 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         return ApiResponse.success("Billing Snapshot retrieved successfully.", responseDto);
     }
 
+    @Override
+    public ApiResponse<List<BillingSnapshotResponseDto>> getByBillingConfiguration(UUID billingConfigurationId) {
+        List<BillingSnapshot> snapshots = billingSnapshotRepository
+                .findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(billingConfigurationId);
+
+        if (snapshots.isEmpty()) {
+            return ApiResponse.success("No Billing Snapshots found for the selected billing configuration.",
+                    List.of());
+        }
+
+        // All of them share the one configuration, so its names are resolved once.
+        BillingConfigurationResponseDto configuration = resolveHistoricalConfiguration(billingConfigurationId);
+
+        return ApiResponse.success("Billing Snapshots retrieved successfully.", snapshots.stream()
+                .map(snapshot -> billingSnapshotMapper.toResponse(snapshot, configuration))
+                .toList());
+    }
+
     /**
      * Phase 2B financial correction - see the interface Javadoc. Re-fetches
      * authoritative source data for the snapshot's own, already-known
@@ -660,14 +678,12 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
             List<com.AccountReceivableManagement.dto.billing_data_acquisition.ExpenseLineDto> expenses) {
         // Lines excluded from the invoice stay on the snapshot for audit but never reach the payable
         // subtotal, and therefore never the tax base (tax is calculated from the snapshot total).
-    private BillingAmountSummary calculateAmounts(List<TimesheetDto> timesheets) {
         // Sum of the rounded line amounts - exactly what the snapshot items carry.
         BigDecimal subtotal = timesheets.stream()
                 .filter(timesheet -> com.AccountReceivableManagement.util.TmRateCalculator
                         .isIncluded(timesheet.getIncludeInInvoice()))
                 .map(timesheet -> com.AccountReceivableManagement.util.TmRateCalculator
                         .lineAmount(timesheet.getHours(), timesheet.getHourlyRate()))
-                .map(BillingSnapshotBuilder::lineAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         // costBasis is already the billable base-currency amount: summed as-is.

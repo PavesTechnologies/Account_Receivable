@@ -42,6 +42,7 @@ public class BillingSnapshotMapper {
                 .snapshotId(snapshot.getId())
                 .acquisitionStatus("READY")
                 .snapshotNumber(snapshot.getSnapshotNumber())
+                .billingConfigurationId(snapshot.getBillingConfigurationId())
                 .projectId(snapshot.getProjectId())
                 .clientId(snapshot.getClientId())
                 .billingTypeId(snapshot.getBillingTypeId())

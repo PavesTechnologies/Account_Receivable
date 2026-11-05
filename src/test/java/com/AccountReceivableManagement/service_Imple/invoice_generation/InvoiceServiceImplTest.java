@@ -1431,6 +1431,32 @@ class InvoiceServiceImplTest {
         verifyNoInteractions(taxCalculationRepository);
     }
 
+    // PREVIEW IDENTITY — the preview names the configuration recorded on its snapshot, not one of the project.
+    @Test
+    void previewInvoice_preGeneration_exposesTheSnapshotsBillingConfigurationId() {
+        InvoiceResponseDto preview = stubAndPreview();
+
+        BillingSnapshot snapshot = billingSnapshotRepository.findById(snapshotId).orElseThrow();
+        assertThat(preview.getBillingConfigurationId())
+                .isNotNull()
+                .isEqualTo(snapshot.getBillingConfigurationId());
+    }
+
+    @Test
+    void previewInvoice_existingInvoice_exposesTheSnapshotsBillingConfigurationId() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(invoiceRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(invoice));
+
+        InvoiceResponseDto response = invoiceService.previewInvoice(snapshotId);
+
+        assertThat(response.getBillingConfigurationId()).isEqualTo(snapshot.getBillingConfigurationId());
+        verify(billingSnapshotRepository, never()).save(any());
+    }
+
     // PREVIEW — a snapshot that has not completed tax calculation has no preview.
     @Test
     void previewInvoice_snapshotNotTaxCompleted_isRejected() {

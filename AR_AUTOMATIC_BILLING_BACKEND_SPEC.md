@@ -439,7 +439,7 @@ All paths are relative to the base URL (§4.0). "JWT" = any authenticated user. 
 | Create draft | POST | `/api/billing-configurations/draft` | `BillingConfigurationDraftRequestDto` | `ApiResponse<BillingConfigurationDraftResponseDto>` | JWT | 201, 400, 404 |
 | Save draft / edit approved | PUT | `/api/billing-configurations/{id}/draft` | `BillingConfigurationDraftRequestDto` | `ApiResponse<BillingConfigurationDraftResponseDto>` | JWT | 200, 400, 404, 409 |
 | Submit | PUT | `/api/billing-configurations/{id}/submit` | — | `ApiResponse<BillingConfigurationResponseDto>` | JWT | 200, 400, 404, 409 |
-| Approve | PUT | `/api/billing-configurations/{id}/approve` | — | `ApiResponse<BillingConfigurationResponseDto>` | BILLING_CONFIGURATION_APPROVAL + APPROVAL lock; maker-checker | 200, 400, 403, 404, 409 |
+| Approve | PUT | `/api/billing-configurations/{id}/approve` | — | `ApiResponse<BillingConfigurationResponseDto>` | BILLING_CONFIGURATION_APPROVAL + APPROVAL lock; maker-checker; 400 when another live configuration of the same project (APPROVED, not manually deactivated, not EXPIRED) has an overlapping effective period | 200, 400, 403, 404, 409 |
 | Reject | PUT | `/api/billing-configurations/{id}/reject` | `{ rejectionReason }` (`@NotBlank`, ≤500) | `ApiResponse<BillingConfigurationResponseDto>` | BILLING_CONFIGURATION_APPROVAL + APPROVAL lock | 200, 400, 403, 404, 409 |
 | Deactivate | PATCH | `/api/billing-configurations/{id}/deactivate` | — | `ApiResponse<String>` (`"SUCCESS"`) | JWT | 200, 400, 404, 409 |
 | Delete draft | DELETE | `/api/billing-configurations/{id}` | — | `ApiResponse<Void>` | JWT | 200, 400, 404, 409 |
@@ -492,7 +492,7 @@ All type-detail endpoints: JWT only.
 
 | Purpose | Method | Path | Request | Response | Authority | Status |
 |---|---|---|---|---|---|---|
-| List occurrences | GET | `/api/billing-occurrences` | query: `billingConfigurationId`, `recurringConfigurationId`, `periodStatus`, `taxStatus`, `billingDateBefore`, `billingDateAfter` (at least one of the first four required; only `isActive=true` rows) | **unwrapped** `List<BillingOccurrenceResponseDto>` | JWT | 200, 400, 404 |
+| List occurrences | GET | `/api/billing-occurrences` | query: `billingConfigurationId`, `recurringConfigurationId`, `periodStatus`, `taxStatus`, `billingDateBefore`, `billingDateAfter` (at least one of the first four required; only `isActive=true` rows), optional `view` = `ALL` (default when omitted) \| `CURRENT` (excludes occurrences of manually deactivated configurations) \| `HISTORICAL` (only those). Each row carries `billingConfigurationId`, `billingConfigurationStatus` (`ACTIVE`/`INACTIVE`/`EXPIRED`) and `configurationManuallyDeactivated` | **unwrapped** `List<BillingOccurrenceResponseDto>` | JWT | 200, 400, 404 |
 | Get occurrence | GET | `/api/billing-occurrences/{occurrenceId}` | — | **unwrapped** `BillingOccurrenceResponseDto` | JWT | 200, 404 |
 | Occurrence tax | GET | `/api/billing-occurrences/{occurrenceId}/tax-calculation` | — | **unwrapped** `TaxCalculationResponseDto` | JWT | 200, 404 |
 | Calculate occurrence tax (manual) | POST | `/api/billing-occurrences/{occurrenceId}/calculate-tax` | — | **unwrapped** `TaxCalculationResponseDto` | JWT | 200, 400, 404 |
@@ -514,7 +514,7 @@ There is **no** occurrence-based invoice preview and **no** snapshot cancel endp
 | Purpose | Method | Path | Request | Response | Authority | Status |
 |---|---|---|---|---|---|---|
 | List invoices | GET | `/api/v1/invoices` | — | `ApiResponse<List<InvoiceSummaryResponseDto>>` | JWT | 200 |
-| Get invoice | GET | `/api/v1/invoices/{invoiceId}` | — | `ApiResponse<InvoiceResponseDto>` | JWT | 200, 404 |
+| Get invoice | GET | `/api/v1/invoices/{invoiceId}` | — | `ApiResponse<InvoiceResponseDto>`; includes `billingConfigurationId` (owning configuration, derived from snapshot/occurrence; null on other invoice responses) | JWT | 200, 404 |
 | Submit for approval | POST | `/api/v1/invoices/{invoiceId}/submit-for-approval` | — | `ApiResponse<InvoiceResponseDto>` | JWT | 200, 400, 404 |
 | Approve (+ finalize PDF) | POST | `/api/v1/invoices/{invoiceId}/approve` | — | `ApiResponse<InvoiceResponseDto>` | INVOICE_APPROVAL + APPROVAL lock; maker-checker | 200, 400, 403, 404, 409 |
 | Generate document (retry) | POST | `/api/v1/invoices/{invoiceId}/document` | — | `ApiResponse<InvoiceResponseDto>` | INVOICE_APPROVAL | 200, 400, 403, 404, 500 (PDF render failure) |

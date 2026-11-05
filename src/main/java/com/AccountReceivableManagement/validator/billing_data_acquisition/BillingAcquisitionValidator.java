@@ -57,7 +57,7 @@ public class BillingAcquisitionValidator {
 
         if (hasExpenses) {
             // Defence in depth: the XMS integration already validates each line.
-            Set<String> seenLineItemIds = new HashSet<>();
+            Set<String> seenLineItemIds = new LinkedHashSet<>();
             for (ExpenseLineDto expense : expenses) {
                 if (expense.getLineItemId() == null || expense.getLineItemId().isBlank()) {
                     return ValidationResultDto.failure("An expense line has no lineItemId.");

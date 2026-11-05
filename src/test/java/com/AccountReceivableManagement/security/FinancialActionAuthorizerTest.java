@@ -68,6 +68,94 @@ class FinancialActionAuthorizerTest {
     }
 
     @Test
+    void requirePermission_configApprovalByPermissionClaim_succeeds() {
+        UserDTO user = new UserDTO(13L, "approver@example.com", "Approver", List.of("EMPLOYEE"), List.of("CONFIG_APPROVE"));
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        assertThat(authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL).userId()).isEqualTo(13L);
+    }
+
+    @Test
+    void requirePermission_noAuthorityConfigured_deniesEvenAFinanceManager() {
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of());
+        UserDTO user = new UserDTO(10L, "manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of("CONFIG_APPROVE"));
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("You are not authorized to approve or reject billing configurations.");
+    }
+
+    @Test
+    void requirePermission_blankConfiguredAuthority_grantsNobody() {
+        // An env value like "AR_AUTH_CONFIGURATION_APPROVAL= " must not match anything.
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of(" ", ""));
+        UserDTO user = new UserDTO(10L, "manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of(""));
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void requirePermission_tokenWithoutRoleOrPermissionClaims_isDenied() {
+        UserDTO user = new UserDTO(14L, "someone@example.com", "Someone", null, null);
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void requirePermission_roleConfiguredWithoutRolePrefix_doesNotMatchTheRolesClaim() {
+        // Roles from the "roles" claim are compared as ROLE_<role>; a bare role name in the config
+        // only matches a permission of that exact name.
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of("FINANCE_MANAGER"));
+        UserDTO user = new UserDTO(10L, "manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of());
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "FINANCE_MANAGER", "ROLE_FINANCE_MANAGER", "Finance Manager", "finance_manager", "Finance-Manager", " FINANCE_MANAGER "})
+    void requirePermission_financeManagerRoleInAnyUmsSpelling_canApproveConfigurations(String umsRole) {
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of("ROLE_FINANCE_MANAGER"));
+        UserDTO bindu = new UserDTO(30L, "bindu@example.com", "Bindu", List.of(umsRole), List.of());
+        when(currentUserService.getCurrentUser()).thenReturn(bindu);
+
+        assertThat(authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL).userId()).isEqualTo(30L);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "FINANCE_EXECUTIVE", "Finance Executive", "FINANCE_MANAGER_ASSISTANT", "MANAGER", "FINANCE"})
+    void requirePermission_otherRoles_areStillDenied(String umsRole) {
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of("ROLE_FINANCE_MANAGER"));
+        UserDTO user = new UserDTO(31L, "someone@example.com", "Someone", List.of(umsRole), List.of());
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void requirePermission_financeManagerApprovalRole_doesNotGrantDeliveryOrRecovery() {
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of("ROLE_FINANCE_MANAGER"));
+        properties.getAuthorization().setInvoiceDeliveryAuthorities(List.of());
+        properties.getAuthorization().setOperationsRecoveryAuthorities(List.of());
+        UserDTO bindu = new UserDTO(30L, "bindu@example.com", "Bindu", List.of("FINANCE_MANAGER"), List.of());
+        when(currentUserService.getCurrentUser()).thenReturn(bindu);
+
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.INVOICE_DELIVERY))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.OPERATIONS_RECOVERY))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
     void requirePermission_systemActor_throwsAccessDeniedException() {
         ActorContext.callAsSystem(() -> {
             assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))

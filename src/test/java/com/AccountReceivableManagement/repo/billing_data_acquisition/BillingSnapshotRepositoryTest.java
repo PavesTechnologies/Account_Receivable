@@ -29,4 +29,16 @@ class BillingSnapshotRepositoryTest {
         assertThat(entityGraph).isNotNull();
         assertThat(entityGraph.attributePaths()).contains("items");
     }
+
+    // GET /api/v1/billing-snapshots?billingConfigurationId= maps every snapshot's items after the query returns.
+    @Test
+    void findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc_eagerlyFetchesItems() throws NoSuchMethodException {
+        Method method = BillingSnapshotRepository.class.getMethod(
+                "findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc", java.util.UUID.class);
+
+        EntityGraph entityGraph = method.getAnnotation(EntityGraph.class);
+
+        assertThat(entityGraph).isNotNull();
+        assertThat(entityGraph.attributePaths()).contains("items");
+    }
 }

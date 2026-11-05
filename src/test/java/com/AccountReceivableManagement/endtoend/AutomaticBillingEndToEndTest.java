@@ -127,6 +127,7 @@ import static org.mockito.Mockito.when;
         "ar.security.authorization.configuration-approval-authorities=ROLE_FINANCE_MANAGER",
         "ar.security.authorization.invoice-approval-authorities=ROLE_FINANCE_MANAGER",
         "ar.security.authorization.invoice-delivery-authorities=ROLE_FINANCE_MANAGER",
+        "ar.security.authorization.operations-recovery-authorities=ROLE_FINANCE_MANAGER",
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost/test-issuer",
         // Enabled, but only ticked by the test itself (the cron never fires during a run).
         "ar.automatic-billing.enabled=true",
@@ -175,6 +176,8 @@ class AutomaticBillingEndToEndTest {
     @Autowired private InvoiceApprovalHistoryRepository approvalHistoryRepository;
     @Autowired private InvoiceDeliveryRepository deliveryRepository;
     @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private com.AccountReceivableManagement.service_interface.automatic_billing.AutomaticBillingRunRecoveryService
+            recoveryService;
 
     private TransactionTemplate tx;
     private final LocalDate today = LocalDate.now();
@@ -500,6 +503,180 @@ class AutomaticBillingEndToEndTest {
         assertAwaitingApprovalOnly(invoices);
     }
 
+    // ================================================================ Milestone Plan - installment due today
+
+    /**
+     * An installment plan as the console creates it: Milestone Plan with no billing frequency
+     * (each installment carries its own date) and no end date, then approved.
+     */
+    private BillingConfiguration installmentPlan(TaxRegionMaster taxRegion, Object[][] rows) {
+        BillingConfiguration configuration = configuration("Milestone Plan", null, today.minusMonths(2), null, null);
+        tx.executeWithoutResult(status -> {
+            BillingConfiguration managed =
+                    configurationRepository.findById(configuration.getBillingConfigurationId()).orElseThrow();
+            managed.setTaxRegion(taxRegion);
+            configurationRepository.save(managed);
+            BigDecimal total = BigDecimal.ZERO;
+            for (Object[] row : rows) {
+                total = total.add(new BigDecimal((String) row[1]));
+            }
+            BillingMilestonePlan plan = milestonePlanRepository.save(BillingMilestonePlan.builder()
+                    .billingConfiguration(managed).totalContractValue(total)
+                    .paymentStructure(PaymentStructure.INSTALLMENTS).isActive(true).build());
+            List<BillingPaymentEntry> entries = new ArrayList<>();
+            for (Object[] row : rows) {
+                BigDecimal amount = new BigDecimal((String) row[1]);
+                entries.add(paymentEntryRepository.save(BillingPaymentEntry.builder()
+                        .milestonePlan(plan).sequence((Integer) row[0])
+                        .percentage(amount.multiply(new BigDecimal("100")).divide(total, 2,
+                                java.math.RoundingMode.HALF_UP))
+                        .amount(amount).billingDate((LocalDate) row[2])
+                        .remarks("Installment " + row[0]).isActive(true).build()));
+            }
+            // Exactly what configuration approval does: generate, then promote what is already due.
+            occurrenceService.generateOccurrencesForMilestonePlan(managed, plan, entries);
+            occurrenceService.promoteDueOccurrencesToTaxPending(managed.getBillingConfigurationId());
+        });
+        return configuration;
+    }
+
+    private BillingSchedule occurrenceDatedOn(BillingConfiguration configuration, LocalDate billingDate) {
+        return occurrencesOf(configuration).stream()
+                .filter(occurrence -> billingDate.equals(occurrence.getBillingDate()))
+                .findFirst().orElseThrow();
+    }
+
+    private com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation taxOf(BillingSchedule occurrence) {
+        return tx.execute(status -> {
+            com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation calculation =
+                    taxCalculationRepository.findByBillingScheduleId(occurrence.getBillingScheduleId()).orElse(null);
+            if (calculation != null) {
+                calculation.getComponents().size();
+            }
+            return calculation;
+        });
+    }
+
+    @Test
+    void installmentDueToday_withoutBillingFrequency_isTaxedAndSubmittedForApprovalWithoutManualTrigger() {
+        LocalDate past = today.minusDays(10);
+        LocalDate future = today.plusDays(3);
+        BillingConfiguration configuration = installmentPlan(karnataka, new Object[][] {
+                {1, "10000.00", past}, {2, "32500.00", today}, {3, "22500.00", future}});
+        assertThat(configuration.getBillingFrequency()).isNull();
+
+        BillingSchedule billedBefore = occurrenceDatedOn(configuration, past);
+        BillingSchedule dueToday = occurrenceDatedOn(configuration, today);
+        BillingSchedule notYetDue = occurrenceDatedOn(configuration, future);
+
+        // The earlier installment was already billed by hand.
+        taxService.calculateTaxForSchedule(billedBefore.getBillingScheduleId());
+        UUID manualInvoice = invoiceService.generateInvoiceForSchedule(billedBefore.getBillingScheduleId())
+                .getInvoiceId();
+
+        // State left by approval: due today, TAX_PENDING, no tax and no automatic run yet.
+        assertThat(scheduleRepository.findById(dueToday.getBillingScheduleId()).orElseThrow().getPeriodStatus())
+                .isEqualTo(BillingPeriodStatus.TAX_PENDING);
+        assertThat(taxOf(dueToday)).isNull();
+        assertThat(runRepository.findByBillingScheduleId(dueToday.getBillingScheduleId())).isEmpty();
+
+        // Only the scheduler - nobody calls the tax API.
+        scheduler.runOnce();
+        List<Long> afterFirstTick = financialRecordCounts();
+        scheduler.runOnce();
+        scheduler.runOnce();
+        assertThat(financialRecordCounts()).as("repeated ticks create nothing").isEqualTo(afterFirstTick);
+
+        // Tax persisted by the existing tax engine and rules: 9% CGST + 9% SGST on the installment.
+        com.AccountReceivableManagement.entity.tax_calculation.TaxCalculation tax = taxOf(dueToday);
+        assertThat(tax).isNotNull();
+        assertThat(tax.getTaxableAmount()).isEqualByComparingTo("32500.00");
+        assertThat(tax.getTotalTaxAmount()).isEqualByComparingTo("5850.00");
+        assertThat(tax.getGrandTotal()).isEqualByComparingTo("38350.00");
+        assertThat(tax.getComponents()).extracting(c -> c.getTaxTypeCode())
+                .containsExactlyInAnyOrder("CGST", "SGST");
+        assertThat(tax.getComponents()).allSatisfy(c -> assertThat(c.getTaxAmount()).isEqualByComparingTo("2925.00"));
+
+        // One run, handed to Finance - not approved, not sent.
+        assertThat(runRepository.findByBillingScheduleId(dueToday.getBillingScheduleId())).hasValueSatisfying(run ->
+                assertThat(run.getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL));
+        List<Invoice> todays = invoicesOf(List.of(dueToday));
+        assertThat(todays).hasSize(1);
+        assertReconciles(todays.get(0), "32500.00");
+        assertAwaitingApprovalOnly(todays);
+
+        // The installment billed by hand is not billed again.
+        assertThat(invoicesOf(List.of(billedBefore))).extracting(Invoice::getInvoiceId).containsExactly(manualInvoice);
+        assertThat(runRepository.findByBillingScheduleId(billedBefore.getBillingScheduleId())).isEmpty();
+
+        // The future installment is not processed early.
+        BillingSchedule later = scheduleRepository.findById(notYetDue.getBillingScheduleId()).orElseThrow();
+        assertThat(later.getPeriodStatus()).isEqualTo(BillingPeriodStatus.SCHEDULED);
+        assertThat(taxOf(later)).isNull();
+        assertThat(runRepository.findByBillingScheduleId(later.getBillingScheduleId())).isEmpty();
+        assertThat(invoicesOf(List.of(later))).isEmpty();
+    }
+
+    @Test
+    void installmentDueToday_withoutTaxRules_failsExplicitly_neverAsZeroTax_andRecoversOnceRulesExist() {
+        TaxRegionMaster untaxed = tx.execute(status -> taxRegionRepository.save(TaxRegionMaster.builder()
+                .taxRegionCode("NT" + UUID.randomUUID().toString().substring(0, 6))
+                .taxRegionName("No Tax Rules " + UUID.randomUUID()).currencyCode("INR").isActive(true).build()));
+        BillingConfiguration configuration = installmentPlan(untaxed, new Object[][] {{1, "32500.00", today}});
+        BillingSchedule dueToday = occurrenceDatedOn(configuration, today);
+
+        scheduler.runOnce();
+        List<Long> afterFailure = financialRecordCounts();
+        scheduler.runOnce();
+        assertThat(financialRecordCounts()).isEqualTo(afterFailure);
+
+        com.AccountReceivableManagement.entity.automatic_billing.AutomaticBillingRun failed =
+                runRepository.findByBillingScheduleId(dueToday.getBillingScheduleId()).orElseThrow();
+        assertThat(failed.getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+        assertThat(failed.getFailureStep()).isEqualTo(
+                com.AccountReceivableManagement.entity_enums.automatic_billing.AutomaticBillingStep.TAX_CALCULATION);
+        assertThat(failed.getFailureReason()).contains("No active tax configuration");
+        assertThat(failed.getNextRetryAt()).as("needs a configuration fix, not a blind retry").isNull();
+        assertThat(failed.getAttemptCount()).isEqualTo(1);
+        // Nothing financial was recorded: no zero-tax calculation, no invoice; the installment still awaits tax.
+        assertThat(taxOf(dueToday)).isNull();
+        assertThat(invoicesOf(List.of(dueToday))).isEmpty();
+        assertThat(scheduleRepository.findById(dueToday.getBillingScheduleId()).orElseThrow().getPeriodStatus())
+                .isEqualTo(BillingPeriodStatus.TAX_PENDING);
+
+        // Finance adds the region's GST rules and re-queues the run.
+        tx.executeWithoutResult(status -> {
+            TaxRegionMaster region = taxRegionRepository.findById(untaxed.getTaxRegionId()).orElseThrow();
+            TaxConfiguration gst = TaxConfiguration.builder().taxRegion(region)
+                    .effectiveFrom(LocalDate.of(2020, 1, 1)).isActive(true).components(new ArrayList<>()).build();
+            for (String[] component : new String[][] {{"CGST", "9.00", "SAME_JURISDICTION"},
+                    {"SGST", "9.00", "SAME_JURISDICTION"}, {"IGST", "18.00", "DIFFERENT_JURISDICTION"}}) {
+                gst.getComponents().add(TaxConfigurationComponent.builder().taxConfiguration(gst)
+                        .taxType(taxTypeRepository.findByTaxTypeCodeIgnoreCase(component[0]).orElseThrow())
+                        .taxRate(new BigDecimal(component[1]))
+                        .applicabilityType(TaxApplicabilityType.valueOf(component[2])).isActive(true).build());
+            }
+            taxConfigurationRepository.save(gst);
+        });
+        assertThat(recoveryService.requeue(failed.getAutomaticBillingRunId(), "GST rules configured").isAccepted())
+                .isTrue();
+
+        scheduler.runOnce();
+        scheduler.runOnce();
+
+        assertThat(runRepository.findByBillingScheduleId(dueToday.getBillingScheduleId())).hasValueSatisfying(run -> {
+            assertThat(run.getAutomaticBillingRunId()).isEqualTo(failed.getAutomaticBillingRunId());
+            assertThat(run.getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL);
+        });
+        assertThat(taxOf(dueToday).getTotalTaxAmount()).isEqualByComparingTo("5850.00");
+        assertThat(taxCalculationRepository.findAll().stream()
+                .filter(t -> dueToday.getBillingScheduleId().equals(t.getBillingScheduleId()))).hasSize(1);
+        List<Invoice> invoices = invoicesOf(List.of(dueToday));
+        assertThat(invoices).hasSize(1);
+        assertReconciles(invoices.get(0), "32500.00");
+        assertAwaitingApprovalOnly(invoices);
+    }
+
     // ================================================================ Recurring / retainer
 
     @Test
@@ -800,5 +977,305 @@ class AutomaticBillingEndToEndTest {
                 invoice.getGrandTotal());
         reconcile(scenario, "receivable amount", invoice.getGrandTotal(), receivable.getInvoiceAmount());
         reconcile(scenario, "outstanding balance", invoice.getGrandTotal(), receivable.getOutstandingBalance());
+    }
+
+    // ================================================================ configuration replaced on the same project
+
+    @Autowired private com.AccountReceivableManagement.service_interface.projectbilling_config.BillingConfigurationService
+            configurationService;
+    @Autowired private com.AccountReceivableManagement.controller.projectbilling_config.BillingOccurrenceController
+            occurrenceController;
+
+    /** The Tax Pipeline list (taxStatus = TAX_CALCULATED) in the given view, as the API returns it. */
+    private List<com.AccountReceivableManagement.dto.projectbilling_config.BillingOccurrenceResponseDto> taxCalculated(
+            com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingOccurrenceView view) {
+        return tx.execute(status -> occurrenceController
+                .getOccurrences(null, null, null, BillingPeriodStatus.TAX_CALCULATED, null, null, view).getBody());
+    }
+
+    private static List<UUID> idsOf(List<com.AccountReceivableManagement.dto.projectbilling_config.BillingOccurrenceResponseDto>
+            rows) {
+        return rows.stream().map(r -> r.getBillingScheduleId()).toList();
+    }
+
+    @Test
+    void deactivatedConfigurationAndItsReplacement_keepTheirOwnOccurrences_andThePipelineTellsThemApart() {
+        var current = com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingOccurrenceView.CURRENT;
+        var historical = com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingOccurrenceView.HISTORICAL;
+
+        // An unrelated, active project billed by the same scheduler.
+        ProjectMasterReference otherProject = tx.execute(status -> projectRepository.save(ProjectMasterReference.builder()
+                .pmsProjectId(Math.abs(UUID.randomUUID().getMostSignificantBits() % 1_000_000_000L))
+                .clientId(client.getClientId()).projectName("Unrelated " + UUID.randomUUID())
+                .primaryLocation("Karnataka").build()));
+        LocalDate lastMonth = today.minusMonths(1).withDayOfMonth(1);
+        BillingConfiguration unrelated = configuration("Fixed Price", oneTime, lastMonth,
+                lastMonth.plusMonths(1).minusDays(1), null);
+        tx.executeWithoutResult(status -> {
+            BillingConfiguration managed =
+                    configurationRepository.findById(unrelated.getBillingConfigurationId()).orElseThrow();
+            managed.setProject(otherProject);
+            configurationRepository.save(managed);
+            fixedPriceRepository.save(BillingFixedPriceConfiguration.builder()
+                    .billingConfiguration(managed).contractValue(new BigDecimal("10000.00"))
+                    .contractValueSource(ContractValueSource.MANUAL).isActive(true).build());
+            occurrenceService.generateOccurrencesForFixedPrice(managed.getBillingConfigurationId());
+        });
+
+        // 1-2. Configuration A (Milestone installments) approved: occurrences generated, due ones TAX_PENDING.
+        BillingConfiguration a = installmentPlan(karnataka, new Object[][] {
+                {1, "100000.00", today.minusDays(20)}, {2, "50000.00", today.minusDays(10)},
+                {3, "40000.00", today.minusDays(5)}, {4, "60000.00", today.plusMonths(1)}});
+        UUID aInvoiced = occurrenceDatedOn(a, today.minusDays(20)).getBillingScheduleId();
+        UUID aTaxed = occurrenceDatedOn(a, today.minusDays(10)).getBillingScheduleId();
+        UUID aTaxPending = occurrenceDatedOn(a, today.minusDays(5)).getBillingScheduleId();
+        UUID aFuture = occurrenceDatedOn(a, today.plusMonths(1)).getBillingScheduleId();
+
+        // Installment 1 billed by hand: taxed, invoiced, submitted by a clerk, approved, sent -> receivable.
+        taxService.calculateTaxForSchedule(aInvoiced);
+        UUID aInvoice = invoiceService.generateInvoiceForSchedule(aInvoiced).getInvoiceId();
+        when(currentUserService.getCurrentUser()).thenReturn(new UserDTO(
+                8L, "billing.clerk@example.com", "Billing Clerk", List.of("BILLING_CLERK"), List.of()));
+        when(currentUserService.getUserId()).thenReturn(8L);
+        invoiceService.submitForApproval(aInvoice);
+        when(currentUserService.getCurrentUser()).thenReturn(new UserDTO(
+                7L, "finance.manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of()));
+        when(currentUserService.getUserId()).thenReturn(7L);
+        approveAsFinanceManager(aInvoice);
+        deliveryService.sendInvoice(aInvoice);
+        Receivable aReceivable = receivableRepository.findByInvoiceId(aInvoice).orElseThrow();
+        Invoice aInvoiceBefore = invoiceRepository.findById(aInvoice).orElseThrow();
+        // Installment 2 taxed but not yet invoiced.
+        taxService.calculateTaxForSchedule(aTaxed);
+        var aTaxedCalculation = taxOf(scheduleRepository.findById(aTaxed).orElseThrow());
+
+        // 3. Configuration A deactivated: its open (SCHEDULED/TAX_PENDING) occurrences are retired,
+        // its taxed and invoiced ones are kept as they are.
+        configurationService.deactivateBillingConfiguration(a.getBillingConfigurationId());
+        assertThat(scheduleRepository.findById(aTaxPending).orElseThrow().getIsActive()).isFalse();
+        assertThat(scheduleRepository.findById(aFuture).orElseThrow().getIsActive()).isFalse();
+
+        // 4-5. Configuration B (Fixed Price) for the same project, approved and generated.
+        LocalDate bFrom = today.minusMonths(2).withDayOfMonth(1);
+        BillingConfiguration b = configuration("Fixed Price", monthly, bFrom, bFrom.plusMonths(4).minusDays(1), null);
+        tx.executeWithoutResult(status -> {
+            fixedPriceRepository.save(BillingFixedPriceConfiguration.builder()
+                    .billingConfiguration(b).contractValue(new BigDecimal("400000.00"))
+                    .contractValueSource(ContractValueSource.MANUAL).isActive(true).build());
+            occurrenceService.generateOccurrencesForFixedPrice(b.getBillingConfigurationId());
+            occurrenceService.promoteDueOccurrencesToTaxPending(b.getBillingConfigurationId());
+        });
+        assertThat(b.getProject().getPmsProjectId()).isEqualTo(a.getProject().getPmsProjectId());
+
+        scheduler.runOnce();
+        List<Long> afterFirstTick = financialRecordCounts();
+        // 12. Idempotent: a repeated tick creates nothing.
+        scheduler.runOnce();
+        assertThat(financialRecordCounts()).isEqualTo(afterFirstTick);
+
+        // 6-7. Ownership: B's occurrences reference B; A's still reference A; none moved or reused.
+        List<UUID> aIds = List.of(aInvoiced, aTaxed, aTaxPending, aFuture);
+        List<BillingSchedule> bOccurrences = occurrencesOf(b);
+        assertThat(bOccurrences).hasSize(4).extracting(BillingSchedule::getBillingScheduleId).doesNotContainAnyElementsOf(aIds);
+        tx.executeWithoutResult(status -> {
+            for (UUID id : aIds) {
+                assertThat(scheduleRepository.findById(id).orElseThrow().getBillingConfiguration()
+                        .getBillingConfigurationId()).isEqualTo(a.getBillingConfigurationId());
+            }
+            BillingConfiguration managedB = configurationRepository.findById(b.getBillingConfigurationId()).orElseThrow();
+            assertThat(scheduleRepository.findByBillingConfiguration(managedB)).hasSize(4);
+        });
+        List<BillingSchedule> bDue = bOccurrences.stream().filter(o -> !o.getBillingDate().isAfter(today)).toList();
+        assertThat(invoicesOf(bDue)).hasSize(bDue.size());
+        assertThat(invoicesOf(occurrencesOf(unrelated))).as("unrelated project still billed").hasSize(1);
+
+        // 10. The deactivated configuration produced nothing new: no run, no tax, no invoice.
+        for (UUID id : List.of(aTaxed, aTaxPending, aFuture)) {
+            assertThat(runRepository.findByBillingScheduleId(id)).isEmpty();
+        }
+        assertThat(taxOf(scheduleRepository.findById(aTaxPending).orElseThrow())).isNull();
+        assertThat(invoicesOfProject().stream().filter(i -> aIds.contains(i.getBillingScheduleId())))
+                .extracting(Invoice::getInvoiceId).containsExactly(aInvoice);
+
+        // 9. A's history intact: invoice, tax calculation and receivable unchanged.
+        Invoice aInvoiceAfter = invoiceRepository.findById(aInvoice).orElseThrow();
+        assertThat(aInvoiceAfter.getStatus()).isEqualTo(aInvoiceBefore.getStatus());
+        assertThat(aInvoiceAfter.getGrandTotal()).isEqualByComparingTo(aInvoiceBefore.getGrandTotal());
+        assertThat(receivableRepository.findByInvoiceId(aInvoice).orElseThrow().getOutstandingBalance())
+                .isEqualByComparingTo(aReceivable.getOutstandingBalance());
+        var aTaxedAfter = taxOf(scheduleRepository.findById(aTaxed).orElseThrow());
+        assertThat(aTaxedAfter.getTaxCalculationId()).isEqualTo(aTaxedCalculation.getTaxCalculationId());
+        assertThat(aTaxedAfter.getGrandTotal()).isEqualByComparingTo(aTaxedCalculation.getGrandTotal());
+        BillingSchedule aTaxedAfterSchedule = scheduleRepository.findById(aTaxed).orElseThrow();
+        assertThat(aTaxedAfterSchedule.getIsActive()).isTrue();
+        assertThat(aTaxedAfterSchedule.getIsInvoiced()).isFalse();
+        assertThat(aTaxedAfterSchedule.getTaxStatus()).isEqualTo(BillingPeriodStatus.TAX_CALCULATED);
+
+        // 8. The pipeline. Without a view: unchanged behaviour, both configurations' rows.
+        List<UUID> bTaxed = bDue.stream().map(BillingSchedule::getBillingScheduleId).toList();
+        assertThat(idsOf(taxCalculated(null))).contains(aInvoiced, aTaxed).containsAll(bTaxed);
+
+        // CURRENT: only the replacement (and other live configurations) - none of A's.
+        var currentRows = taxCalculated(current);
+        assertThat(idsOf(currentRows)).containsAll(bTaxed).doesNotContainAnyElementsOf(aIds)
+                .contains(occurrencesOf(unrelated).get(0).getBillingScheduleId());
+        assertThat(currentRows.stream().filter(r -> bTaxed.contains(r.getBillingScheduleId()))).allSatisfy(r -> {
+            assertThat(r.getBillingConfigurationId()).isEqualTo(b.getBillingConfigurationId());
+            assertThat(r.getConfigurationManuallyDeactivated()).isFalse();
+            assertThat(r.getBillingConfigurationStatus()).isEqualTo(
+                    com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.ACTIVE);
+        });
+
+        // HISTORICAL: A's kept rows - including the taxed, not yet invoiced one - and none of B's.
+        var historicalRows = taxCalculated(historical);
+        assertThat(idsOf(historicalRows)).contains(aInvoiced, aTaxed).doesNotContainAnyElementsOf(bTaxed);
+        assertThat(historicalRows.stream().filter(r -> aIds.contains(r.getBillingScheduleId()))).allSatisfy(r -> {
+            assertThat(r.getBillingConfigurationId()).isEqualTo(a.getBillingConfigurationId());
+            assertThat(r.getConfigurationManuallyDeactivated()).isTrue();
+            assertThat(r.getBillingConfigurationStatus()).isEqualTo(
+                    com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.INACTIVE);
+        });
+
+        // 13. Tax and invoice lifecycles independent: an invoiced occurrence is still tax-calculated.
+        assertThat(historicalRows.stream().filter(r -> r.getBillingScheduleId().equals(aInvoiced)))
+                .singleElement().satisfies(r -> {
+                    assertThat(r.getTaxStatus()).isEqualTo(BillingPeriodStatus.TAX_CALCULATED);
+                    assertThat(r.getTaxCalculationStatus()).isEqualTo(
+                            com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus.CALCULATED);
+                    assertThat(r.getPeriodStatus()).isEqualTo(BillingPeriodStatus.INVOICED);
+                    assertThat(r.getIsInvoiced()).isTrue();
+                });
+        assertThat(currentRows.stream().filter(r -> bTaxed.contains(r.getBillingScheduleId()))).allSatisfy(r -> {
+            assertThat(r.getTaxStatus()).isEqualTo(BillingPeriodStatus.TAX_CALCULATED);
+            assertThat(r.getPeriodStatus()).isEqualTo(BillingPeriodStatus.INVOICED);
+        });
+
+        // Invoice history: both configurations' invoices listed, each detail naming its own configuration.
+        List<UUID> bInvoices = invoicesOf(bDue).stream().map(Invoice::getInvoiceId).toList();
+        assertThat(invoiceService.getAllInvoices()).extracting(s -> s.getInvoiceId())
+                .contains(aInvoice).containsAll(bInvoices);
+        assertThat(tx.execute(status -> invoiceService.getInvoiceById(aInvoice)).getBillingConfigurationId())
+                .isEqualTo(a.getBillingConfigurationId());
+        for (UUID id : bInvoices) {
+            assertThat(tx.execute(status -> invoiceService.getInvoiceById(id)).getBillingConfigurationId())
+                    .isEqualTo(b.getBillingConfigurationId());
+        }
+        // 11. Totals: the project's invoices are exactly A's one plus B's due ones - nothing lost or doubled.
+        assertThat(invoicesOfProject()).hasSize(1 + bInvoices.size());
+        assertThat(receivableRepository.findAll().stream()
+                .filter(r -> r.getInvoice().getInvoiceId().equals(aInvoice))).hasSize(1);
+    }
+
+    // ================================================================ one live configuration per project
+
+    /** A Time &amp; Material configuration submitted for approval by a clerk, as the console leaves it. */
+    private BillingConfiguration pendingConfiguration(LocalDate effectiveFrom, LocalDate effectiveTo) {
+        when(currentUserService.getUserId()).thenReturn(8L);
+        try {
+            BillingConfiguration configuration = configuration("Timesheet Based", monthly, effectiveFrom,
+                    effectiveTo, null);
+            return tx.execute(status -> {
+                BillingConfiguration managed =
+                        configurationRepository.findById(configuration.getBillingConfigurationId()).orElseThrow();
+                managed.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+                managed.setBillingStatus(com.AccountReceivableManagement.entity_enums.projectbilling_config
+                        .BillingConfigurationStatus.INACTIVE);
+                return configurationRepository.save(managed);
+            });
+        } finally {
+            when(currentUserService.getUserId()).thenReturn(7L);
+        }
+    }
+
+    private void approve(BillingConfiguration configuration) {
+        lockService.acquireLock(LockResourceType.BILLING_CONFIGURATION, configuration.getBillingConfigurationId(),
+                LockActionType.APPROVAL);
+        configurationService.approve(configuration.getBillingConfigurationId());
+    }
+
+    private ApprovalStatus approvalOf(BillingConfiguration configuration) {
+        return configurationRepository.findById(configuration.getBillingConfigurationId()).orElseThrow()
+                .getApprovalStatus();
+    }
+
+    @Test
+    void secondLiveConfigurationForAProject_isRefused_untilTheFirstIsDeactivated_andCannotBeReopened() {
+        BillingConfiguration a = pendingConfiguration(today.minusMonths(2), null);
+        approve(a);
+        assertThat(approvalOf(a)).isEqualTo(ApprovalStatus.APPROVED);
+
+        // B overlaps A, which is live: refused, A untouched.
+        BillingConfiguration b = pendingConfiguration(today.minusDays(1), null);
+        assertThatThrownBy(() -> approve(b))
+                .hasMessageContaining("already has a live billing configuration")
+                .hasMessageContaining(a.getBillingConfigurationId().toString());
+        assertThat(approvalOf(b)).isEqualTo(ApprovalStatus.PENDING_APPROVAL);
+
+        // A deactivated: B can be approved.
+        configurationService.deactivateBillingConfiguration(a.getBillingConfigurationId());
+        approve(b);
+        assertThat(approvalOf(b)).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(configurationService.getApprovedByProjectId(project.getPmsProjectId()).getBillingConfigurationId())
+                .isEqualTo(b.getBillingConfigurationId());
+
+        // A reopened (an edit sends it back for approval and clears the deactivation) cannot become
+        // a second live configuration beside B.
+        when(currentUserService.getUserId()).thenReturn(8L); // the clerk resubmits
+        tx.executeWithoutResult(status -> {
+            BillingConfiguration managed =
+                    configurationRepository.findById(a.getBillingConfigurationId()).orElseThrow();
+            managed.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+            managed.setManuallyDeactivated(false);
+            configurationRepository.save(managed);
+        });
+        when(currentUserService.getUserId()).thenReturn(7L);
+        assertThatThrownBy(() -> approve(a)).hasMessageContaining("already has a live billing configuration");
+        assertThat(configurationService.getApprovedByProjectId(project.getPmsProjectId()).getBillingConfigurationId())
+                .isEqualTo(b.getBillingConfigurationId());
+    }
+
+    @Test
+    void sequentialConfigurations_withoutOverlap_areBothApproved() {
+        BillingConfiguration ending = pendingConfiguration(today.minusMonths(2), today.plusDays(10));
+        approve(ending);
+        BillingConfiguration next = pendingConfiguration(today.plusDays(11), null);
+        approve(next);
+        assertThat(approvalOf(ending)).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approvalOf(next)).isEqualTo(ApprovalStatus.APPROVED);
+    }
+
+    @Test
+    void concurrentApprovalsOfOverlappingConfigurations_approveExactlyOne() throws Exception {
+        BillingConfiguration first = pendingConfiguration(today.minusMonths(1), null);
+        BillingConfiguration second = pendingConfiguration(today.minusMonths(1), null);
+        java.util.concurrent.CyclicBarrier start = new java.util.concurrent.CyclicBarrier(2);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            // Each result: null when approved, else why it was refused.
+            List<java.util.concurrent.Future<String>> results = new ArrayList<>();
+            for (BillingConfiguration configuration : List.of(first, second)) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        approve(configuration);
+                        return null;
+                    } catch (RuntimeException refused) {
+                        return String.valueOf(refused.getMessage());
+                    }
+                }));
+            }
+            List<String> outcomes = new ArrayList<>();
+            for (java.util.concurrent.Future<String> result : results) {
+                outcomes.add(result.get(60, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            // One approved; the other refused by the live-configuration check - it saw the first's commit.
+            assertThat(outcomes).containsOnlyOnce((String) null);
+            assertThat(outcomes.stream().filter(java.util.Objects::nonNull)).singleElement()
+                    .satisfies(reason -> assertThat(reason).contains("already has a live billing configuration"));
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(List.of(approvalOf(first), approvalOf(second)))
+                .containsExactlyInAnyOrder(ApprovalStatus.APPROVED, ApprovalStatus.PENDING_APPROVAL);
     }
 }

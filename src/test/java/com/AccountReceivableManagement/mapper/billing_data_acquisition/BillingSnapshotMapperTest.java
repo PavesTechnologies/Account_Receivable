@@ -322,4 +322,43 @@ class BillingSnapshotMapperTest {
                 .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
         assertThat(json.readTree(json.writeValueAsString(laborOnly)).get("expenses").isArray()).isTrue();
     }
+
+    // Identity comes from the snapshot's own column, never from the configuration read for display names.
+    @Test
+    void toResponse_exposesTheSnapshotsOwnBillingConfigurationId() throws Exception {
+        UUID recordedConfigurationId = UUID.randomUUID();
+        BillingSnapshot snapshot = snapshotWith(List.of());
+        snapshot.setBillingConfigurationId(recordedConfigurationId);
+
+        BillingSnapshotResponseDto response = mapper.toResponse(snapshot,
+                BillingConfigurationResponseDto.builder().billingConfigurationId(UUID.randomUUID()).build());
+
+        assertThat(response.getBillingConfigurationId()).isEqualTo(recordedConfigurationId);
+
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper()
+                .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+        assertThat(json.readTree(json.writeValueAsString(response)).get("billingConfigurationId").asText())
+                .isEqualTo(recordedConfigurationId.toString());
+    }
+
+    // Unresolvable historical configuration (empty DTO): identity is still the recorded one; a snapshot
+    // without one omits the field (NON_NULL) rather than sending a misleading value.
+    @Test
+    void toResponse_billingConfigurationId_survivesMissingConfiguration_andIsOmittedWhenAbsent() throws Exception {
+        UUID recordedConfigurationId = UUID.randomUUID();
+        BillingSnapshot snapshot = snapshotWith(List.of());
+        snapshot.setBillingConfigurationId(recordedConfigurationId);
+
+        assertThat(mapper.toResponse(snapshot, BillingConfigurationResponseDto.builder().build())
+                .getBillingConfigurationId()).isEqualTo(recordedConfigurationId);
+
+        snapshot.setBillingConfigurationId(null);
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper()
+                .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+        String body = json.writeValueAsString(
+                mapper.toResponse(snapshot, BillingConfigurationResponseDto.builder().build()));
+        assertThat(json.readTree(body).has("billingConfigurationId")).isFalse();
+        // Existing fields keep their contract.
+        assertThat(json.readTree(body).get("timesheets").isArray()).isTrue();
+    }
 }
