@@ -38,6 +38,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(
+                                "/health",
                                 "/public/**",
                                 // Load balancer / Kubernetes probes: status only, never details.
                                 "/health",

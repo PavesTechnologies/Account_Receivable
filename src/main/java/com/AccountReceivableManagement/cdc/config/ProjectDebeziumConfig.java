@@ -57,6 +57,7 @@ public class ProjectDebeziumConfig {
         log.info("------------------------------------------------------");
         log.info("AR Database (Offset Storage)");
         log.info("------------------------------------------------------");
+        log.info("AR JDBC URL                 : {}", CdcConfigurationLogging.safeJdbcTarget(arJdbcUrl));
 
         log.info("Offset Table                : {}", projectCdcProperties.getOffsetTable());
         log.info("Schema History Table        : {}", projectCdcProperties.getSchemaHistoryTable());

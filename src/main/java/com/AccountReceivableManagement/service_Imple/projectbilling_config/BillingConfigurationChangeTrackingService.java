@@ -3,6 +3,8 @@ package com.AccountReceivableManagement.service_Imple.projectbilling_config;
 import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationChangeDto;
 import com.AccountReceivableManagement.entity.projectbilling_config.*;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.*;
+import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.repo.project.ProjectMilestoneReferenceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +17,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -25,8 +30,20 @@ public class BillingConfigurationChangeTrackingService {
     private final BillingConfigurationChangeDetailRepository changeDetailRepository;
     private final BillingMilestonePlanRepository milestonePlanRepository;
     private final BillingPaymentEntryRepository paymentEntryRepository;
+    private final ProjectMilestoneReferenceRepository milestoneReferenceRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+    /**
+     * Bookkeeping rows stored in the change-detail table (no schema change): they record EXACTLY which payment entries
+     * were active when the snapshot was taken, so a rejection can restore that set and nothing else. They are not
+     * user-visible changes - {@link #getChangesForConfiguration} filters them out. One row per entry (field name
+     * {@code prior_entry_<entryId>}, entry id in previousValue) plus a sentinel row, which says "the set was captured"
+     * and so tells an empty set apart from a snapshot taken before this existed.
+     */
+    static final String PRIOR_ENTRY_CATEGORY = "PRIOR_ENTRY_SET";
+    static final String PRIOR_ENTRY_SENTINEL = "prior_entry_set";
+    static final String PRIOR_ENTRY_PREFIX = "prior_entry_";
 
     @Transactional
     public BillingConfigurationSnapshot createSnapshot(BillingConfiguration configuration) {
@@ -53,7 +70,41 @@ public class BillingConfigurationChangeTrackingService {
                 .previousProductDescription(configuration.getProductDescription())
                 .build();
 
-        return snapshotRepository.save(snapshot);
+        BillingConfigurationSnapshot saved = snapshotRepository.save(snapshot);
+        capturePriorEntrySet(saved, configuration);
+        return saved;
+    }
+
+    /** Called before the edit deactivates anything: the plan's active entries now are the set a rejection must restore. */
+    private void capturePriorEntrySet(BillingConfigurationSnapshot snapshot, BillingConfiguration configuration) {
+        if (!isMilestonePlan(configuration)) {
+            return;
+        }
+        List<BillingPaymentEntry> active = milestonePlanRepository
+                .findByBillingConfigurationAndIsActiveTrue(configuration)
+                .map(paymentEntryRepository::findByMilestonePlanAndIsActiveTrue)
+                .orElse(List.of());
+
+        saveMarker(snapshot, PRIOR_ENTRY_SENTINEL, null);
+        for (BillingPaymentEntry entry : active) {
+            saveMarker(snapshot, PRIOR_ENTRY_PREFIX + entry.getPaymentEntryId(), entry.getPaymentEntryId().toString());
+        }
+    }
+
+    private void saveMarker(BillingConfigurationSnapshot snapshot, String fieldName, String entryId) {
+        changeDetailRepository.save(BillingConfigurationChangeDetail.builder()
+                .snapshot(snapshot)
+                .fieldName(fieldName)
+                .fieldDisplayName("Prior payment entry set")
+                .fieldType("ENTRY_ID")
+                .previousValue(entryId)
+                .category(PRIOR_ENTRY_CATEGORY)
+                .build());
+    }
+
+    private static boolean isMilestonePlan(BillingConfiguration configuration) {
+        return configuration.getBillingType() != null
+                && "Milestone Plan".equalsIgnoreCase(configuration.getBillingType().getBillingTypeName());
     }
 
     @Transactional
@@ -238,6 +289,14 @@ public class BillingConfigurationChangeTrackingService {
                         "Payment " + (i + 1) + " - Remarks", 
                         "STRING",
                         prev.getRemarks(), curr.getRemarks(), "MILESTONE");
+
+                // A different PMS milestone with the same numbers must still show up for the approver
+                // (both null for FULL_PAYMENT / INSTALLMENTS entries, which records nothing).
+                recordChange(snapshot, 
+                        "payment_" + (i + 1) + "_pmsMilestoneId", 
+                        "Payment " + (i + 1) + " - PMS Milestone", 
+                        "STRING",
+                        prev.getPmsMilestoneId(), curr.getPmsMilestoneId(), "MILESTONE");
             } else if (i < previousEntries.size()) {
                 recordChange(snapshot, 
                         "payment_" + (i + 1), 
@@ -263,6 +322,9 @@ public class BillingConfigurationChangeTrackingService {
                             changeDetailRepository.findBySnapshotOrderByCreatedAtAsc(snapshot);
                     
                     for (BillingConfigurationChangeDetail detail : details) {
+                        if (PRIOR_ENTRY_CATEGORY.equals(detail.getCategory())) {
+                            continue; // restore bookkeeping, not a change the approver should review
+                        }
                         changes.add(BillingConfigurationChangeDto.builder()
                                 .field(detail.getFieldDisplayName())
                                 .previousValue(detail.getPreviousValue())
@@ -307,45 +369,85 @@ public class BillingConfigurationChangeTrackingService {
         // Restore milestone plan entries if this is a Milestone Plan configuration
         if (configuration.getBillingType() != null && 
             "Milestone Plan".equalsIgnoreCase(configuration.getBillingType().getBillingTypeName())) {
-            restoreMilestonePlanEntries(configuration);
+            restoreMilestonePlanEntries(configuration, snapshot);
         }
         
         markSnapshotAsRestored(snapshot);
     }
 
-    @Transactional
-    private void restoreMilestonePlanEntries(BillingConfiguration configuration) {
+    /**
+     * Restores exactly the entries that were active when {@code snapshot} was taken - never "every inactive entry", which
+     * would also revive entries of older generations - and refuses to do so if that would give back a milestone another
+     * live plan has claimed in the meantime. It throws (rolling the whole rejection back, nothing changes) rather than
+     * guess; a snapshot taken before the entry set was recorded is left alone with a warning.
+     */
+    private void restoreMilestonePlanEntries(BillingConfiguration configuration, BillingConfigurationSnapshot snapshot) {
+        List<BillingConfigurationChangeDetail> markers = changeDetailRepository.findBySnapshotOrderByCreatedAtAsc(snapshot)
+                .stream()
+                .filter(d -> PRIOR_ENTRY_CATEGORY.equals(d.getCategory()))
+                .toList();
+        if (markers.stream().noneMatch(d -> PRIOR_ENTRY_SENTINEL.equals(d.getFieldName()))) {
+            log.warn("Snapshot {} of configuration {} does not record which payment entries were active, so they cannot be "
+                            + "restored exactly; the milestone plan entries are left as they are",
+                    snapshot.getSnapshotId(), configuration.getBillingConfigurationId());
+            return;
+        }
+        Set<UUID> priorIds = markers.stream()
+                .filter(d -> d.getPreviousValue() != null)
+                .map(d -> UUID.fromString(d.getPreviousValue()))
+                .collect(Collectors.toSet());
+
         BillingMilestonePlan milestonePlan = milestonePlanRepository
                 .findByBillingConfigurationAndIsActiveTrue(configuration)
                 .orElse(null);
-        
         if (milestonePlan == null) {
             log.warn("No active milestone plan found for configuration {}", configuration.getBillingConfigurationId());
             return;
         }
-        
-        // Get all payment entries for this milestone plan (both active and inactive)
-        List<BillingPaymentEntry> allEntries = paymentEntryRepository
-                .findByMilestonePlan(milestonePlan);
-        
-        // Separate into currently active (new) and inactive (previous)
-        List<BillingPaymentEntry> currentActiveEntries = allEntries.stream()
-                .filter(BillingPaymentEntry::getIsActive)
+
+        List<BillingPaymentEntry> allEntries = paymentEntryRepository.findByMilestonePlan(milestonePlan);
+        List<BillingPaymentEntry> toActivate = allEntries.stream()
+                .filter(e -> priorIds.contains(e.getPaymentEntryId()))
                 .toList();
-        
-        List<BillingPaymentEntry> previousInactiveEntries = allEntries.stream()
-                .filter(e -> !e.getIsActive())
+        if (toActivate.size() != priorIds.size()) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The previously approved payment entries can no longer be found, so the edit cannot be rejected "
+                            + "without losing them. Nothing was changed.");
+        }
+
+        List<Long> milestoneIds = toActivate.stream()
+                .map(BillingPaymentEntry::getPmsMilestoneId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .sorted()
                 .toList();
-        
-        // Deactivate current entries (the ones created during the edit)
-        currentActiveEntries.forEach(entry -> entry.setIsActive(false));
-        paymentEntryRepository.saveAll(currentActiveEntries);
-        
-        // Reactivate previous entries (the ones from before the edit)
-        previousInactiveEntries.forEach(entry -> entry.setIsActive(true));
-        paymentEntryRepository.saveAll(previousInactiveEntries);
-        
-        log.info("Restored milestone plan entries for configuration {}: deactivated {} current entries, reactivated {} previous entries",
-                configuration.getBillingConfigurationId(), currentActiveEntries.size(), previousInactiveEntries.size());
+        if (!milestoneIds.isEmpty()) {
+            // same protocol as claiming: milestone rows first (ascending), then the locking conflict read
+            milestoneReferenceRepository.findAllByIdForUpdate(milestoneIds);
+            List<BillingPaymentEntry> conflicts = paymentEntryRepository
+                    .findActiveAssignmentsInOtherConfigurations(milestoneIds, configuration.getBillingConfigurationId());
+            if (!conflicts.isEmpty()) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "PMS milestone " + conflicts.get(0).getPmsMilestoneId() + " from the previously approved plan is now "
+                                + "part of another billing plan, so this edit cannot be rejected without restoring a "
+                                + "conflicting claim. Nothing was changed; release the milestone from the other plan first.");
+            }
+        }
+
+        List<BillingPaymentEntry> toDeactivate = allEntries.stream()
+                .filter(e -> Boolean.TRUE.equals(e.getIsActive()) && !priorIds.contains(e.getPaymentEntryId()))
+                .toList();
+        toDeactivate.forEach(e -> e.setIsActive(false));
+        paymentEntryRepository.saveAll(toDeactivate);
+
+        List<BillingPaymentEntry> reactivated = toActivate.stream()
+                .filter(e -> !Boolean.TRUE.equals(e.getIsActive()))
+                .toList();
+        reactivated.forEach(e -> e.setIsActive(true));
+        paymentEntryRepository.saveAll(reactivated);
+
+        log.info("Restored milestone plan entries for configuration {}: deactivated {} entries of the pending edit, "
+                        + "reactivated {} entries of the approved plan",
+                configuration.getBillingConfigurationId(), toDeactivate.size(), reactivated.size());
     }
 }

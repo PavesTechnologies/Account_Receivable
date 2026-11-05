@@ -9,7 +9,9 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "billing_payment_entry")
+@Table(name = "billing_payment_entry", indexes = {
+        @Index(name = "idx_bpe_pms_milestone", columnList = "pms_milestone_id")
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -54,6 +56,15 @@ public class BillingPaymentEntry {
 
     @Column(name = "remarks", length = 500)
     private String remarks;
+
+    /**
+     * PMS id of the milestone this entry bills (MILESTONES payment structure only; NULL for FULL_PAYMENT and INSTALLMENTS
+     * entries and for entries created before milestone billing existed). A logical reference to
+     * project_milestone_reference.pms_milestone_id - deliberately not a foreign key or a JPA relationship, because the
+     * milestone row is maintained by CDC and may be tombstoned (source_deleted) but never removed.
+     */
+    @Column(name = "pms_milestone_id")
+    private Long pmsMilestoneId;
 
     @Column(name = "is_active", nullable = false)
     @Builder.Default

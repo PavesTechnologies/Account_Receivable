@@ -361,6 +361,18 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         validateTimeAndMaterialRateCards(configuration);
 
+        /*
+         * The milestone claim made when the plan was saved can have been overtaken since (another plan claimed the
+         * milestone while this one waited). Re-check under the milestone locks before approving.
+         */
+        revalidateMilestoneClaims(configuration);
+
+        /*
+         * The edit this snapshot guarded is now accepted. Close it, so a later rejection can never restore it
+         * (or an older generation) over a newer state.
+         */
+        closePendingSnapshots(configuration);
+
         requireNoOtherLiveConfigurationForProject(configuration);
 
         /*
@@ -457,6 +469,22 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         return mapToResponse(saved);
+    }
+
+    private void revalidateMilestoneClaims(BillingConfiguration configuration) {
+        if (configuration.getBillingType() != null
+                && "Milestone Plan".equalsIgnoreCase(configuration.getBillingType().getBillingTypeName())) {
+            billingMilestonePlanService.revalidateMilestoneClaims(configuration);
+        }
+    }
+
+    private void closePendingSnapshots(BillingConfiguration configuration) {
+        List<BillingConfigurationSnapshot> open =
+                snapshotRepository.findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration);
+        if (open != null && !open.isEmpty()) {
+            open.forEach(s -> s.setIsRestored(true));
+            snapshotRepository.saveAll(open);
+        }
     }
 
     /**
@@ -597,6 +625,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // =========================================================
         // RESTORE PREVIOUS APPROVED STATE IF SNAPSHOT EXISTS
         // =========================================================
+        snapshotRepository.findFirstByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
         /*
          * Only a snapshot taken by the edit now being rejected - i.e. after
          * the last approval decision - describes the state to restore. An
@@ -1660,12 +1689,6 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         if (billingSnapshotRepository.existsByBillingConfigurationId(billingConfigurationId)) {
             throw new GlobalExceptionHandler.ValidationException(
                     "This billing configuration cannot be deleted because it is referenced by historical Billing Snapshot data.");
-        }
-
-        // Same rule for automatic billing history (fk from automatic_billing_run).
-        if (automaticBillingRunRepository.existsByBillingConfiguration_BillingConfigurationId(billingConfigurationId)) {
-            throw new GlobalExceptionHandler.ValidationException(
-                    "This billing configuration cannot be deleted because it is referenced by automatic billing history.");
         }
 
         // Acquisition records and configuration change-tracking rows reference the configuration (non-null foreign

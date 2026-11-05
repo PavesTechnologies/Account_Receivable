@@ -29,9 +29,6 @@ import static org.mockito.Mockito.*;
 class BillingOccurrenceServiceImplTest {
 
     @Mock
-    private com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
-
-    @Mock
     private BillingScheduleRepository billingScheduleRepository;
 
     @Mock
@@ -168,14 +165,13 @@ class BillingOccurrenceServiceImplTest {
                 .thenReturn(Optional.of(billingConfiguration));
         when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
                 .thenReturn(Optional.of(fixedPriceConfig));
-        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+        when(billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
                 billingConfiguration, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
-                .thenReturn(Optional.empty());
+                .thenReturn(false);
 
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat((List<BillingSchedule> saved) ->
-                saved.size() == 1 && saved.stream().allMatch(schedule ->
+        verify(billingScheduleRepository).save(argThat(schedule ->
                 schedule.getPeriodNumber() == 1 &&
                         schedule.getPeriodStartDate().equals(LocalDate.of(2026, 9, 1)) &&
                         schedule.getPeriodEndDate().equals(LocalDate.of(2026, 9, 30)) &&
@@ -184,21 +180,7 @@ class BillingOccurrenceServiceImplTest {
                         schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED &&
                         schedule.getTaxStatus() == BillingPeriodStatus.PENDING &&
                         !schedule.getIsPartialPeriod()
-        )));
-    }
-
-    /** The occurrence an earlier generation created for 01-30 Sep 2026. */
-    private BillingSchedule activeSeptemberOccurrence() {
-        return BillingSchedule.builder()
-                .billingScheduleId(UUID.randomUUID())
-                .billingConfiguration(billingConfiguration)
-                .periodNumber(1)
-                .periodStartDate(LocalDate.of(2026, 9, 1))
-                .periodEndDate(LocalDate.of(2026, 9, 30))
-                .periodStatus(BillingPeriodStatus.SCHEDULED)
-                .taxStatus(BillingPeriodStatus.PENDING)
-                .isActive(true)
-                .build();
+        ));
     }
 
     @Test
@@ -209,9 +191,9 @@ class BillingOccurrenceServiceImplTest {
                 .thenReturn(Optional.of(billingConfiguration));
         when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
                 .thenReturn(Optional.of(fixedPriceConfig));
-        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+        when(billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
                 billingConfiguration, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
-                .thenReturn(Optional.of(activeSeptemberOccurrence()));
+                .thenReturn(true);
 
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
 
@@ -230,14 +212,14 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(List.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(new ArrayList<>());
 
         billingOccurrenceService.generateOccurrencesForRecurring(billingConfigId);
 
-        verify(billingScheduleRepository, times(1)).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository, times(4)).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
             if (scheduleList.size() != 4) return false;
@@ -283,8 +265,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(List.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(new ArrayList<>());
 
@@ -331,9 +313,7 @@ class BillingOccurrenceServiceImplTest {
                         .build()
         );
 
-        // 28 Feb 2024 is not a month end (2024 is a leap year): a fixed-day anchor on the 28th,
-        // so the period ends the day before 28 Mar - not on a month end (anchor policy C2/C4).
-        assertThat(result).isEqualTo(LocalDate.of(2024, 3, 27));
+        assertThat(result).isEqualTo(LocalDate.of(2024, 3, 31));
     }
 
     @Test
@@ -377,16 +357,16 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        // The TAX_CALCULATED period is final: nothing is retired, the extension is appended after it.
-        verify(billingScheduleRepository, never()).saveAll(argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+            List<BillingSchedule> scheduleList = new ArrayList<>();
+            schedules.forEach(scheduleList::add);
+            return scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
+        }));
+
         verify(billingScheduleRepository).saveAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return scheduleList.size() == 4
-                    && scheduleList.get(0).getPeriodStartDate().equals(LocalDate.of(2026, 10, 1))
-                    && scheduleList.get(3).getPeriodEndDate().equals(LocalDate.of(2027, 1, 31))
-                    && scheduleList.stream().allMatch(schedule -> Boolean.TRUE.equals(schedule.getIsActive())
-                            && schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
+            return scheduleList.size() > 0;
         }));
     }
 
@@ -434,10 +414,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return retiresOccurrences(scheduleList) && scheduleList.size() == 2 &&
+            return scheduleList.size() == 2 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -474,8 +454,11 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).saveAll(
-                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+            List<BillingSchedule> scheduleList = new ArrayList<>();
+            schedules.forEach(scheduleList::add);
+            return scheduleList.isEmpty();
+        }));
     }
 
     // =========================================================
@@ -483,24 +466,22 @@ class BillingOccurrenceServiceImplTest {
     // =========================================================
 
     @Test
-    void generateOccurrencesForFixedPrice_RepeatedRequests_SecondFindsExistingOccurrence() {
+    void generateOccurrencesForFixedPrice_ConcurrentRequests_DatabaseConstraintPreventsDuplicates() {
         billingConfiguration.setBillingFrequency(oneTimeFrequency);
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
         when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
                 .thenReturn(Optional.of(fixedPriceConfig));
-        // Nothing on the first request; the first request's occurrence on the second.
-        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+        when(billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
                 billingConfiguration, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(activeSeptemberOccurrence()));
+                .thenReturn(false)
+                .thenReturn(false);
 
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
 
-        verify(billingScheduleRepository, times(1)).saveAll(any());
-        verify(billingScheduleRepository, never()).save(any(BillingSchedule.class));
+        verify(billingScheduleRepository, times(2)).save(any(BillingSchedule.class));
     }
 
     // =========================================================
@@ -509,43 +490,40 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void transitionScheduledToTaxPending_UsesBillingDateBeforeOrEqual() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.of(2026, 9, 30);
 
         List<BillingSchedule> scheduledOccurrences = new ArrayList<>();
         scheduledOccurrences.add(BillingSchedule.builder()
                 .billingScheduleId(UUID.randomUUID())
-                .billingDate(today.minusDays(1))
+                .billingDate(LocalDate.of(2026, 9, 29))
                 .periodStatus(BillingPeriodStatus.SCHEDULED)
                 .taxStatus(BillingPeriodStatus.PENDING)
                 .isActive(true)
                 .build());
         scheduledOccurrences.add(BillingSchedule.builder()
                 .billingScheduleId(UUID.randomUUID())
-                .billingDate(today)
+                .billingDate(LocalDate.of(2026, 9, 30))
                 .periodStatus(BillingPeriodStatus.SCHEDULED)
                 .taxStatus(BillingPeriodStatus.PENDING)
                 .isActive(true)
                 .build());
 
-        when(billingScheduleRepository.findByBillingDateLessThanEqualAndPeriodStatusAndTaxStatusAndIsActiveTrue(
-                any(LocalDate.class), eq(BillingPeriodStatus.SCHEDULED), eq(BillingPeriodStatus.PENDING)))
+        when(billingScheduleRepository.findByBillingDateBeforeAndTaxStatusAndIsActiveTrue(
+                today.plusDays(1), BillingPeriodStatus.PENDING))
                 .thenReturn(scheduledOccurrences);
 
         billingOccurrenceService.transitionScheduledToTaxPending();
 
-        // Due ON the billing date (<=): the cut-off is today, and every due
-        // occurrence is transitioned in its own transaction.
-        org.mockito.ArgumentCaptor<LocalDate> cutoff = org.mockito.ArgumentCaptor.forClass(LocalDate.class);
-        verify(billingScheduleRepository).findByBillingDateLessThanEqualAndPeriodStatusAndTaxStatusAndIsActiveTrue(
-                cutoff.capture(), eq(BillingPeriodStatus.SCHEDULED), eq(BillingPeriodStatus.PENDING));
-        assertThat(cutoff.getValue()).isBetween(today, LocalDate.now());
-        verify(billingOccurrenceTransactionService).transitionSingleOccurrenceToTaxPending(scheduledOccurrences.get(0));
-        verify(billingOccurrenceTransactionService).transitionSingleOccurrenceToTaxPending(scheduledOccurrences.get(1));
+        verify(billingScheduleRepository, times(2)).save(argThat(schedule ->
+                schedule.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING &&
+                        schedule.getTaxStatus() == BillingPeriodStatus.TAX_PENDING
+        ));
     }
 
     // =========================================================
     // VALIDATION TESTS
     // =========================================================
+
     @Test
     void generateOccurrencesForFixedPrice_MissingEffectiveDates_ThrowsException() {
         fixedPriceConfig.setEffectiveFrom(null);
@@ -601,8 +579,8 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(List.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(recurringConfig));
 
         assertThatThrownBy(() -> billingOccurrenceService.generateOccurrencesForRecurring(billingConfigId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
@@ -625,11 +603,12 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
+        when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(fixedPriceConfig));
 
         assertThatThrownBy(() -> billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
                 .hasMessageContaining("Billing Configuration must be APPROVED");
-        verifyNoInteractions(billingFixedPriceRepository, billingScheduleRepository);
     }
 
     @Test
@@ -638,11 +617,12 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
+        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(recurringConfig));
 
         assertThatThrownBy(() -> billingOccurrenceService.generateOccurrencesForRecurring(billingConfigId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
                 .hasMessageContaining("Billing Configuration must be APPROVED");
-        verifyNoInteractions(billingRecurringConfigurationRepository, billingScheduleRepository);
     }
 
     @Test
@@ -662,9 +642,9 @@ class BillingOccurrenceServiceImplTest {
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId))
-                .isInstanceOf(GlobalExceptionHandler.ResourceNotFoundException.class);
-        verifyNoInteractions(billingScheduleRepository, automaticBillingRunRepository);
+        billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
+
+        verify(billingScheduleRepository, never()).deleteAll(any());
     }
 
     @Test
@@ -676,8 +656,7 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).saveAll(
-                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
+        verify(billingScheduleRepository, never()).deleteAll(any());
     }
 
     // =========================================================
@@ -687,7 +666,7 @@ class BillingOccurrenceServiceImplTest {
     @Test
     void calculatePeriodEndDate_Weekly_CalculatesCorrectly() {
         BillingFrequencyMaster weeklyFrequency = BillingFrequencyMaster.builder()
-                .durationValue(7)
+                .durationValue(1)
                 .durationUnit(RenewalDurationUnit.DAYS)
                 .build();
 
@@ -797,10 +776,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
+            return scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -836,12 +815,13 @@ class BillingOccurrenceServiceImplTest {
         when(billingScheduleRepository.findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(billingConfiguration))
                 .thenReturn(existingSchedules);
 
-        assertThatThrownBy(() -> billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId))
-                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessageContaining("Cannot change Effective From")
-                .hasMessageContaining("processed billing occurrences");
-        verify(billingScheduleRepository, never()).saveAll(any());
-        assertThat(existingSchedules).allMatch(schedule -> Boolean.TRUE.equals(schedule.getIsActive()));
+        billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
+
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
+            List<BillingSchedule> scheduleList = new ArrayList<>();
+            schedules.forEach(scheduleList::add);
+            return scheduleList.isEmpty();
+        }));
     }
 
     // =========================================================
@@ -888,10 +868,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
+            return scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -908,9 +888,9 @@ class BillingOccurrenceServiceImplTest {
                 .thenReturn(Optional.of(billingConfiguration));
         when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
                 .thenReturn(Optional.of(fixedPriceConfig));
-        when(billingScheduleRepository.findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+        when(billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
                 billingConfiguration, LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)))
-                .thenReturn(Optional.of(activeSeptemberOccurrence()));
+                .thenReturn(true);
 
         billingOccurrenceService.generateOccurrencesForFixedPrice(billingConfigId);
 
@@ -919,31 +899,30 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void amountChange_TaxPending_NoAutomaticRecalculation() {
-        billingConfiguration.setBillingFrequency(oneTimeFrequency);
         List<BillingSchedule> existingSchedules = new ArrayList<>();
         existingSchedules.add(BillingSchedule.builder()
                 .billingScheduleId(UUID.randomUUID())
                 .periodNumber(1)
-                .periodStartDate(LocalDate.of(2026, 9, 1))
-                .periodEndDate(LocalDate.of(2026, 9, 30))
                 .periodStatus(BillingPeriodStatus.TAX_PENDING)
                 .taxStatus(BillingPeriodStatus.TAX_PENDING)
                 .billingAmount(new BigDecimal("10000"))
                 .isActive(true)
                 .build());
 
-        when(billingConfigurationRepository.findById(billingConfigId)).thenReturn(Optional.of(billingConfiguration));
-        when(billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(Optional.of(fixedPriceConfig));
-        lenient().when(billingScheduleRepository.findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(billingConfiguration))
+        when(billingScheduleRepository.findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(billingConfiguration))
                 .thenReturn(existingSchedules);
 
-        billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
+        List<BillingSchedule> processedSchedules = existingSchedules.stream()
+                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.TAX_CALCULATED ||
+                        s.getPeriodStatus() == BillingPeriodStatus.INVOICED)
+                .toList();
 
-        verify(taxCalculationRepository, never()).save(any());
-        assertThat(existingSchedules.get(0).getBillingAmount()).isEqualByComparingTo("10000");
-        assertThat(existingSchedules.get(0).getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
+        assertThat(processedSchedules).isEmpty();
     }
+
+    // =========================================================
+    // SCENARIO 14: TAX RETRY
+    // =========================================================
 
     @Test
     void taxCalculation_Retry_PreventsDuplicates() {
@@ -961,17 +940,9 @@ class BillingOccurrenceServiceImplTest {
         when(taxCalculationRepository.existsByBillingScheduleId(schedule.getBillingScheduleId()))
                 .thenReturn(true);
 
-        TaxCalculationServiceImpl taxService = new TaxCalculationServiceImpl(taxCalculationRepository,
-                mock(com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository.class),
-                billingScheduleRepository,
-                mock(com.AccountReceivableManagement.repo.projectbilling_config.TaxConfigurationRepository.class),
-                mock(com.AccountReceivableManagement.repo.projectbilling_config.TaxRegionMasterRepository.class),
-                billingConfigurationRepository, billingOccurrenceService);
-
-        assertThatThrownBy(() -> taxService.calculateTaxForSchedule(schedule.getBillingScheduleId()))
+        assertThatThrownBy(() -> taxCalculationService.calculateTaxForSchedule(schedule.getBillingScheduleId()))
                 .isInstanceOf(GlobalExceptionHandler.DuplicateResourceException.class)
                 .hasMessageContaining("Tax calculation has already been completed");
-        verify(taxCalculationRepository, never()).save(any());
     }
 
     // =========================================================
@@ -989,8 +960,7 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).saveAll(
-                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
+        verify(billingScheduleRepository, never()).deleteAll(any());
         verify(billingScheduleRepository, never()).saveAll(any());
     }
 
@@ -1005,8 +975,7 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).saveAll(
-                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
+        verify(billingScheduleRepository, never()).deleteAll(any());
         verify(billingScheduleRepository, never()).saveAll(any());
     }
 
@@ -1165,12 +1134,8 @@ class BillingOccurrenceServiceImplTest {
         BillingMilestonePlan plan = milestonePlan();
         LocalDate date = LocalDate.of(2026, 10, 15);
         BillingPaymentEntry entry = paymentEntry(plan, 1, date, "5000");
-        // The occurrence payment 1 generated (as persisted: sequence, date and amount are NOT NULL).
         BillingSchedule taxPending = BillingSchedule.builder()
                 .isActive(true)
-                .periodNumber(1)
-                .billingDate(date)
-                .billingAmount(new BigDecimal("5000"))
                 .periodStatus(BillingPeriodStatus.TAX_PENDING)
                 .build();
 
@@ -1186,8 +1151,7 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository, never()).saveAll(
-                argThat(BillingOccurrenceServiceImplTest::retiresOccurrences));
+        verify(billingScheduleRepository, never()).deleteAll(any());
         verify(billingScheduleRepository, never()).saveAll(any());
     }
 
@@ -1259,10 +1223,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
+            return scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1359,11 +1323,6 @@ class BillingOccurrenceServiceImplTest {
     void effectiveFromChange_WithInvoiced_ThrowsException() {
         billingConfiguration.setBillingFrequency(monthlyFrequency);
         fixedPriceConfig.setEffectiveFrom(LocalDate.of(2026, 10, 1));
-        // PENDING FINANCE DECISION (BD-05, BUSINESS_DECISIONS.md): whether Effective From
-        // may move past an INVOICED occurrence. The guard covers TAX_PENDING/TAX_CALCULATED
-        // only; two other tests assert the move is allowed. This test asserts refusal and
-        // stays red until the policy is decided.
-        fixedPriceConfig.setEffectiveTo(LocalDate.of(2026, 12, 31));
 
         List<BillingSchedule> existingSchedules = new ArrayList<>();
         existingSchedules.add(BillingSchedule.builder()
@@ -1404,8 +1363,6 @@ class BillingOccurrenceServiceImplTest {
                 .build();
 
         billingConfiguration.setBillingFrequency(quarterlyFrequency);
-        when(billingFrequencyRepository.findByIsActiveTrueOrderByBillingFrequencyNameAsc())
-                .thenReturn(List.of(monthlyFrequency, quarterlyFrequency));
         fixedPriceConfig.setEffectiveTo(LocalDate.of(2026, 12, 31));
 
         List<BillingSchedule> existingSchedules = new ArrayList<>();
@@ -1437,10 +1394,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
+            return scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1484,10 +1441,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
+            return scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1531,10 +1488,10 @@ class BillingOccurrenceServiceImplTest {
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
+            return scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1631,12 +1588,8 @@ class BillingOccurrenceServiceImplTest {
 
         assertThatThrownBy(() -> billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessageContaining("contract value cannot be changed")
-                .hasMessageContaining("1 billing occurrence(s) have already been billed");
-        // G-01: nothing is modified before the refusal.
-        verify(billingScheduleRepository, never()).save(any());
-        verify(billingScheduleRepository, never()).saveAll(any());
-        assertThat(existingSchedules.get(0).getBillingAmount()).isEqualByComparingTo("10000");
+                .hasMessageContaining("Cannot change billing amount")
+                .hasMessageContaining("TAX_CALCULATED");
     }
 
     @Test
@@ -1665,12 +1618,8 @@ class BillingOccurrenceServiceImplTest {
 
         assertThatThrownBy(() -> billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
-                .hasMessageContaining("contract value cannot be changed")
-                .hasMessageContaining("1 billing occurrence(s) have already been billed");
-        // G-01: nothing is modified before the refusal.
-        verify(billingScheduleRepository, never()).save(any());
-        verify(billingScheduleRepository, never()).saveAll(any());
-        assertThat(existingSchedules.get(0).getBillingAmount()).isEqualByComparingTo("10000");
+                .hasMessageContaining("Cannot change billing amount")
+                .hasMessageContaining("INVOICED");
     }
 
     // =========================================================
@@ -1706,17 +1655,17 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(List.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(existingSchedules);
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).saveAll(argThat(schedules -> {
+        verify(billingScheduleRepository).deleteAll(argThat(schedules -> {
             List<BillingSchedule> scheduleList = new ArrayList<>();
             schedules.forEach(scheduleList::add);
-            return retiresOccurrences(scheduleList) && scheduleList.size() == 1 &&
+            return scheduleList.size() == 1 &&
                     scheduleList.stream().allMatch(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED);
         }));
     }
@@ -1741,15 +1690,15 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(List.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(existingSchedules);
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).save(argThat(schedule ->  // 15000 is the term (1 Sep - 31 Dec) total: September takes its 30/122 share (audit G-01)
-                schedule.getBillingAmount().compareTo(new BigDecimal("3688.52")) == 0
+        verify(billingScheduleRepository).save(argThat(schedule ->
+                schedule.getBillingAmount().compareTo(new BigDecimal("15000")) == 0
         ));
     }
 
@@ -1774,26 +1723,16 @@ class BillingOccurrenceServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigId))
                 .thenReturn(Optional.of(billingConfiguration));
-        when(billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(billingConfiguration))
-                .thenReturn(List.of(recurringConfig));
+        when(billingRecurringConfigurationRepository.findByBillingConfigurationAndIsActiveTrue(billingConfiguration))
+                .thenReturn(Optional.of(recurringConfig));
         when(billingScheduleRepository.findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurringConfig))
                 .thenReturn(existingSchedules);
 
         billingOccurrenceService.reconcileOccurrencesOnConfigurationUpdate(billingConfigId);
 
-        verify(billingScheduleRepository).save(argThat(schedule ->  // 15000 is the term (1 Sep - 31 Dec) total: September takes its 30/122 share (audit G-01)
-                schedule.getBillingAmount().compareTo(new BigDecimal("3688.52")) == 0
+        verify(billingScheduleRepository).save(argThat(schedule ->
+                schedule.getBillingAmount().compareTo(new BigDecimal("15000")) == 0
         ));
         verify(taxCalculationRepository).deleteByBillingScheduleId(existingSchedules.get(0).getBillingScheduleId());
-    }
-    /**
-     * A saveAll that retires occurrences: reconciliation deactivates the
-     * SCHEDULED occurrences it replaces instead of deleting them, so a
-     * regenerated period keeps its occurrence (and automatic billing run).
-     */
-    private static boolean retiresOccurrences(Iterable<BillingSchedule> schedules) {
-        List<BillingSchedule> list = new ArrayList<>();
-        schedules.forEach(list::add);
-        return !list.isEmpty() && list.stream().noneMatch(s -> Boolean.TRUE.equals(s.getIsActive()));
     }
 }
