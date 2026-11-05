@@ -26,7 +26,7 @@ public interface BillingTMRateCardRepository extends JpaRepository<BillingTMRate
            "AND r.isActive = true " +
            "AND (r.effectiveFrom IS NULL OR r.effectiveFrom <= :workDate) " +
            "AND (r.effectiveTo IS NULL OR r.effectiveTo >= :workDate) " +
-           "ORDER BY r.createdAt DESC")
+           "ORDER BY r.effectiveFrom DESC NULLS LAST, r.createdAt DESC, r.rateCardId ASC")
     List<BillingTMRateCard> findActiveRatesByConfigurationAndDate(
             @Param("billingConfigurationId") UUID billingConfigurationId,
             @Param("workDate") LocalDate workDate);

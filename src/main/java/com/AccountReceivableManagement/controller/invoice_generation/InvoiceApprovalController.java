@@ -7,9 +7,16 @@ import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalWor
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceNonFinancialCorrectionRequestDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceRejectionRequestDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
+import com.AccountReceivableManagement.entity.invoice_generation.InvoiceDocument;
+import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceFinancialCorrectionService;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
+import io.micrometer.core.instrument.Metrics;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -27,6 +34,7 @@ import java.util.UUID;
  * the existing Billing Approval endpoints - no Finance-Manager-specific
  * restriction exists yet, and none is added here.
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/invoices")
 @RequiredArgsConstructor
@@ -59,6 +67,13 @@ public class InvoiceApprovalController {
         );
     }
 
+    /**
+     * Approves the invoice, then - once the approval has committed -
+     * finalizes its document. A document failure never undoes the approval:
+     * the invoice stays APPROVED ({@code documentAvailable = false}) and the
+     * document can be generated again with {@code POST /{invoiceId}/document}.
+     * Nothing is sent to the client.
+     */
     @PostMapping("/{invoiceId}/approve")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -66,18 +81,72 @@ public class InvoiceApprovalController {
             @PathVariable UUID invoiceId
     ) {
 
+        InvoiceResponseDto approved = invoiceService.approveInvoice(invoiceId);
+
+        InvoiceResponseDto result;
+        String message;
+        try {
+            result = invoiceService.finalizeInvoiceDocument(invoiceId);
+            message = "Invoice approved successfully. Its document has been generated and it is ready to send.";
+        } catch (GlobalExceptionHandler.ValidationException ex) {
+            Metrics.counter("ar.invoice.document.failures", "reason", "validation").increment();
+            log.warn("Invoice {} approved, but its document could not be generated: {}", invoiceId, ex.getMessage());
+            result = approved;
+            message = "Invoice approved successfully, but its document could not be generated: " + ex.getMessage()
+                    + " Generate the document again before sending the invoice.";
+        } catch (RuntimeException ex) {
+            Metrics.counter("ar.invoice.document.failures", "reason", "error").increment();
+            log.error("Invoice {} approved, but its document could not be generated.", invoiceId, ex);
+            result = approved;
+            message = "Invoice approved successfully, but its document could not be generated. "
+                    + "Generate the document again before sending the invoice.";
+        }
+
         return ResponseEntity.ok(
                 ApiResponse
                         .<InvoiceResponseDto>builder()
                         .success(true)
-                        .message("Invoice approved successfully.")
-                        .data(
-                                invoiceService.approveInvoice(
-                                        invoiceId
-                                )
-                        )
+                        .message(message)
+                        .data(result)
                         .build()
         );
+    }
+
+    /**
+     * Generates (or returns the already generated) document of an approved
+     * invoice: APPROVED -> READY_TO_SEND. Used when generation failed at
+     * approval, or for an invoice approved before documents were finalized.
+     */
+    @PostMapping("/{invoiceId}/document")
+    public ResponseEntity<
+            ApiResponse<InvoiceResponseDto>
+            > generateDocument(
+            @PathVariable UUID invoiceId
+    ) {
+
+        return ResponseEntity.ok(
+                ApiResponse
+                        .<InvoiceResponseDto>builder()
+                        .success(true)
+                        .message("Invoice document generated; the invoice is ready to send.")
+                        .data(invoiceService.finalizeInvoiceDocument(invoiceId))
+                        .build()
+        );
+    }
+
+    /** The finalized invoice PDF, exactly as it will be sent. */
+    @GetMapping("/{invoiceId}/document")
+    public ResponseEntity<byte[]> downloadDocument(
+            @PathVariable UUID invoiceId
+    ) {
+
+        InvoiceDocument document = invoiceService.getInvoiceDocument(invoiceId);
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(document.getFileName()).build().toString())
+                .body(document.getContent());
     }
 
     @PostMapping("/{invoiceId}/reject")

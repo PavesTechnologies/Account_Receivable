@@ -32,6 +32,17 @@ public class TaxConfigurationRequestDto {
     @Size(max = 50)
     private String taxRegime;
 
+    /**
+     * A tax configuration needs its regime: by id (preferred) or, for
+     * backward compatibility, by its string. Neither - e.g. a blank string -
+     * would save a configuration without a regime.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @AssertTrue(message = "Tax regime is required.")
+    public boolean isTaxRegimeProvided() {
+        return taxRegimeId != null || (taxRegime != null && !taxRegime.isBlank());
+    }
+
     @NotNull(message = "Effective From date is required.")
     private LocalDate effectiveFrom;
 

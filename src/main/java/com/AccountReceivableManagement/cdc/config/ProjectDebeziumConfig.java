@@ -37,11 +37,10 @@ public class ProjectDebeziumConfig {
         // Validate required properties
         validateProjectCdcProperties();
 
+        // Hosts, ports, JDBC URLs and usernames are not logged (G-31).
         log.info("Connector Name              : {}", projectCdcProperties.getConnectorName());
         log.info("Connector Class             : {}", projectCdcProperties.getConnectorClass());
 
-        log.info("PMS Host                    : {}", projectCdcProperties.getHostname());
-        log.info("PMS Port                    : {}", projectCdcProperties.getPort());
         log.info("PMS Database                : {}", projectCdcProperties.getDatabaseName());
 
         log.info("Topic Prefix                : {}", projectCdcProperties.getTopicPrefix());

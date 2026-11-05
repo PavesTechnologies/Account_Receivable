@@ -57,6 +57,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final BillingOccurrenceServiceImpl billingOccurrenceService;
     private final ProjectEligibilityRepository projectEligibilityRepository;
     private final BillingPeriodCalculatorService billingPeriodCalculatorService;
+
+    private final com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
     private final BillingMilestonePlanRepository billingMilestonePlanRepository;
     private final BillingPaymentEntryRepository billingPaymentEntryRepository;
     private final BillingMilestonePlanService billingMilestonePlanService;
@@ -64,6 +66,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     private final RecordActionLockService recordActionLockService;
     private final com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationSnapshotRepository snapshotRepository;
     private final com.AccountReceivableManagement.repo.billing_data_acquisition.BillingAcquisitionRepository billingAcquisitionRepository;
+    private final com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
 
     // =========================================================
     // CREATE BILLING CONFIGURATION
@@ -327,6 +330,9 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     @Transactional
     public BillingConfigurationResponseDto approve(UUID id) {
 
+        com.AccountReceivableManagement.security.Actor approver = financialActionAuthorizer.requirePermission(
+                com.AccountReceivableManagement.security.FinancialAction.BILLING_CONFIGURATION_APPROVAL);
+
         BillingConfiguration configuration =
                 billingConfigurationRepository.findById(id)
                         .orElseThrow(() ->
@@ -337,10 +343,8 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // VALIDATE APPROVAL LOCK
         // =========================================================
 
-        recordActionLockService.validateLockOwner(
-                LockResourceType.BILLING_CONFIGURATION,
-                id
-        );
+        recordActionLockService.validateLockOwner(LockResourceType.BILLING_CONFIGURATION, id,
+                com.AccountReceivableManagement.entity_enums.common.LockActionType.APPROVAL);
 
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.PENDING_APPROVAL) {
@@ -350,6 +354,10 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         }
 
         validateEffectiveDates(configuration);
+
+        // Maker-checker: whoever submitted it for approval cannot approve it.
+        financialActionAuthorizer.requireDifferentFromMaker(
+                configuration.getSubmittedByUserId(), approver, "billing configuration");
 
         validateTimeAndMaterialRateCards(configuration);
 
@@ -365,11 +373,21 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
          */
         closePendingSnapshots(configuration);
 
+        requireNoOtherLiveConfigurationForProject(configuration);
+
         /*
          * Approval is successful.
          */
         configuration.setApprovalStatus(
                 ApprovalStatus.APPROVED);
+        recordApprovalDecision(configuration, approver);
+
+        /*
+         * The approved edit is now the approved state: its pre-edit snapshot
+         * must never be restored by a later rejection.
+         */
+        snapshotRepository.findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
+                .forEach(changeTrackingService::markSnapshotAsRestored);
 
         /*
          * A newly approved configuration must not inherit
@@ -470,6 +488,52 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
     }
 
     /**
+     * A project has at most one live billing configuration on any date: the
+     * project is read as "the" APPROVED + ACTIVE configuration
+     * ({@link #getApprovedByProjectId}, T&amp;M snapshot resolution), and two
+     * of them would both be billed. Live means APPROVED, not manually
+     * deactivated and not EXPIRED - an approved configuration that is not yet
+     * effective counts, because the status scheduler activates it on its
+     * effective date. Only one whose effective period overlaps this one
+     * conflicts, so a replacement can follow a deactivated, expired or ending
+     * configuration. Configurations without a project are not checked.
+     * <p>
+     * The project's configurations are read with a row lock, so concurrent
+     * approvals on the same project are serialized and see each other.
+     */
+    private void requireNoOtherLiveConfigurationForProject(BillingConfiguration configuration) {
+        if (configuration.getProject() == null || configuration.getProject().getPmsProjectId() == null) {
+            return;
+        }
+        Long projectId = configuration.getProject().getPmsProjectId();
+        for (BillingConfiguration other : billingConfigurationRepository.findByProjectIdForUpdate(projectId)) {
+            if (other.getBillingConfigurationId().equals(configuration.getBillingConfigurationId())
+                    || other.getApprovalStatus() != ApprovalStatus.APPROVED
+                    || Boolean.TRUE.equals(other.getManuallyDeactivated())
+                    || other.getBillingStatus() == BillingConfigurationStatus.EXPIRED
+                    || !effectivePeriodsOverlap(configuration, other)) {
+                continue;
+            }
+            throw new ValidationException(
+                    "Project " + projectId + " already has a live billing configuration ("
+                            + other.getBillingConfigurationId() + ", " + other.getBillingStatus()
+                            + ", effective " + other.getEffectiveFrom() + " to "
+                            + (other.getEffectiveTo() == null ? "open-ended" : other.getEffectiveTo())
+                            + ") whose effective period overlaps this one. Deactivate it, or end it before "
+                            + "this configuration starts, before approving this configuration.");
+        }
+    }
+
+    /** Inclusive date ranges; a missing start or end is unbounded. */
+    private static boolean effectivePeriodsOverlap(BillingConfiguration a, BillingConfiguration b) {
+        boolean aStartsAfterBEnds = a.getEffectiveFrom() != null && b.getEffectiveTo() != null
+                && a.getEffectiveFrom().isAfter(b.getEffectiveTo());
+        boolean bStartsAfterAEnds = b.getEffectiveFrom() != null && a.getEffectiveTo() != null
+                && b.getEffectiveFrom().isAfter(a.getEffectiveTo());
+        return !aStartsAfterBEnds && !bStartsAfterAEnds;
+    }
+
+    /**
      * Approval gate for Time &amp; Material rate data, so an inconsistent configuration is refused here with a
      * clear message instead of failing later, during snapshot creation.
      *
@@ -539,16 +603,17 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             UUID id,
             BillingConfigurationRejectRequestDto request) {
 
+        com.AccountReceivableManagement.security.Actor approver = financialActionAuthorizer.requirePermission(
+                com.AccountReceivableManagement.security.FinancialAction.BILLING_CONFIGURATION_APPROVAL);
+
         BillingConfiguration configuration =
                 billingConfigurationRepository.findById(id)
                         .orElseThrow(() ->
                                 new ResourceNotFoundException(
                                         "Billing Configuration not found."));
 
-        recordActionLockService.validateLockOwner(
-                LockResourceType.BILLING_CONFIGURATION,
-                id
-        );
+        recordActionLockService.validateLockOwner(LockResourceType.BILLING_CONFIGURATION, id,
+                com.AccountReceivableManagement.entity_enums.common.LockActionType.APPROVAL);
 
         if (configuration.getApprovalStatus()
                 != ApprovalStatus.PENDING_APPROVAL) {
@@ -561,6 +626,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // RESTORE PREVIOUS APPROVED STATE IF SNAPSHOT EXISTS
         // =========================================================
         snapshotRepository.findFirstByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
+        /*
+         * Only a snapshot taken by the edit now being rejected - i.e. after
+         * the last approval decision - describes the state to restore. An
+         * older open snapshot belongs to an edit that was already approved
+         * (snapshots created before approvals closed them are still open in
+         * existing data) and restoring it would silently undo that approved
+         * edit.
+         */
+        LocalDateTime lastDecision = configuration.getApprovalDecidedAt();
+        snapshotRepository.findByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
+                .stream()
+                .findFirst()
+                .filter(snapshot -> lastDecision == null || snapshot.getCreatedAt().isAfter(lastDecision))
                 .ifPresent(snapshot -> {
                     log.info("Restoring configuration {} from snapshot {}", id, snapshot.getSnapshotId());
                     changeTrackingService.restoreConfigurationFromSnapshot(configuration, snapshot);
@@ -568,6 +646,19 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         configuration.setApprovalStatus(
                 ApprovalStatus.REJECTED);
+        recordApprovalDecision(configuration, approver);
+
+        /*
+         * A renewal awaiting this approval is rejected with it: it stays
+         * inactive and is never activated by a later approval.
+         */
+        billingRecurringConfigurationRepository
+                .findByBillingConfigurationAndRenewalApprovalStatus(configuration, ApprovalStatus.PENDING_APPROVAL)
+                .forEach(renewal -> {
+                    renewal.setRenewalApprovalStatus(ApprovalStatus.REJECTED);
+                    renewal.setUpdatedAt(LocalDateTime.now());
+                    billingRecurringConfigurationRepository.save(renewal);
+                });
 
         configuration.setBillingStatus(
                 BillingConfigurationStatus.INACTIVE);
@@ -883,8 +974,13 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
     private RecurringBillingResponseDto getRecurringDetails(BillingConfiguration configuration) {
         try {
+            // The current term: the latest active one (an approved renewal follows its original).
             return billingRecurringConfigurationRepository
-                    .findByBillingConfigurationAndIsActiveTrue(configuration)
+                    .findAllByBillingConfigurationAndIsActiveTrue(configuration).stream()
+                    .max(java.util.Comparator.comparing(
+                            (com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration term)
+                                    -> term.getRecurringStartDate() != null ? term.getRecurringStartDate()
+                                    : java.time.LocalDate.MIN))
                     .map(this::mapRecurringToResponse)
                     .orElse(null);
         } catch (Exception e) {
@@ -958,8 +1054,6 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
                 .effectiveFrom(rateCard.getEffectiveFrom())
                 .effectiveTo(rateCard.getEffectiveTo())
                 .remarks(rateCard.getRemarks())
-                .includeBaseRateInInvoice(com.AccountReceivableManagement.util.TmRateCalculator
-                        .isIncluded(rateCard.getIncludeBaseRateInInvoice()))
                 .createdAt(rateCard.getCreatedAt())
                 .updatedAt(rateCard.getUpdatedAt())
                 .build();
@@ -2208,10 +2302,6 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
 
         validateEffectiveDates(configuration);
 
-        // A REJECTED configuration returns to DRAFT on edit; it must not slip back into approval holding a milestone
-        // another plan has claimed since.
-        revalidateMilestoneClaims(configuration);
-
         configuration.setApprovalStatus(
                 ApprovalStatus.PENDING_APPROVAL);
 
@@ -2249,6 +2339,14 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
             throw new ValidationException(
                     "Effective To date cannot be before Effective From date.");
         }
+    }
+
+    /** The checker of the last approval decision, from the authenticated identity. */
+    private static void recordApprovalDecision(BillingConfiguration configuration,
+            com.AccountReceivableManagement.security.Actor approver) {
+        configuration.setApprovalDecidedByUserId(approver.userId());
+        configuration.setApprovalDecidedBy(approver.label());
+        configuration.setApprovalDecidedAt(LocalDateTime.now());
     }
 
     private void validateEffectiveDates(

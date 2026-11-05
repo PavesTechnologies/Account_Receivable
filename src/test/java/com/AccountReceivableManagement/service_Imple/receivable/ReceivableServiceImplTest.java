@@ -3,6 +3,8 @@ package com.AccountReceivableManagement.service_Imple.receivable;
 import com.AccountReceivableManagement.dto.receivable.ReceivableResponseDto;
 import com.AccountReceivableManagement.entity.invoice_generation.Invoice;
 import com.AccountReceivableManagement.entity.receivable.Receivable;
+import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus;
+import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceStatus;
 import com.AccountReceivableManagement.entity_enums.receivable.ReceivableStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.invoice_generation.InvoiceDeliveryRepository;
@@ -23,6 +25,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -74,6 +78,73 @@ class ReceivableServiceImplTest {
                 .outstandingBalance(new BigDecimal(balance))
                 .status(status)
                 .build();
+    }
+
+    private Invoice dispatchableInvoice(InvoiceStatus status) {
+        return Invoice.builder()
+                .invoiceId(UUID.randomUUID())
+                .invoiceNumber("INV-2001")
+                .status(status)
+                .clientId(UUID.randomUUID())
+                .clientName("Acme")
+                .projectId(42L)
+                .projectName("Store Modernisation")
+                .currencyCode("INR")
+                .invoiceDate(today)
+                .dueDate(today.plusDays(30))
+                .grandTotal(new BigDecimal("25960.00"))
+                .build();
+    }
+
+    @Test
+    void readyToSendInvoice_getsItsReceivableOnlyOnceItHasBeenSent() {
+        Invoice invoice = dispatchableInvoice(InvoiceStatus.READY_TO_SEND);
+        when(invoiceRepository.findByIdForUpdate(invoice.getInvoiceId())).thenReturn(Optional.of(invoice));
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(invoice.getInvoiceId(), InvoiceDeliveryStatus.SENT))
+                .thenReturn(false);
+
+        // READY_TO_SEND is not sent: no receivable yet.
+        assertThatThrownBy(() -> receivableService.createReceivableFromInvoice(invoice.getInvoiceId()))
+                .hasMessageContaining("has not been sent to the client");
+        verify(receivableRepository, never()).saveAndFlush(any());
+
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(invoice.getInvoiceId(), InvoiceDeliveryStatus.SENT))
+                .thenReturn(true);
+        when(receivableRepository.findByInvoiceId(invoice.getInvoiceId())).thenReturn(Optional.empty());
+        when(receivableRepository.saveAndFlush(any(Receivable.class))).thenAnswer(i -> i.getArgument(0));
+
+        receivableService.createReceivableFromInvoice(invoice.getInvoiceId());
+
+        verify(receivableRepository).saveAndFlush(any(Receivable.class));
+    }
+
+    @Test
+    void repeatedDelivery_reusesTheInvoicesSingleReceivable() {
+        Invoice invoice = dispatchableInvoice(InvoiceStatus.READY_TO_SEND);
+        when(invoiceRepository.findByIdForUpdate(invoice.getInvoiceId())).thenReturn(Optional.of(invoice));
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(invoice.getInvoiceId(), InvoiceDeliveryStatus.SENT))
+                .thenReturn(true);
+        when(receivableRepository.findByInvoiceId(invoice.getInvoiceId())).thenReturn(Optional.of(
+                receivable(today, today.plusDays(30), "25960.00", ReceivableStatus.OUTSTANDING)));
+
+        receivableService.createReceivableFromInvoice(invoice.getInvoiceId());
+        receivableService.createReceivableFromInvoice(invoice.getInvoiceId());
+
+        verify(receivableRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void invoiceSentWhileApproved_beforeDocumentFinalization_canStillGetItsReceivable() {
+        Invoice invoice = dispatchableInvoice(InvoiceStatus.APPROVED);
+        when(invoiceRepository.findByIdForUpdate(invoice.getInvoiceId())).thenReturn(Optional.of(invoice));
+        when(invoiceDeliveryRepository.existsByInvoiceIdAndStatus(invoice.getInvoiceId(), InvoiceDeliveryStatus.SENT))
+                .thenReturn(true);
+        when(receivableRepository.findByInvoiceId(invoice.getInvoiceId())).thenReturn(Optional.empty());
+        when(receivableRepository.saveAndFlush(any(Receivable.class))).thenAnswer(i -> i.getArgument(0));
+
+        receivableService.createReceivableFromInvoice(invoice.getInvoiceId());
+
+        verify(receivableRepository).saveAndFlush(any(Receivable.class));
     }
 
     @Test

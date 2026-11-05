@@ -17,6 +17,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+
 import java.util.List;
 
 /**
@@ -33,6 +35,16 @@ public class BillingOccurrenceTransactionServiceImpl implements BillingOccurrenc
     private final BillingPaymentEntryRepository billingPaymentEntryRepository;
     private final ProjectMilestoneReferenceRepository projectMilestoneReferenceRepository;
 
+    /**
+     * The passed occurrence was read outside this transaction and may be
+     * stale - changed, deactivated or deleted (configuration reconciliation)
+     * since, or already transitioned by an overlapping run. It is therefore
+     * only used for its id: the current row is re-read under a row lock and
+     * transitioned only if it is still active, SCHEDULED, tax PENDING and
+     * due. Saving the stale copy would overwrite concurrent changes or
+     * resurrect a deleted occurrence; a repeated or concurrent run now
+     * finds the row already TAX_PENDING and changes nothing.
+     */
     /**
      * SCHEDULED -> TAX_PENDING is where billing begins: from TAX_PENDING on, a milestone entry is frozen (see
      * BillingMilestonePlanServiceImpl.IN_BILLING_STATUSES), so this is the last point at which the occurrence can still be

@@ -264,4 +264,97 @@ class BillingAcquisitionServiceImplTest {
         assertThat(response.getId()).isEqualTo(existing.getId());
         verify(billingAcquisitionRepository, never()).saveAndFlush(any());
     }
+
+    // =========================================================
+    // Final billing period vs. configuration expiry
+    // =========================================================
+
+    /** Configuration billing range 01-Sep-2026 .. 30-Sep-2026 = the test period exactly. */
+    private void expiredAfterFinalPeriod() {
+        configuration.setBillingStatus(BillingConfigurationStatus.EXPIRED);
+        configuration.setEffectiveFrom(PERIOD_START);
+        configuration.setEffectiveTo(PERIOD_END);
+    }
+
+    @Test
+    void createManualAcquisition_expiredConfiguration_finalPeriodInsideRange_isAcquired() {
+        expiredAfterFinalPeriod();
+        when(billingConfigurationRepository.findById(billingConfigurationId)).thenReturn(Optional.of(configuration));
+        stubFindAcquisition(Optional.empty(), Optional.empty());
+        when(billingAcquisitionRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        UUID snapshotId = UUID.randomUUID();
+
+        AcquireDataResponseDto response = service.createManualAcquisition(
+                billingConfigurationId, PERIOD_START, PERIOD_END, snapshotId, "READY");
+
+        assertThat(response.getSnapshotId()).isEqualTo(snapshotId);
+        assertThat(response.getStatus()).isEqualTo("READY");
+    }
+
+    @Test
+    void createManualAcquisition_expiredConfiguration_periodEndingAfterRange_isRejected() {
+        expiredAfterFinalPeriod();
+        configuration.setEffectiveTo(LocalDate.of(2026, 9, 15));
+        when(billingConfigurationRepository.findById(billingConfigurationId)).thenReturn(Optional.of(configuration));
+
+        assertThatThrownBy(() -> service.createManualAcquisition(
+                billingConfigurationId, PERIOD_START, PERIOD_END, UUID.randomUUID(), "READY"))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Billing Configuration has expired for project ID: 101. Only billing periods "
+                        + "within its billing range (ending 2026-09-15) can still be acquired.");
+        verify(billingAcquisitionRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createManualAcquisition_expiredByProjectEnd_periodAfterProjectEnd_isRejected() {
+        expiredAfterFinalPeriod();
+        configuration.setEffectiveTo(null);
+        configuration.setProject(ProjectMasterReference.builder()
+                .pmsProjectId(PROJECT_ID).endDate(LocalDate.of(2026, 9, 20)).build());
+        when(billingConfigurationRepository.findById(billingConfigurationId)).thenReturn(Optional.of(configuration));
+
+        assertThatThrownBy(() -> service.createManualAcquisition(
+                billingConfigurationId, PERIOD_START, PERIOD_END, UUID.randomUUID(), "READY"))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("(ending 2026-09-20)");
+        verify(billingAcquisitionRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createManualAcquisition_expiredConfiguration_periodStartingBeforeRange_isRejected() {
+        expiredAfterFinalPeriod();
+        configuration.setEffectiveFrom(LocalDate.of(2026, 9, 10));
+        when(billingConfigurationRepository.findById(billingConfigurationId)).thenReturn(Optional.of(configuration));
+
+        assertThatThrownBy(() -> service.createManualAcquisition(
+                billingConfigurationId, PERIOD_START, PERIOD_END, UUID.randomUUID(), "READY"))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageStartingWith("Billing Configuration has expired");
+    }
+
+    @Test
+    void createManualAcquisition_expiredButManuallyDeactivated_isRejectedAsNotActive() {
+        expiredAfterFinalPeriod();
+        configuration.setManuallyDeactivated(true);
+        when(billingConfigurationRepository.findById(billingConfigurationId)).thenReturn(Optional.of(configuration));
+
+        assertThatThrownBy(() -> service.createManualAcquisition(
+                billingConfigurationId, PERIOD_START, PERIOD_END, UUID.randomUUID(), "READY"))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Billing Configuration is not active for project ID: 101");
+    }
+
+    @Test
+    void createManualAcquisition_inactiveConfiguration_isStillRejected() {
+        configuration.setBillingStatus(BillingConfigurationStatus.INACTIVE);
+        configuration.setEffectiveFrom(PERIOD_START);
+        configuration.setEffectiveTo(PERIOD_END);
+        when(billingConfigurationRepository.findById(billingConfigurationId)).thenReturn(Optional.of(configuration));
+
+        assertThatThrownBy(() -> service.createManualAcquisition(
+                billingConfigurationId, PERIOD_START, PERIOD_END, UUID.randomUUID(), "READY"))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessage("Billing Configuration is not active for project ID: 101");
+        verify(billingAcquisitionRepository, never()).saveAndFlush(any());
+    }
 }

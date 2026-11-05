@@ -65,6 +65,12 @@ import static org.mockito.Mockito.*;
 class InvoiceServiceImplTest {
 
     @Mock
+    private com.AccountReceivableManagement.security.FinancialActionAuthorizer financialActionAuthorizer;
+
+    @Mock
+    private com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl billingOccurrenceService;
+
+    @Mock
     private InvoiceRepository invoiceRepository;
 
     @Mock
@@ -100,6 +106,15 @@ class InvoiceServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(financialActionAuthorizer.requirePermission(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+        org.mockito.Mockito.lenient().when(financialActionAuthorizer.currentActor())
+                .thenReturn(new com.AccountReceivableManagement.security.Actor(2L, "approver@example.com"));
+        org.mockito.Mockito.lenient().doNothing().when(recordActionLockService).validateLockOwner(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.lenient().doNothing().when(recordActionLockService).validateLockOwner(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+
         snapshotId = UUID.randomUUID();
         clientId = UUID.randomUUID();
         paymentTermId = UUID.randomUUID();
@@ -1416,6 +1431,32 @@ class InvoiceServiceImplTest {
         verifyNoInteractions(taxCalculationRepository);
     }
 
+    // PREVIEW IDENTITY — the preview names the configuration recorded on its snapshot, not one of the project.
+    @Test
+    void previewInvoice_preGeneration_exposesTheSnapshotsBillingConfigurationId() {
+        InvoiceResponseDto preview = stubAndPreview();
+
+        BillingSnapshot snapshot = billingSnapshotRepository.findById(snapshotId).orElseThrow();
+        assertThat(preview.getBillingConfigurationId())
+                .isNotNull()
+                .isEqualTo(snapshot.getBillingConfigurationId());
+    }
+
+    @Test
+    void previewInvoice_existingInvoice_exposesTheSnapshotsBillingConfigurationId() {
+        BillingSnapshot snapshot = taxCompletedSnapshot();
+        Invoice invoice = persistedInvoice(
+                "INV-20260908170000", "BS-20260908164549", snapshotId,
+                "Account Management", "Website Redesign");
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(invoiceRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(invoice));
+
+        InvoiceResponseDto response = invoiceService.previewInvoice(snapshotId);
+
+        assertThat(response.getBillingConfigurationId()).isEqualTo(snapshot.getBillingConfigurationId());
+        verify(billingSnapshotRepository, never()).save(any());
+    }
+
     // PREVIEW — a snapshot that has not completed tax calculation has no preview.
     @Test
     void previewInvoice_snapshotNotTaxCompleted_isRejected() {
@@ -1556,6 +1597,42 @@ class InvoiceServiceImplTest {
         assertThat(summary.getInvoicedCount()).isEqualTo(4);
         // rejected invoice excluded from the invoiced amount
         assertThat(summary.getTotalInvoicedAmount()).isEqualByComparingTo("19470.00");
+    }
+
+    // G-11: a READY_TO_SEND invoice (the normal result of approval) loads in the
+    // workspace instead of failing the whole response, and is counted as such.
+    @Test
+    void getInvoiceGenerationWorkspace_readyToSendInvoice_loadsAndIsCounted() {
+        Invoice approved = persistedInvoice("INV-1", "BS-1", UUID.randomUUID(), "A", "P1");
+        approved.setStatus(InvoiceStatus.APPROVED);
+        Invoice readyToSend = persistedInvoice("INV-2", "BS-2", UUID.randomUUID(), "A", "P2");
+        readyToSend.setStatus(InvoiceStatus.READY_TO_SEND);
+
+        when(invoiceRepository.findAllByOrderByGeneratedAtDesc()).thenReturn(List.of(approved, readyToSend));
+        when(billingSnapshotRepository.findAllById(any())).thenReturn(List.of());
+        when(billingSnapshotRepository.findAllByStatusOrderByCreatedDateDesc(BillingSnapshotStatus.TAX_COMPLETED))
+                .thenReturn(List.of());
+
+        var response = invoiceService.getInvoiceGenerationWorkspace();
+
+        assertThat(response.getRows()).extracting(r -> r.getWorkspaceStatus().name())
+                .containsExactly("APPROVED", "READY_TO_SEND");
+        assertThat(response.getRows().get(1).getInvoiceStatus()).isEqualTo(InvoiceStatus.READY_TO_SEND);
+        assertThat(response.getSummary().getApprovedCount()).isEqualTo(1);
+        assertThat(response.getSummary().getReadyToSendCount()).isEqualTo(1);
+        assertThat(response.getSummary().getInvoicedCount()).isEqualTo(2);
+    }
+
+    // G-11: every persisted invoice status has its own workspace status - none is
+    // folded into another (READY_TO_SEND is not APPROVED, and not "sent").
+    @Test
+    void invoiceWorkspaceStatus_mapsEveryInvoiceStatusToItsOwnValue() {
+        for (InvoiceStatus status : InvoiceStatus.values()) {
+            assertThat(com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus.of(status)
+                    .name()).isEqualTo(status.name());
+        }
+        assertThatThrownBy(() -> com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceWorkspaceStatus
+                .of(null)).isInstanceOf(IllegalStateException.class);
     }
 
     // WORKSPACE — strictly read-only: nothing is saved and no snapshot status changes.
@@ -1740,7 +1817,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.GENERATED);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
         assertThat(history.getActionAt()).isNotNull();
     }
 
@@ -1836,7 +1913,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.SUBMITTED);
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
     }
 
     // REJECT CASE 1 — PENDING_APPROVAL invoice rejects successfully and records history.
@@ -1879,7 +1956,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.REJECTED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
         assertThat(history.getActionAt()).isNotNull();
         assertThat(history.getComment())
                 .isEqualTo("Billing hours are incorrect for the selected period.");
@@ -2086,7 +2163,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.PENDING_APPROVAL);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.APPROVED);
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.APPROVED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
     }
 
     // APPROVE CASE 2 — Invoice not found.
@@ -2494,6 +2571,8 @@ class InvoiceServiceImplTest {
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
         when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -2546,7 +2625,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.CORRECTED);
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
         assertThat(history.getComment()).isEqualTo("Invoice refreshed from corrected billing/tax data.");
     }
 
@@ -2727,6 +2806,8 @@ class InvoiceServiceImplTest {
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
         when(invoiceRepository.save(any(Invoice.class)))
                 .thenThrow(new RuntimeException("unexpected database error"));
@@ -2892,6 +2973,8 @@ class InvoiceServiceImplTest {
 
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
 
         // Cycle 1.
@@ -3199,7 +3282,7 @@ class InvoiceServiceImplTest {
         assertThat(history.getAction()).isEqualTo(InvoiceApprovalAction.CORRECTED);
         assertThat(history.getPreviousStatus()).isEqualTo(InvoiceStatus.REJECTED);
         assertThat(history.getNewStatus()).isEqualTo(InvoiceStatus.REJECTED);
-        assertThat(history.getActionBy()).isEqualTo("SYSTEM");
+        assertThat(history.getActionBy()).isEqualTo("approver@example.com");
         assertThat(history.getComment()).isEqualTo("Non-financial invoice correction completed.");
     }
 
@@ -3672,6 +3755,8 @@ class InvoiceServiceImplTest {
         when(invoiceRepository.findById(invoiceId)).thenReturn(Optional.of(invoice));
         when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
         when(taxCalculationRepository.findByBillingSnapshotId(snapshotId)).thenReturn(Optional.of(taxCalculation));
+        when(billingConfigurationService.getBillingConfiguration(snapshot.getBillingConfigurationId()))
+                .thenReturn(configuration());
         when(paymentTermsMasterRepository.findById(paymentTermId)).thenReturn(Optional.of(paymentTerms()));
         when(invoiceRepository.save(any(Invoice.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -3714,5 +3799,73 @@ class InvoiceServiceImplTest {
         assertThat(response.getTaxRegionCode()).isEqualTo("IN");
         assertThat(response.getSourceTaxJurisdictionCode()).isNull();
         assertThat(response.getDestinationTaxJurisdictionCode()).isNull();
+    }
+    // ---------------------------------------------------------------- G-12: stored tax context
+
+    private void scheduleReadyForInvoice(BillingSchedule schedule, TaxCalculation taxCalculation,
+            BillingConfigurationResponseDto liveConfiguration) {
+        when(billingScheduleRepository.findByIdForUpdate(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(schedule));
+        when(taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId()))
+                .thenReturn(Optional.of(taxCalculation));
+        when(invoiceRepository.existsByBillingScheduleId(schedule.getBillingScheduleId())).thenReturn(false);
+        when(billingConfigurationService.getBillingConfiguration(any())).thenReturn(liveConfiguration);
+        lenient().when(invoiceRepository.save(any(Invoice.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(billingScheduleRepository.save(any(BillingSchedule.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    // The invoice is in the currency tax was calculated in.
+    @Test
+    void generateInvoiceForSchedule_usesTheCurrencyRecordedByItsTaxCalculation() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+        taxCalculation.setCurrencyCode("INR");
+        scheduleReadyForInvoice(schedule, taxCalculation, BillingConfigurationResponseDto.builder()
+                .clientId(clientId).projectId(23L)
+                .currencyCode("INR").taxRegionId(taxCalculation.getTaxRegionId()).taxRegionCode("IN")
+                .build());
+
+        InvoiceResponseDto response = invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId());
+
+        assertThat(response.getCurrencyCode()).isEqualTo("INR");
+        assertThat(response.getGrandTotal()).isEqualByComparingTo(taxCalculation.getGrandTotal());
+    }
+
+    // The configuration's currency changed after tax was calculated: no invoice
+    // pairs the frozen amounts with the new currency.
+    @Test
+    void generateInvoiceForSchedule_currencyChangedAfterTaxCalculation_isRefused() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+        taxCalculation.setCurrencyCode("INR");
+        scheduleReadyForInvoice(schedule, taxCalculation, BillingConfigurationResponseDto.builder()
+                .clientId(clientId).projectId(23L)
+                .currencyCode("USD").taxRegionId(taxCalculation.getTaxRegionId()).taxRegionCode("IN")
+                .build());
+
+        assertThatThrownBy(() -> invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId()))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("currency changed from INR to USD");
+        verify(invoiceRepository, never()).save(any(Invoice.class));
+    }
+
+    // The configuration's tax region changed after tax was calculated.
+    @Test
+    void generateInvoiceForSchedule_taxRegionChangedAfterTaxCalculation_isRefused() {
+        BillingSchedule schedule = taxCalculatedSchedule();
+        TaxCalculation taxCalculation = completedScheduleTaxCalculation(schedule.getBillingScheduleId());
+        if (taxCalculation.getTaxRegionId() == null) {
+            taxCalculation.setTaxRegionId(UUID.randomUUID());
+        }
+        scheduleReadyForInvoice(schedule, taxCalculation, BillingConfigurationResponseDto.builder()
+                .clientId(clientId).projectId(23L)
+                .currencyCode("INR").taxRegionId(UUID.randomUUID()).taxRegionCode("US")
+                .build());
+
+        assertThatThrownBy(() -> invoiceService.generateInvoiceForSchedule(schedule.getBillingScheduleId()))
+                .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
+                .hasMessageContaining("tax region changed");
+        verify(invoiceRepository, never()).save(any(Invoice.class));
     }
 }

@@ -26,9 +26,12 @@ public class InvoiceDeliveryController {
     private final InvoiceDeliveryService invoiceDeliveryService;
 
     /**
-     * Sends the invoice to its client. Always returns 200 with the delivery
-     * outcome in the body - {@code deliveryStatus} tells the caller whether
-     * it actually succeeded ({@code SENT}) or not ({@code FAILED}); a
+     * Sends the invoice to its client. Returns 200 with the delivery outcome
+     * in the body - {@code deliveryStatus} tells the caller whether it
+     * succeeded ({@code SENT}), failed ({@code FAILED}, may be sent again) or
+     * has an unknown outcome ({@code UNCERTAIN}, must be resolved by
+     * operations, never re-sent). An invoice already sent, or with a delivery
+     * in progress/uncertain, is refused (400) before anything is sent; a
      * precondition failure (invoice not approved, no recipient email, no
      * active company profile, invoice not found) is reported as an error
      * response instead, before any delivery record is created.
@@ -50,6 +53,9 @@ public class InvoiceDeliveryController {
                         .message(
                                 delivered
                                         ? "Invoice sent to client successfully."
+                                        : response.getDeliveryStatus() == InvoiceDeliveryStatus.UNCERTAIN
+                                        ? "Invoice delivery outcome is unknown - do not send again: "
+                                                + response.getFailureReason()
                                         : simulated
                                         ? "Invoice delivery SIMULATED (local-demo): no email was sent."
                                         : "Invoice delivery failed: " + response.getFailureReason()

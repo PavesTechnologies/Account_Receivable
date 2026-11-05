@@ -39,6 +39,16 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
     Optional<BillingSnapshot> findFirstByBillingConfigurationIdOrderByCreatedDateDesc(UUID billingConfigurationId);
 
     /**
+     * Every snapshot recorded against one Billing Configuration, latest
+     * billing period first, whatever the configuration's current state - the
+     * history of a deactivated or replaced configuration included. Items are
+     * fetched eagerly for the same reason as the by-period lookup.
+     */
+    @EntityGraph(attributePaths = "items")
+    java.util.List<BillingSnapshot> findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(
+            UUID billingConfigurationId);
+
+    /**
      * Backs the Invoice Generation workspace - snapshots in a given lifecycle
      * status, newest first.
      */
@@ -52,4 +62,24 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
      */
     Optional<BillingSnapshot> findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
             UUID billingConfigurationId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
+
+    /**
+     * Whether any snapshot of the project overlaps {@code periodStart}..
+     * {@code periodEnd} - i.e. the period's timesheets are already being, or
+     * have been, billed (manually or through another period).
+     */
+    boolean existsByProjectIdAndBillingPeriodStartLessThanEqualAndBillingPeriodEndGreaterThanEqual(
+            Long projectId, LocalDate periodEnd, LocalDate periodStart);
+
+    /**
+     * [billingPeriodStart, billingPeriodEnd] of every snapshot of the project
+     * ending on or after {@code from} - T&amp;M discovery checks overlaps in
+     * memory instead of one query per period (G-29).
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT s.billingPeriodStart, s.billingPeriodEnd FROM BillingSnapshot s "
+                    + "WHERE s.projectId = :projectId AND s.billingPeriodEnd >= :from")
+    java.util.List<Object[]> findPeriodsByProjectIdEndingOnOrAfter(
+            @org.springframework.data.repository.query.Param("projectId") Long projectId,
+            @org.springframework.data.repository.query.Param("from") LocalDate from);
 }

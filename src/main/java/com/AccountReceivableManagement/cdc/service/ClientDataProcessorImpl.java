@@ -66,11 +66,9 @@ public class ClientDataProcessorImpl implements ClientDataProcessor {
         updateClientFromMap(payload.getAfter(), client);
         
         // DEBUG: Log client entity values before save
-        log.debug("Client before save: clientId={}, countryCode={}, email={}, phoneNumber={}",
+        log.debug("Client before save: clientId={}, countryCode={}",
                 client.getClientId(),
-                client.getCountryCode(),
-                client.getEmail(),
-                client.getPhoneNumber());
+                client.getCountryCode());
         
         clientRepository.save(client);
         log.info("Created client: {}", client.getClientId());
@@ -88,11 +86,9 @@ public class ClientDataProcessorImpl implements ClientDataProcessor {
         updateClientFromMap(payload.getAfter(), existingClient);
         
         // DEBUG: Log client entity values before save
-        log.debug("Client before update save: clientId={}, countryCode={}, email={}, phoneNumber={}",
+        log.debug("Client before update save: clientId={}, countryCode={}",
                 existingClient.getClientId(),
-                existingClient.getCountryCode(),
-                existingClient.getEmail(),
-                existingClient.getPhoneNumber());
+                existingClient.getCountryCode());
         
         clientRepository.save(existingClient);
         log.info("Updated client: {}", clientId);

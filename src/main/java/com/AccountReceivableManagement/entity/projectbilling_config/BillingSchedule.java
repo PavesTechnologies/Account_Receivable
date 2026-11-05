@@ -8,6 +8,8 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.EnumSet;
+import java.util.Set;
 import java.util.UUID;
 
 @Entity
@@ -128,6 +130,33 @@ public class BillingSchedule {
             isInvoiced = false;
         }
     }
+
+    /**
+     * Whether this occurrence is due and still unbilled on {@code asOf}:
+     * active, not invoiced, billing date on or before {@code asOf} (so
+     * overdue occurrences missed while nothing ran are included), and in a
+     * lifecycle state that still leads to an invoice - SCHEDULED (due, not yet
+     * moved to TAX_PENDING), TAX_PENDING or TAX_CALCULATED. The billing date
+     * is when the occurrence becomes billable, not when it must be processed.
+     */
+    public boolean isDueForBilling(LocalDate asOf) {
+        return Boolean.TRUE.equals(isActive)
+                && !Boolean.TRUE.equals(isInvoiced)
+                && billingDate != null
+                && asOf != null
+                && !billingDate.isAfter(asOf)
+                && UNBILLED_STATUSES.contains(periodStatus);
+    }
+
+    /**
+     * Period statuses of an occurrence that still leads to an invoice - the
+     * status part of {@link #isDueForBilling(LocalDate)}, shared with the
+     * repository query that finds due occurrences.
+     */
+    public static final Set<BillingPeriodStatus> UNBILLED_STATUSES = EnumSet.of(
+            BillingPeriodStatus.SCHEDULED,
+            BillingPeriodStatus.TAX_PENDING,
+            BillingPeriodStatus.TAX_CALCULATED);
 
     @PreUpdate
     public void preUpdate() {

@@ -24,7 +24,13 @@ spec:
       serviceAccountName: paves-service-account
       containers:
         - name: ar
-          image: 743737183908.dkr.ecr.ap-south-1.amazonaws.com/paves/ar-dev:latest
+          # E1: an immutable reference - the image tag is the reviewed commit's full
+          # git SHA (or pin @sha256:<digest>). Never ':latest': it is mutable, so the
+          # running build could not be tied to a reviewed commit, and with
+          # IfNotPresent a node keeps whatever ':latest' it pulled first. The
+          # pipeline (paves-shared-lib deployToDev/deployToProd) must push and set
+          # this tag; ArgoCD deploys intranet-devops k8s/backend/ar - mirror it there.
+          image: 743737183908.dkr.ecr.ap-south-1.amazonaws.com/paves/ar-dev:REPLACE_WITH_RELEASE_COMMIT_SHA
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -41,16 +47,21 @@ spec:
             limits:
               cpu: "1000m"
               memory: "1Gi"
+          # Actuator probe groups (unauthenticated, status only). Liveness covers the
+          # application itself; readiness adds the AR database. TMS/UMS/SMTP
+          # outages deliberately affect neither. The previous path /paves/ar/health
+          # requires a JWT (401) and would fail both probes.
+          # NOTE: ArgoCD deploys from intranet-devops k8s/backend/ar - mirror this there.
           livenessProbe:
             httpGet:
-              path: /paves/ar/health
+              path: /paves/ar/actuator/health/liveness
               port: 8080
             initialDelaySeconds: 90
             periodSeconds: 30
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /paves/ar/health
+              path: /paves/ar/actuator/health/readiness
               port: 8080
             initialDelaySeconds: 60
             periodSeconds: 10

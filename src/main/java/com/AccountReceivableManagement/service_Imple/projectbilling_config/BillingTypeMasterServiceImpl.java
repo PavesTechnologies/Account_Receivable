@@ -52,16 +52,13 @@ public class BillingTypeMasterServiceImpl implements BillingTypeMasterService {
 
             throw new DuplicateResourceException("Billing Type already exists.");
         }
-        System.out.println("Before Update: " + billingType.getIsActive());
 
         billingType.setBillingTypeName(request.getBillingTypeName().trim());
         billingType.setDescription(request.getDescription());
 
-        System.out.println("Before Save: " + billingType.getIsActive());
 
         BillingTypeMaster updated = billingTypeRepository.save(billingType);
 
-        System.out.println("After Save: " + updated.getIsActive());
 
         return mapToResponse(updated);
     }

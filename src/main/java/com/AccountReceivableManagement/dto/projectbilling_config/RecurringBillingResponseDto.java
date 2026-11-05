@@ -60,4 +60,7 @@ public class RecurringBillingResponseDto {
     private LocalDateTime updatedAt;
 
     private UUID renewedFromId;
+
+    /** Approval state of a renewal term (null for a term that is not a renewal). */
+    private com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus renewalApprovalStatus;
 }

@@ -29,6 +29,14 @@ import java.util.UUID;
                         name = "uk_invoice_billing_schedule",
                         columnNames = {"billing_schedule_id"}
                 ),
+                // One invoice per Billing Snapshot. NULL (schedule-path
+                // invoices without a snapshot) is not compared by MySQL, so
+                // any number of those remain allowed. See
+                // db/migration/V6__invoice_billing_snapshot_unique.sql.
+                @UniqueConstraint(
+                        name = "uk_invoice_billing_snapshot",
+                        columnNames = {"billing_snapshot_id"}
+                ),
                 @UniqueConstraint(
                         name = "uk_invoice_number",
                         columnNames = {"invoice_number"}

@@ -25,8 +25,9 @@ public interface ReceivableService {
      * it never sends email, so repairing a receivable never re-sends the
      * invoice.
      * <p>
-     * System-driven only - invoked after invoice dispatch commits, never
-     * exposed as a user action. Joins the caller's transaction if one is
+     * System-driven: invoked once a SENT delivery is recorded, by the
+     * receivable reconciliation job, and by the authorized operator recovery
+     * ({@code ReceivableRecoveryService}) - never as an ordinary user action. Joins the caller's transaction if one is
      * active, otherwise runs in its own. The invoice row is locked
      * ({@code SELECT ... FOR UPDATE}) before the existing-receivable check;
      * a caller that already read data in the same transaction must have

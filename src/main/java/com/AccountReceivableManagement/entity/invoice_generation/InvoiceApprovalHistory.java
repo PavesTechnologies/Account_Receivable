@@ -74,4 +74,11 @@ public class InvoiceApprovalHistory {
      */
     @Column(name = "comment", length = 500)
     private String comment;
+
+    /**
+     * Stable UMS id of the user who acted ({@code actionBy} is the readable
+     * label); null when the system acted (automatic billing).
+     */
+    @Column(name = "action_by_user_id")
+    private Long actionByUserId;
 }

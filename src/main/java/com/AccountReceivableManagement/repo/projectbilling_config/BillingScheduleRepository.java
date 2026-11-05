@@ -27,6 +27,9 @@ public interface BillingScheduleRepository extends JpaRepository<BillingSchedule
     List<BillingSchedule> findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(
             BillingConfiguration billingConfiguration);
 
+    /** Every occurrence of the configuration, active or not. */
+    List<BillingSchedule> findByBillingConfiguration(BillingConfiguration billingConfiguration);
+
     /**
      * The configuration's active occurrences, each row locked (SELECT ... FOR UPDATE) until the surrounding transaction
      * ends, in ascending id order. A locking read returns the latest COMMITTED row, not the transaction's repeatable-read
@@ -102,6 +105,16 @@ public interface BillingScheduleRepository extends JpaRepository<BillingSchedule
             LocalDate billingDate,
             BillingPeriodStatus taxStatus);
 
+    /**
+     * Due occurrences still awaiting the SCHEDULED -> TAX_PENDING transition:
+     * billing date on or before {@code billingDate} - today's and any missed
+     * earlier ones alike - in the given period and tax status.
+     */
+    List<BillingSchedule> findByBillingDateLessThanEqualAndPeriodStatusAndTaxStatusAndIsActiveTrue(
+            LocalDate billingDate,
+            BillingPeriodStatus periodStatus,
+            BillingPeriodStatus taxStatus);
+
     List<BillingSchedule> findByBillingConfigurationAndPeriodStatusAndTaxStatusAndIsActiveTrue(
             BillingConfiguration billingConfiguration,
             BillingPeriodStatus periodStatus,
@@ -132,4 +145,52 @@ public interface BillingScheduleRepository extends JpaRepository<BillingSchedule
             LocalDate periodStartDate,
             LocalDate periodEndDate);
 
+    /**
+     * Monitoring: due, unbilled occurrences of approved AUTOMATIC
+     * configurations still without an automatic billing run - the same
+     * filter as {@link #findDueOccurrenceIdsWithoutAutomaticRun}, counted.
+     */
+    @Query("SELECT COUNT(s) FROM BillingSchedule s JOIN s.billingConfiguration c "
+            + "WHERE c.approvalStatus = :approvalStatus "
+            + "AND c.invoiceGenerationType = :invoiceGenerationType "
+            + "AND c.manuallyDeactivated = false "
+            + "AND s.isActive = true AND s.isInvoiced = false "
+            + "AND s.billingDate <= :asOf "
+            + "AND s.periodStatus IN :periodStatuses "
+            + "AND NOT EXISTS (SELECT r.automaticBillingRunId FROM AutomaticBillingRun r "
+            + "                WHERE r.billingScheduleId = s.billingScheduleId)")
+    long countDueOccurrencesWithoutAutomaticRun(
+            @Param("asOf") LocalDate asOf,
+            @Param("approvalStatus") com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus approvalStatus,
+            @Param("invoiceGenerationType") com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType invoiceGenerationType,
+            @Param("periodStatuses") java.util.Collection<BillingPeriodStatus> periodStatuses);
+
+    /**
+     * Due, unbilled occurrences of approved AUTOMATIC configurations that have
+     * no automatic billing run yet - the automatic billing scheduler's work
+     * list, oldest billing date first. One query, ids only, bounded by
+     * {@code page}; the configuration filters run in the database. Manually
+     * deactivated configurations are excluded (their open occurrences are
+     * also deactivated). Occurrences with a run of any status - including a
+     * FAILED one - are not returned: a failure is retried through its run,
+     * never by creating another. Occurrences billed before
+     * {@code earliestBillingDate} are left out (backfill window).
+     */
+    @Query("SELECT s.billingScheduleId FROM BillingSchedule s JOIN s.billingConfiguration c "
+            + "WHERE c.approvalStatus = :approvalStatus "
+            + "AND c.invoiceGenerationType = :invoiceGenerationType "
+            + "AND c.manuallyDeactivated = false "
+            + "AND s.isActive = true AND s.isInvoiced = false "
+            + "AND s.billingDate <= :asOf AND s.billingDate >= :earliestBillingDate "
+            + "AND s.periodStatus IN :periodStatuses "
+            + "AND NOT EXISTS (SELECT r.automaticBillingRunId FROM AutomaticBillingRun r "
+            + "                WHERE r.billingScheduleId = s.billingScheduleId) "
+            + "ORDER BY s.billingDate ASC, s.billingScheduleId ASC")
+    List<UUID> findDueOccurrenceIdsWithoutAutomaticRun(
+            @Param("asOf") LocalDate asOf,
+            @Param("earliestBillingDate") LocalDate earliestBillingDate,
+            @Param("approvalStatus") com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus approvalStatus,
+            @Param("invoiceGenerationType") com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType invoiceGenerationType,
+            @Param("periodStatuses") java.util.Collection<BillingPeriodStatus> periodStatuses,
+            org.springframework.data.domain.Pageable page);
 }

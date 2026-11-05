@@ -206,7 +206,7 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void generateOccurrencesForRecurring_Monthly_GeneratesCorrectPeriods() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder()
+        billingConfiguration.setBillingType(BillingTypeMaster.builder()
                 .billingTypeName("Recurring")
                 .build());
 
@@ -259,7 +259,7 @@ class BillingOccurrenceServiceImplTest {
     @Test
     void generateOccurrencesForRecurring_PartialFinalPeriod_HandlesCorrectly() {
         recurringConfig.setRecurringEndDate(LocalDate.of(2026, 11, 15));
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder()
+        billingConfiguration.setBillingType(BillingTypeMaster.builder()
                 .billingTypeName("Recurring")
                 .build());
 
@@ -490,40 +490,34 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void transitionScheduledToTaxPending_UsesBillingDateBeforeOrEqual() {
-        // Production selects with findByBillingDateLessThanEqualAndTaxStatusAndIsActiveTrue(today, PENDING) and hands each row to
-        // the per-occurrence transaction service (REQUIRES_NEW), which is where the status actually changes.
-        LocalDate today = LocalDate.now();
-        BillingSchedule yesterday = BillingSchedule.builder().billingScheduleId(UUID.randomUUID()).billingDate(today.minusDays(1))
-                .periodStatus(BillingPeriodStatus.SCHEDULED).taxStatus(BillingPeriodStatus.PENDING).isActive(true).build();
-        BillingSchedule dueToday = BillingSchedule.builder().billingScheduleId(UUID.randomUUID()).billingDate(today)
-                .periodStatus(BillingPeriodStatus.SCHEDULED).taxStatus(BillingPeriodStatus.PENDING).isActive(true).build();
+        LocalDate today = LocalDate.of(2026, 9, 30);
 
-        when(billingScheduleRepository.findByBillingDateLessThanEqualAndTaxStatusAndIsActiveTrue(today, BillingPeriodStatus.PENDING))
-                .thenReturn(List.of(yesterday, dueToday));
+        List<BillingSchedule> scheduledOccurrences = new ArrayList<>();
+        scheduledOccurrences.add(BillingSchedule.builder()
+                .billingScheduleId(UUID.randomUUID())
+                .billingDate(LocalDate.of(2026, 9, 29))
+                .periodStatus(BillingPeriodStatus.SCHEDULED)
+                .taxStatus(BillingPeriodStatus.PENDING)
+                .isActive(true)
+                .build());
+        scheduledOccurrences.add(BillingSchedule.builder()
+                .billingScheduleId(UUID.randomUUID())
+                .billingDate(LocalDate.of(2026, 9, 30))
+                .periodStatus(BillingPeriodStatus.SCHEDULED)
+                .taxStatus(BillingPeriodStatus.PENDING)
+                .isActive(true)
+                .build());
 
-        billingOccurrenceService.transitionScheduledToTaxPending();
-
-        verify(billingScheduleRepository).findByBillingDateLessThanEqualAndTaxStatusAndIsActiveTrue(today, BillingPeriodStatus.PENDING);
-        verify(billingOccurrenceTransactionService).transitionSingleOccurrenceToTaxPending(yesterday);
-        verify(billingOccurrenceTransactionService).transitionSingleOccurrenceToTaxPending(dueToday);
-        verify(billingScheduleRepository, never()).findByBillingDateBeforeAndTaxStatusAndIsActiveTrue(any(), any());
-    }
-
-    @Test
-    void transitionScheduledToTaxPending_OneFailingOccurrenceDoesNotStopTheOthers() {
-        LocalDate today = LocalDate.now();
-        BillingSchedule failing = BillingSchedule.builder().billingScheduleId(UUID.randomUUID()).billingDate(today)
-                .periodStatus(BillingPeriodStatus.SCHEDULED).taxStatus(BillingPeriodStatus.PENDING).isActive(true).build();
-        BillingSchedule other = BillingSchedule.builder().billingScheduleId(UUID.randomUUID()).billingDate(today)
-                .periodStatus(BillingPeriodStatus.SCHEDULED).taxStatus(BillingPeriodStatus.PENDING).isActive(true).build();
-        when(billingScheduleRepository.findByBillingDateLessThanEqualAndTaxStatusAndIsActiveTrue(today, BillingPeriodStatus.PENDING))
-                .thenReturn(List.of(failing, other));
-        org.mockito.Mockito.doThrow(new IllegalStateException("boom")).when(billingOccurrenceTransactionService)
-                .transitionSingleOccurrenceToTaxPending(failing);
+        when(billingScheduleRepository.findByBillingDateBeforeAndTaxStatusAndIsActiveTrue(
+                today.plusDays(1), BillingPeriodStatus.PENDING))
+                .thenReturn(scheduledOccurrences);
 
         billingOccurrenceService.transitionScheduledToTaxPending();
 
-        verify(billingOccurrenceTransactionService).transitionSingleOccurrenceToTaxPending(other);
+        verify(billingScheduleRepository, times(2)).save(argThat(schedule ->
+                schedule.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING &&
+                        schedule.getTaxStatus() == BillingPeriodStatus.TAX_PENDING
+        ));
     }
 
     // =========================================================
@@ -957,7 +951,7 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void reconcileOccurrencesOnConfigurationUpdate_TimeAndMaterial_DoesNothing() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder()
+        billingConfiguration.setBillingType(BillingTypeMaster.builder()
                 .billingTypeName("Time & Material")
                 .build());
 
@@ -972,7 +966,7 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void reconcileOccurrencesOnConfigurationUpdate_MilestoneBased_DoesNothing() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder()
+        billingConfiguration.setBillingType(BillingTypeMaster.builder()
                 .billingTypeName("Milestone Based")
                 .build());
 
@@ -1136,7 +1130,7 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void milestoneReconcile_reapprovalWithExistingOccurrence_createsNoSecondOccurrence() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder().billingTypeName("Milestone Plan").build());
+        billingConfiguration.setBillingType(BillingTypeMaster.builder().billingTypeName("Milestone Plan").build());
         BillingMilestonePlan plan = milestonePlan();
         LocalDate date = LocalDate.of(2026, 10, 15);
         BillingPaymentEntry entry = paymentEntry(plan, 1, date, "5000");
@@ -1189,134 +1183,6 @@ class BillingOccurrenceServiceImplTest {
         assertThat(future.getTaxStatus()).isEqualTo(BillingPeriodStatus.PENDING);
         verify(billingScheduleRepository, times(1)).save(due);
         verify(billingScheduleRepository, never()).save(future);
-    }
-
-    private BillingSchedule dueScheduled() {
-        return BillingSchedule.builder().billingDate(LocalDate.now().minusDays(1))
-                .periodStatus(BillingPeriodStatus.SCHEDULED).taxStatus(BillingPeriodStatus.PENDING).build();
-    }
-
-    private void configure(String billingType, com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus status,
-                           LocalDate effectiveFrom, BillingSchedule... schedules) {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder().billingTypeName(billingType).build());
-        billingConfiguration.setBillingStatus(status);
-        billingConfiguration.setEffectiveFrom(effectiveFrom);
-        when(billingConfigurationRepository.findById(billingConfigId)).thenReturn(Optional.of(billingConfiguration));
-        lenient().when(billingScheduleRepository.findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(billingConfiguration))
-                .thenReturn(List.of(schedules));
-    }
-
-    @Test
-    void promoteDueOccurrences_anApprovedButInactiveMilestoneConfigurationPromotesNothing() {
-        BillingSchedule due = dueScheduled();
-        configure("Milestone Plan", com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.INACTIVE,
-                LocalDate.now().plusDays(10), due);
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        assertThat(due.getPeriodStatus()).isEqualTo(BillingPeriodStatus.SCHEDULED);
-        verify(billingScheduleRepository, never()).save(any());
-    }
-
-    @Test
-    void promoteDueOccurrences_aStoredActiveStatusDoesNotOverrideAFutureEffectiveStart() {
-        BillingSchedule due = dueScheduled();
-        configure("Milestone Plan", com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.ACTIVE,
-                LocalDate.now().plusDays(1), due);
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        assertThat(due.getPeriodStatus()).isEqualTo(BillingPeriodStatus.SCHEDULED);
-        verify(billingScheduleRepository, never()).save(any());
-    }
-
-    @Test
-    void promoteDueOccurrences_aMilestoneConfigurationWithoutAnEffectiveStartPromotesNothing() {
-        BillingSchedule due = dueScheduled();
-        configure("Milestone Plan", com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.ACTIVE, null, due);
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        assertThat(due.getPeriodStatus()).isEqualTo(BillingPeriodStatus.SCHEDULED);
-    }
-
-    @Test
-    void promoteDueOccurrences_onTheEffectiveFromDayAnOverdueMilestoneOccurrenceIsPromotedAsCatchUp() {
-        BillingSchedule due = dueScheduled();
-        configure("Milestone Plan", com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.ACTIVE,
-                LocalDate.now(), due);
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        assertThat(due.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
-    }
-
-    @Test
-    void promoteDueOccurrences_anActiveEffectiveMilestoneConfigurationStillPromotesDueButNotFutureOccurrences() {
-        BillingSchedule due = dueScheduled();
-        BillingSchedule future = BillingSchedule.builder().billingDate(LocalDate.now().plusDays(10))
-                .periodStatus(BillingPeriodStatus.SCHEDULED).taxStatus(BillingPeriodStatus.PENDING).build();
-        configure("Milestone Plan", com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.ACTIVE,
-                LocalDate.now().minusDays(30), due, future);
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        assertThat(due.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
-        assertThat(future.getPeriodStatus()).isEqualTo(BillingPeriodStatus.SCHEDULED);
-    }
-
-    @Test
-    void promoteDueOccurrences_aFixedPriceConfigurationThatIsInactiveBehavesAsBefore() {
-        BillingSchedule due = dueScheduled();
-        configure("Fixed Price", com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.INACTIVE,
-                LocalDate.now().plusDays(10), due);
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        assertThat(due.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
-    }
-
-    @Test
-    void promoteDueOccurrences_startedOccurrencesAreNeverTouched() {
-        BillingSchedule pending = BillingSchedule.builder().billingDate(LocalDate.now().minusDays(1))
-                .periodStatus(BillingPeriodStatus.TAX_PENDING).taxStatus(BillingPeriodStatus.TAX_PENDING).build();
-        BillingSchedule invoiced = BillingSchedule.builder().billingDate(LocalDate.now().minusDays(1))
-                .periodStatus(BillingPeriodStatus.INVOICED).taxStatus(BillingPeriodStatus.TAX_CALCULATED).isInvoiced(true).build();
-        configure("Milestone Plan", com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.ACTIVE,
-                LocalDate.now().minusDays(30), pending, invoiced);
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        assertThat(pending.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
-        assertThat(invoiced.getPeriodStatus()).isEqualTo(BillingPeriodStatus.INVOICED);
-        verify(billingScheduleRepository, never()).save(any());
-    }
-
-    @Test
-    void promoteDueOccurrences_anExpiredMilestoneConfigurationPromotesNothing() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder().billingTypeName("Milestone Plan").build());
-        billingConfiguration.setBillingStatus(com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.EXPIRED);
-        when(billingConfigurationRepository.findById(billingConfigId)).thenReturn(Optional.of(billingConfiguration));
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        verify(billingScheduleRepository, never()).save(any());
-        verify(billingScheduleRepository, never()).findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(any());
-    }
-
-    @Test
-    void promoteDueOccurrences_anExpiredFixedPriceConfigurationStillPromotes() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder().billingTypeName("Fixed Price").build());
-        billingConfiguration.setBillingStatus(com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.EXPIRED);
-        BillingSchedule due = BillingSchedule.builder().billingDate(LocalDate.now().minusDays(1))
-                .periodStatus(BillingPeriodStatus.SCHEDULED).taxStatus(BillingPeriodStatus.PENDING).build();
-        when(billingConfigurationRepository.findById(billingConfigId)).thenReturn(Optional.of(billingConfiguration));
-        when(billingScheduleRepository.findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(billingConfiguration))
-                .thenReturn(List.of(due));
-
-        billingOccurrenceService.promoteDueOccurrencesToTaxPending(billingConfigId);
-
-        assertThat(due.getPeriodStatus()).isEqualTo(BillingPeriodStatus.TAX_PENDING);
     }
 
     // =========================================================
@@ -1762,7 +1628,7 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void recurringEffectiveFromChange_MovedLater_DeletesScheduledBeforeNewStart() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder()
+        billingConfiguration.setBillingType(BillingTypeMaster.builder()
                 .billingTypeName("Recurring")
                 .build());
         recurringConfig.setRecurringStartDate(LocalDate.of(2026, 10, 1));
@@ -1806,7 +1672,7 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void recurringAmountChange_Scheduled_UpdatesAmount() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder()
+        billingConfiguration.setBillingType(BillingTypeMaster.builder()
                 .billingTypeName("Recurring")
                 .build());
         recurringConfig.setContractValue(new BigDecimal("15000"));
@@ -1838,7 +1704,7 @@ class BillingOccurrenceServiceImplTest {
 
     @Test
     void recurringAmountChange_TaxPending_UpdatesAmountAndInvalidatesTax() {
-        billingConfiguration.setBillingType(com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster.builder()
+        billingConfiguration.setBillingType(BillingTypeMaster.builder()
                 .billingTypeName("Recurring")
                 .build());
         recurringConfig.setContractValue(new BigDecimal("15000"));

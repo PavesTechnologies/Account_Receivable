@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.dto.tax_calculation.TaxCalculationRespons
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingOccurrenceView;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
@@ -56,7 +57,8 @@ public class BillingOccurrenceController {
             @RequestParam(required = false) BillingPeriodStatus periodStatus,
             @RequestParam(required = false) BillingPeriodStatus taxStatus,
             @RequestParam(required = false) LocalDate billingDateBefore,
-            @RequestParam(required = false) LocalDate billingDateAfter) {
+            @RequestParam(required = false) LocalDate billingDateAfter,
+            @RequestParam(required = false) BillingOccurrenceView view) {
 
         List<BillingSchedule> schedules;
 
@@ -128,6 +130,14 @@ public class BillingOccurrenceController {
                     .collect(Collectors.toList());
         }
 
+        // Without a view every active occurrence is returned, as before.
+        if (view == BillingOccurrenceView.CURRENT || view == BillingOccurrenceView.HISTORICAL) {
+            boolean historical = view == BillingOccurrenceView.HISTORICAL;
+            schedules = schedules.stream()
+                    .filter(s -> isOfManuallyDeactivatedConfiguration(s) == historical)
+                    .collect(Collectors.toList());
+        }
+
         return ResponseEntity.ok(schedules.stream()
                 .map(this::mapToResponse)
                 .collect(Collectors.toList()));
@@ -176,6 +186,17 @@ public class BillingOccurrenceController {
                                                 .build());
         }
 
+    /**
+     * Whether the occurrence belongs to a manually deactivated configuration -
+     * the same test automatic billing uses to stop billing one. Configurations
+     * that are merely not yet effective, expired or pending re-approval are not
+     * deactivated.
+     */
+    private static boolean isOfManuallyDeactivatedConfiguration(BillingSchedule schedule) {
+        return schedule.getBillingConfiguration() != null
+                && Boolean.TRUE.equals(schedule.getBillingConfiguration().getManuallyDeactivated());
+    }
+
     private BillingOccurrenceResponseDto mapToResponse(BillingSchedule schedule) {
         BillingOccurrenceResponseDto.BillingOccurrenceResponseDtoBuilder builder = BillingOccurrenceResponseDto.builder()
                 .billingScheduleId(schedule.getBillingScheduleId())
@@ -196,7 +217,9 @@ public class BillingOccurrenceController {
                 .updatedAt(schedule.getUpdatedAt());
 
         if (schedule.getBillingConfiguration() != null) {
-            builder.billingConfigurationId(schedule.getBillingConfiguration().getBillingConfigurationId());
+            builder.billingConfigurationId(schedule.getBillingConfiguration().getBillingConfigurationId())
+                    .billingConfigurationStatus(schedule.getBillingConfiguration().getBillingStatus())
+                    .configurationManuallyDeactivated(isOfManuallyDeactivatedConfiguration(schedule));
         }
 
         if (schedule.getRecurringConfiguration() != null) {
