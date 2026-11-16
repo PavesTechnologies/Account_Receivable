@@ -625,7 +625,7 @@ public class BillingConfigurationServiceImpl implements BillingConfigurationServ
         // =========================================================
         // RESTORE PREVIOUS APPROVED STATE IF SNAPSHOT EXISTS
         // =========================================================
-        snapshotRepository.findFirstByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration)
+        snapshotRepository.findFirstByBillingConfigurationAndIsRestoredFalseOrderByCreatedAtDesc(configuration);
         /*
          * Only a snapshot taken by the edit now being rejected - i.e. after
          * the last approval decision - describes the state to restore. An
