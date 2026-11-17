@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.entity.projectbilling_config;
 
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ContractValueSource;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit;
@@ -121,4 +122,17 @@ public class BillingRecurringConfiguration {
             referencedColumnName = "subscription_configuration_id"
     )
     private BillingRecurringConfiguration renewedFrom;
+
+    /**
+     * Approval state of a renewal term; {@code null} for a term that is not a
+     * renewal. A renewal is created PENDING_APPROVAL and inactive - it is
+     * never billable and generates no occurrences - and becomes an active term
+     * only when its billing configuration is approved through the existing
+     * approval workflow; a rejection leaves it REJECTED and inactive.
+     * Needed because {@code isActive = false} alone cannot tell a pending
+     * renewal from a deactivated term.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "renewal_approval_status", length = 30)
+    private ApprovalStatus renewalApprovalStatus;
 }

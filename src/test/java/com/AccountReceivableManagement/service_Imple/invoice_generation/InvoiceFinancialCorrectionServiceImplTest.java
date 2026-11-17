@@ -199,7 +199,8 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 billingSnapshotRepository,
                 billingConfigurationIntegration,
                 projectMasterDataService,
-                new BillingAcquisitionValidator(),
+                new BillingAcquisitionValidator(org.mockito.Mockito.mock(
+                        com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository.class)),
                 new BillingSnapshotBuilder(),
                 new BillingSnapshotMapper(),
                 currencyMasterRepository,
@@ -217,7 +218,9 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 billingScheduleRepository,
                 taxConfigurationRepository,
                 taxRegionMasterRepository,
-                billingConfigurationRepository);
+                billingConfigurationRepository,
+                org.mockito.Mockito.mock(
+                        com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl.class));
 
         invoiceService = new InvoiceServiceImpl(
                 invoiceRepository,
@@ -226,7 +229,8 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 taxCalculationRepository,
                 billingConfigurationService,
                 paymentTermsMasterRepository,
-                org.mockito.Mockito.mock(com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService.class));
+                org.mockito.Mockito.mock(
+                        com.AccountReceivableManagement.service_interface.concurrency_approval.RecordActionLockService.class));
 
         financialCorrectionService = new InvoiceFinancialCorrectionServiceImpl(
                 invoiceRepository,
@@ -441,11 +445,17 @@ class InvoiceFinancialCorrectionServiceImplTest {
 
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(configId))
                 .thenReturn(approvedTimeAndMaterialConfiguration());
-        // refreshInvoiceFromAuthoritativeData copies the project dates from the configuration.
+        // InvoiceServiceImpl.refreshAfterCorrection() reads the configuration's
+        // project duration through BillingConfigurationService (0b595eb).
         when(billingConfigurationService.getBillingConfiguration(configId))
-                .thenReturn(com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto
-                        .builder().projectStartDate(LocalDate.of(2026, 8, 1))
-                        .projectEndDate(LocalDate.of(2026, 12, 31)).build());
+                .thenReturn(com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationResponseDto.builder()
+                        .billingConfigurationId(configId)
+                        .projectId(PROJECT_ID)
+                        .currencyCode("USD")
+                        .taxRegionId(taxRegionId)
+                        .projectStartDate(PERIOD_START)
+                        .projectEndDate(LocalDate.of(2026, 12, 31))
+                        .build());
         // TaxCalculationServiceImpl reads the configuration through the
         // repository (not BillingConfigurationService) for its response mapping.
         when(billingConfigurationRepository.findById(configId))

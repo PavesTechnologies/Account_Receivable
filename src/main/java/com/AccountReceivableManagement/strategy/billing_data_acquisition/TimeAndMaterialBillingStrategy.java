@@ -12,6 +12,8 @@ import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionH
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingTMRateDiscountRepository;
 import com.AccountReceivableManagement.util.TmRateCalculator;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingRatePeriod;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
 import com.AccountReceivableManagement.integration.billing_data_acquisition.TimesheetIntegration;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingTMRateCardRepository;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.ExpenseLineDto;
@@ -30,6 +32,13 @@ import java.util.UUID;
 
 /**
  * Acquires approved timesheets from TMS for Time & Material billing
+ * and retrieves active hourly rates from billing_tm_rate_card for the configuration.
+ * <p>
+ * Timesheets are billed in hours, so only rate cards priced per hour are
+ * used: a DAILY/WEEKLY/MONTHLY card's rate would otherwise be multiplied by
+ * hours. No conversion is made (the model has no hours-per-day rule) - a
+ * role with only non-hourly cards gets no rate and the acquisition is
+ * rejected by {@code BillingAcquisitionValidator}.
  * and resolves each entry's net hourly rate (standard base rate less any dated discount period)
  * from billing_tm_rate_card / billing_tm_rate_discount for the configuration.
  */
@@ -70,6 +79,9 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
         UUID configId = request.getBillingConfigurationId() != null
                 ? request.getBillingConfigurationId()
                 : (configuration != null ? configuration.getBillingConfigurationId() : null);
+
+        boolean roleBased = configuration != null
+                && configuration.getPricingModel() == PricingModel.ROLE_BASED;
 
         for (TimesheetDto timesheet : timesheets) {
             LocalDate workDate = timesheet.getWorkDate() != null ? timesheet.getWorkDate() : request.getBillingPeriodStart();

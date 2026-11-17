@@ -76,6 +76,10 @@ public class TaxStructureServiceImpl implements TaxStructureService {
                         onDate
                 )
                 .stream()
+                // Ordering is part of this service's contract, not only the query's.
+                .sorted(java.util.Comparator.comparing(
+                        com.AccountReceivableManagement.entity.projectbilling_config.TaxComponentMaster::getDisplayOrder,
+                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
                 .map(this::mapToComponentInfo)
                 .collect(Collectors.toList());
 

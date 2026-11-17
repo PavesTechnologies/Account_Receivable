@@ -52,6 +52,10 @@ public class TmsTimesheetEntry {
      */
     private String approvalStatus;
 
-    /** TMS billable flag. Must be true — TMS contract guarantees only billable entries are returned. */
-    private boolean billable;
+    /**
+     * TMS billable flag, carried through as sent. Boxed so an omitted value
+     * stays distinguishable from an explicit {@code false}; either way the
+     * entry is not treated as billable.
+     */
+    private Boolean billable;
 }

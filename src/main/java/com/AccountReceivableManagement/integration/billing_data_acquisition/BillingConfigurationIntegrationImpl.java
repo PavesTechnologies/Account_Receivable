@@ -91,6 +91,12 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
                 .pricingModel(
                         epic1Configuration.getPricingModel())
 
+                .invoiceGenerationType(
+                        epic1Configuration.getInvoiceGenerationType())
+
+//                .pricingModel(
+//                        epic1Configuration.getPricingModel())
+
                 .expenseEligible(
                         Boolean.TRUE.equals(
                                 epic1Configuration.getExpenseBillingEligible()))
@@ -103,7 +109,8 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
                 .build();
     }
 
-    private static BillingType toBillingTypeEnum(String billingTypeName) {
+    /** Billing type of a master name, as automatic billing classifies it. */
+    public static BillingType toBillingTypeEnum(String billingTypeName) {
         if (billingTypeName == null || billingTypeName.isBlank()) {
             return null;
         }
@@ -114,7 +121,8 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
                 .replaceAll("^_+|_+$", "")
                 .toUpperCase();
 
-        if (normalized.contains("TIMESHEET") || normalized.contains("TIME_MATERIAL") || normalized.contains("TIME_AND_MATERIAL")) {
+        if (normalized.contains("TIMESHEET") || normalized.contains("TIME_MATERIAL")
+                || normalized.contains("TIME_AND_MATERIAL") || normalized.equals("T_M")) {
             return BillingType.TIME_AND_MATERIAL;
         }
         if (normalized.contains("FIXED")) {
@@ -126,11 +134,15 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
         if (normalized.contains("RECURRING") || normalized.contains("SUBSCRIPTION") || normalized.contains("RETAINER")) {
             return BillingType.RETAINER;
         }
+        if (normalized.contains("MANUAL")) {
+            return BillingType.MANUAL;
+        }
 
         try {
             return BillingType.valueOf(normalized);
         } catch (IllegalArgumentException ex) {
-            return BillingType.TIME_AND_MATERIAL;
+            // G-15: Never silently default unknown or unsupported billing types to TIME_AND_MATERIAL
+            return null;
         }
     }
 }

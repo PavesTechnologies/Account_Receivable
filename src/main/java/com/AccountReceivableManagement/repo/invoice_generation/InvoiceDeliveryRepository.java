@@ -23,4 +23,19 @@ public interface InvoiceDeliveryRepository extends JpaRepository<InvoiceDelivery
      * with {@code SENT}, whether the invoice has ever been dispatched.
      */
     boolean existsByInvoiceIdAndStatus(UUID invoiceId, InvoiceDeliveryStatus status);
+
+    /** Whether any delivery of the invoice is in one of {@code statuses}. */
+    boolean existsByInvoiceIdAndStatusIn(UUID invoiceId, java.util.Collection<InvoiceDeliveryStatus> statuses);
+
+    /**
+     * Invoices with a SENT delivery but no receivable (G-21), bounded -
+     * the reconciliation job's work list.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT DISTINCT d.invoiceId FROM InvoiceDelivery d WHERE d.status = :sent "
+                    + "AND NOT EXISTS (SELECT rc.receivableId FROM Receivable rc WHERE rc.invoice.invoiceId = d.invoiceId) "
+                    + "ORDER BY d.invoiceId")
+    List<UUID> findSentInvoiceIdsWithoutReceivable(
+            @org.springframework.data.repository.query.Param("sent") InvoiceDeliveryStatus sent,
+            org.springframework.data.domain.Pageable page);
 }

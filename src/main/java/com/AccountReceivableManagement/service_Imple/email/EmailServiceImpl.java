@@ -76,7 +76,9 @@ public class EmailServiceImpl implements EmailService {
             log.error(
                     "Invoice email delivery failed for recipient domain [{}]: {}",
                     maskRecipient(to),
-                    ex.getMessage()
+                    // The class only: provider messages can list the full
+                    // recipient addresses (e.g. "Invalid Addresses").
+                    ex.getClass().getSimpleName()
             );
 
             throw new EmailDeliveryException(

@@ -695,8 +695,6 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
 
         var project = configuration.getProject();
 
-        LocalDate projectStart = project.getStartDate();
-        LocalDate projectEnd = project.getEndDate();
 
         if (effectiveFrom != null &&
                 effectiveTo != null &&
@@ -705,6 +703,14 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
             throw new GlobalExceptionHandler.ValidationException(
                     "Effective From date cannot be after Effective To date.");
         }
+
+        // A configuration without a project (PRODUCT_SERVICE) has no project
+        // window to check against.
+        if (project == null) {
+            return;
+        }
+        LocalDate projectStart = project.getStartDate();
+        LocalDate projectEnd = project.getEndDate();
 
         if (projectStart == null || projectEnd == null) {
             return;
@@ -890,6 +896,7 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                         recurring.getRenewedFrom() != null
                                 ? recurring.getRenewedFrom().getRecurringConfigurationId()
                                 : null)
+                .renewalApprovalStatus(recurring.getRenewalApprovalStatus())
                 .build();
     }
 
@@ -1149,6 +1156,8 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                     "Effective From cannot be after Effective To.");
         }
 
+        validateRenewalTerm(originalRecurring, originalConfiguration, newEffectiveFrom, newEffectiveTo);
+
         // For product/service context, update product name/description if provided
         if (originalConfiguration.getBillingContext() == BillingContext.PRODUCT_SERVICE) {
             if (request.getProductName() != null) {
@@ -1180,7 +1189,10 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                         .renewalBillingFrequency(null)
                         .renewalEffectiveFrom(null)
                         .remarks("Renewed from configuration: " + recurringConfigurationId)
-                        .isActive(true)
+                        // Not billable until approved: the existing configuration approval
+                        // activates it and generates its occurrences.
+                        .isActive(false)
+                        .renewalApprovalStatus(ApprovalStatus.PENDING_APPROVAL)
                         .createdAt(LocalDateTime.now())
                         .updatedAt(LocalDateTime.now())
                         .build();
@@ -1188,7 +1200,17 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         BillingRecurringConfiguration saved =
                 billingRecurringRepository.save(newRecurring);
 
-        log.info("Renewal created successfully. New configuration ID: {}, Renewed from: {}",
+        /*
+         * The renewal goes through the existing approval workflow: the billing
+         * configuration awaits approval, as after an edit. Approval activates
+         * the renewal and generates its occurrences; rejection marks it
+         * REJECTED. The original term is left as it is.
+         */
+        originalConfiguration.setApprovalStatus(ApprovalStatus.PENDING_APPROVAL);
+        originalConfiguration.setUpdatedAt(LocalDateTime.now());
+        billingConfigurationRepository.save(originalConfiguration);
+
+        log.info("Renewal created, pending approval. New configuration ID: {}, Renewed from: {}",
                 saved.getRecurringConfigurationId(), recurringConfigurationId);
 
         return mapToResponse(saved);
@@ -1210,6 +1232,50 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
                 .toList();
     }
 
+    /**
+     * A term is renewed once, and the renewal term overlaps no active
+     * recurring term of the same billing configuration - an overlapping
+     * period would be billed by both terms. Checked before anything is
+     * written; renew() is transactional, so a refusal leaves no partial state.
+     */
+    private void validateRenewalTerm(
+            BillingRecurringConfiguration originalRecurring,
+            BillingConfiguration configuration,
+            LocalDate newEffectiveFrom,
+            LocalDate newEffectiveTo) {
+
+        billingRecurringRepository.findByRenewedFrom(originalRecurring).stream()
+                .filter(renewal -> Boolean.TRUE.equals(renewal.getIsActive())
+                        || renewal.getRenewalApprovalStatus() == ApprovalStatus.PENDING_APPROVAL)
+                .findFirst()
+                .ifPresent(renewal -> {
+                    throw new GlobalExceptionHandler.ValidationException(
+                            "Recurring configuration " + originalRecurring.getRecurringConfigurationId()
+                                    + " has already been renewed (renewal "
+                                    + renewal.getRecurringConfigurationId() + ", "
+                                    + renewal.getRecurringStartDate() + " to " + renewal.getRecurringEndDate()
+                                    + "); renew that configuration instead.");
+                });
+
+        List<BillingRecurringConfiguration> terms = new java.util.ArrayList<>(
+                billingRecurringRepository.findAllByBillingConfigurationAndIsActiveTrue(configuration));
+        terms.addAll(billingRecurringRepository.findByBillingConfigurationAndRenewalApprovalStatus(
+                configuration, ApprovalStatus.PENDING_APPROVAL));
+        for (BillingRecurringConfiguration term : terms) {
+            LocalDate termStart = term.getRecurringStartDate() != null
+                    ? term.getRecurringStartDate() : configuration.getEffectiveFrom();
+            LocalDate termEnd = term.getRecurringEndDate() != null
+                    ? term.getRecurringEndDate() : configuration.getEffectiveTo();
+            if (termStart != null && termEnd != null
+                    && !newEffectiveFrom.isAfter(termEnd) && !newEffectiveTo.isBefore(termStart)) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "The renewal term " + newEffectiveFrom + " to " + newEffectiveTo
+                                + " overlaps the recurring term " + termStart + " to " + termEnd
+                                + "; a renewal must start after the term it renews ends.");
+            }
+        }
+    }
+
     private void validateRenewalEligibility(
             BillingRecurringConfiguration recurring,
             BillingConfiguration configuration) {
@@ -1218,6 +1284,14 @@ public class RecurringBillingServiceImpl implements RecurringBillingService {
         if (configuration.getBillingContext() != BillingContext.PRODUCT_SERVICE) {
             throw new GlobalExceptionHandler.ValidationException(
                     "Only standalone product/service recurring configurations can be renewed.");
+        }
+
+        // Only an approved configuration is renewed: a configuration already awaiting
+        // approval (an edit or another renewal) must be decided first.
+        if (configuration.getApprovalStatus() != ApprovalStatus.APPROVED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Only an approved billing configuration can be renewed. Current status: "
+                            + configuration.getApprovalStatus() + ".");
         }
 
         // Configuration must be active

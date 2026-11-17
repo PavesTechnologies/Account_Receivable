@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -25,9 +26,22 @@ import java.util.UUID;
  * — a timesheet entry today, a milestone/expense/retainer charge in later
  * stories. {@code sourceReferenceId} traces the line back to its origin-system
  * record; which system that is follows from {@code itemType}.
+ * <p>
+ * {@code uk_billing_snapshot_item_billed_source} is the database-level guard
+ * against billing one source record twice: {@code BillingAcquisitionValidator}
+ * rejects source records already on another snapshot, but two snapshots
+ * acquired concurrently (same or overlapping periods) would both pass that
+ * check - only one of them can commit the claim. See
+ * db/migration/V8__billing_snapshot_item_billed_source_unique.sql.
  */
 @Entity
-@Table(name = "billing_snapshot_item")
+@Table(
+        name = "billing_snapshot_item",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_billing_snapshot_item_billed_source",
+                columnNames = {"item_type", "billed_source_reference_id"}
+        )
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -53,6 +67,17 @@ public class BillingSnapshotItem {
 
     @Column(name = "source_reference_id", length = 100)
     private String sourceReferenceId;
+
+    /**
+     * Billing claim on the source record: {@code sourceReferenceId} while
+     * this line bills it, {@code null} when the line makes no claim (line
+     * types without a deduplicated source, rows created before the claim
+     * existed). Unique per {@code itemType}; a NULL never conflicts. Anything
+     * that releases a source record for billing again (e.g. cancelling the
+     * snapshot) must clear it.
+     */
+    @Column(name = "billed_source_reference_id", length = 100)
+    private String billedSourceReferenceId;
 
     /**
      * TMS employee display name ({@code TimesheetDto.resourceName}) —

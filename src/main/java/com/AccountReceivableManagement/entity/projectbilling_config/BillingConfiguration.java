@@ -145,4 +145,43 @@ public class BillingConfiguration {
 
     @Column(name = "product_description", length = 500)
     private String productDescription;
+
+    /**
+     * Maker: the UMS user who last put this configuration into
+     * PENDING_APPROVAL (submission, an edit of an approved configuration, a
+     * renewal). Set automatically on that transition from the authenticated
+     * identity - never from a request value; null when no user did it.
+     */
+    @Column(name = "submitted_by_user_id")
+    private Long submittedByUserId;
+
+    /** Checker: the UMS user who last approved or rejected it, for audit. */
+    @Column(name = "approval_decided_by_user_id")
+    private Long approvalDecidedByUserId;
+
+    @Column(name = "approval_decided_by", length = 100)
+    private String approvalDecidedBy;
+
+    @Column(name = "approval_decided_at")
+    private LocalDateTime approvalDecidedAt;
+
+    /** Approval status as last loaded or saved, to see when it changes to PENDING_APPROVAL. */
+    @Transient
+    private ApprovalStatus persistedApprovalStatus;
+
+    @PostLoad
+    @PostPersist
+    @PostUpdate
+    void rememberPersistedApprovalStatus() {
+        persistedApprovalStatus = approvalStatus;
+    }
+
+    @PrePersist
+    @PreUpdate
+    void recordSubmitter() {
+        if (approvalStatus == ApprovalStatus.PENDING_APPROVAL
+                && persistedApprovalStatus != ApprovalStatus.PENDING_APPROVAL) {
+            submittedByUserId = com.AccountReceivableManagement.security.ActorContext.currentUserId();
+        }
+    }
 }

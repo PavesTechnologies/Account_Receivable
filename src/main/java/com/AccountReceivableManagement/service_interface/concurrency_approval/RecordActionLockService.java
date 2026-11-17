@@ -33,6 +33,17 @@ public interface RecordActionLockService {
     /**
      * Release a lock owned by the current user.
      */
+    /**
+     * As {@link #validateLockOwner(LockResourceType, UUID)}, and the lock must
+     * have been acquired for {@code requiredAction} (an edit lock does not
+     * authorize an approval).
+     */
+    void validateLockOwner(
+            LockResourceType resourceType,
+            UUID resourceId,
+            LockActionType requiredAction
+    );
+
     void releaseLock(
             LockResourceType resourceType,
             UUID resourceId

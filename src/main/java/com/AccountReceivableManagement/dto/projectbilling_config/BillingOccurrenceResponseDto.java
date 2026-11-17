@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
 import com.AccountReceivableManagement.dto.tax_calculation.TaxCalculationComponentResponseDto;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingScheduleType;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
@@ -24,6 +25,11 @@ public class BillingOccurrenceResponseDto {
     private UUID billingScheduleId;
     private UUID billingConfigurationId;
     private UUID recurringConfigurationId;
+
+    // Lifecycle of the owning billing configuration, so occurrences of a
+    // deactivated configuration can be told apart from those of its successor.
+    private BillingConfigurationStatus billingConfigurationStatus;
+    private Boolean configurationManuallyDeactivated;
     private Integer periodNumber;
     private LocalDate periodStartDate;
     private LocalDate periodEndDate;

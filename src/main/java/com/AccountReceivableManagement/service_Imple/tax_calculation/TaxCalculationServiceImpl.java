@@ -34,6 +34,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -68,6 +69,10 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
     private final TaxRegionMasterRepository taxRegionMasterRepository;
 
     private final BillingConfigurationRepository billingConfigurationRepository;
+
+    /** Financial checks shared with invoicing and automatic billing (requireOccurrenceBillable). */
+    private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl
+            billingOccurrenceService;
 
 //    private final BillingConfigurationService billingConfigurationService;
 
@@ -146,6 +151,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
         TaxApplicabilityType transactionApplicability =
                 resolveApplicability(snapshot);
 
+        requireJurisdictionsWhenConfigurationNeedsThem(
+                configuration, transactionApplicability, "billing snapshot");
+
         snapshot.setStatus(
                 BillingSnapshotStatus.IN_TAX
         );
@@ -164,6 +172,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                         )
                         .taxRegionId(
                                 snapshot.getTaxRegionId()
+                        )
+                        .currencyCode(
+                                snapshot.getCurrencyCode()
                         )
                         .taxConfigurationId(
                                 configuration
@@ -282,6 +293,10 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                             calculation
                     );
 
+            // Flushed so a concurrent duplicate on billing_snapshot_id is
+            // reported here as DuplicateResourceException, not at commit.
+            taxCalculationRepository.flush();
+
         } catch (DataIntegrityViolationException ex) {
 
             throw new GlobalExceptionHandler
@@ -313,6 +328,72 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                 snapshot,
                 snapshotConfiguration
         );
+    }
+
+    /**
+     * Idempotent form of {@link #calculateTax(UUID)} for callers that may
+     * repeat the request: an existing CALCULATED tax calculation for the
+     * snapshot is returned as-is - never recalculated, never duplicated;
+     * otherwise tax is calculated through {@link #calculateTax(UUID)}.
+     */
+    @Override
+    public TaxCalculationResponseDto findOrCalculateTax(
+            UUID billingSnapshotId
+    ) {
+
+        Optional<TaxCalculation> existing =
+                taxCalculationRepository.findByBillingSnapshotId(
+                        billingSnapshotId
+                );
+
+        if (existing.isPresent()) {
+            requireCalculated(existing.get(), "billing snapshot");
+            return getTaxCalculationBySnapshotId(billingSnapshotId);
+        }
+
+        return calculateTax(billingSnapshotId);
+    }
+
+    /**
+     * Idempotent form of {@link #calculateTaxForSchedule(UUID)} - see
+     * {@link #findOrCalculateTax(UUID)}.
+     */
+    @Override
+    public TaxCalculationResponseDto findOrCalculateTaxForSchedule(
+            UUID billingScheduleId
+    ) {
+
+        Optional<TaxCalculation> existing =
+                taxCalculationRepository.findByBillingScheduleId(
+                        billingScheduleId
+                );
+
+        if (existing.isPresent()) {
+            requireCalculated(existing.get(), "billing occurrence");
+            return getTaxCalculationByScheduleId(billingScheduleId);
+        }
+
+        return calculateTaxForSchedule(billingScheduleId);
+    }
+
+    /**
+     * An existing tax calculation that did not complete is not reused - it
+     * is reported, since recalculating over it would need the existing
+     * record to be resolved first.
+     */
+    private void requireCalculated(
+            TaxCalculation calculation,
+            String source
+    ) {
+
+        if (calculation.getStatus() != TaxCalculationStatus.CALCULATED) {
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "A tax calculation already exists for this " + source
+                            + " but has status " + calculation.getStatus()
+                            + "; it cannot be reused."
+            );
+        }
     }
 
     @Override
@@ -350,6 +431,21 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
             );
         }
 
+        // The same financial checks automatic billing applies: approved
+        // configuration and the billing type's contract / payment-entry /
+        // term rules - so the manual endpoint cannot tax what automation refuses.
+        billingOccurrenceService.requireOccurrenceBillable(billingScheduleId);
+
+        // Never taxed as zero: a missing or negative amount would otherwise
+        // flow on into a zero-value (or negative) invoice.
+        BigDecimal taxableAmount = schedule.getBillingAmount();
+        if (taxableAmount == null || taxableAmount.signum() < 0) {
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Tax calculation cannot be started because this billing schedule has no valid billing amount."
+            );
+        }
+
         BillingConfiguration configuration = schedule.getBillingConfiguration();
         if (configuration == null) {
             throw new GlobalExceptionHandler
@@ -383,10 +479,8 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         TaxApplicabilityType transactionApplicability = resolveApplicabilityForSchedule(schedule, configuration);
 
-        BigDecimal taxableAmount = schedule.getBillingAmount();
-        if (taxableAmount == null) {
-            taxableAmount = BigDecimal.ZERO;
-        }
+        requireJurisdictionsWhenConfigurationNeedsThem(
+                taxConfiguration, transactionApplicability, "billing schedule");
 
         TaxCalculation calculation =
                 TaxCalculation.builder()
@@ -395,6 +489,11 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                         )
                         .taxRegionId(
                                 configuration.getTaxRegion().getTaxRegionId()
+                        )
+                        .currencyCode(
+                                configuration.getCurrency() != null
+                                        ? configuration.getCurrency().getCurrencyCode()
+                                        : null
                         )
                         .taxConfigurationId(
                                 taxConfiguration.getTaxConfigurationId()
@@ -412,9 +511,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         BigDecimal totalTax = BigDecimal.ZERO;
 
-        log.info("Tax Calculation Diagnostics for BillingSchedule: {}", billingScheduleId);
-        log.info("Tax Configuration ID: {}", taxConfiguration.getTaxConfigurationId());
-        log.info("Tax Configuration Components Size: {}", taxConfiguration.getComponents().size());
+        log.debug("Tax Calculation Diagnostics for BillingSchedule: {}", billingScheduleId);
+        log.debug("Tax Configuration ID: {}", taxConfiguration.getTaxConfigurationId());
+        log.debug("Tax Configuration Components Size: {}", taxConfiguration.getComponents().size());
         log.info("Transaction Applicability: {}", transactionApplicability);
 
         for (TaxConfigurationComponent configuredComponent
@@ -426,7 +525,7 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                     transactionApplicability
             );
 
-            log.info("Component: {} | active={} | rate={} | applicability={} | applicable={}",
+            log.debug("Component: {} | active={} | rate={} | applicability={} | applicable={}",
                     configuredComponent.getTaxType() != null ? configuredComponent.getTaxType().getTaxTypeCode() : "NULL",
                     isActive,
                     configuredComponent.getTaxRate(),
@@ -502,6 +601,10 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         try {
             saved = taxCalculationRepository.save(calculation);
+
+            // Flushed so a concurrent duplicate on billing_schedule_id is
+            // reported here as DuplicateResourceException, not at commit.
+            taxCalculationRepository.flush();
         } catch (DataIntegrityViolationException ex) {
             throw new GlobalExceptionHandler
                     .DuplicateResourceException(
@@ -648,7 +751,7 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                     .orElse(null);
         }
 
-        log.info("Jurisdiction Resolution for Schedule {}: source (TaxRegion code)={}, destination (resolved from Project Location)={}",
+        log.debug("Jurisdiction Resolution for Schedule {}: source (TaxRegion code)={}, destination (resolved from Project Location)={}",
                 schedule.getBillingScheduleId(), source, destination);
 
         /*
@@ -662,11 +765,11 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
         }
 
         if (source.equalsIgnoreCase(destination)) {
-            log.info("Jurisdictions are SAME: {} == {}", source, destination);
+            log.debug("Jurisdictions are SAME: {} == {}", source, destination);
             return TaxApplicabilityType.SAME_JURISDICTION;
         }
 
-        log.info("Jurisdictions are DIFFERENT: {} != {}", source, destination);
+        log.debug("Jurisdictions are DIFFERENT: {} != {}", source, destination);
         return TaxApplicabilityType.DIFFERENT_JURISDICTION;
     }
 
@@ -703,6 +806,55 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
                 + " (source jurisdiction " + normalize(snapshot.getSourceTaxJurisdictionCode())
                 + ", destination jurisdiction " + normalize(snapshot.getDestinationTaxJurisdictionCode())
                 + ") but active components are configured only for " + activeApplicabilities + ".";
+    }
+
+    /**
+     * G-12: {@code ALL} is the transaction applicability only when the source
+     * or destination jurisdiction could not be determined. If the Tax
+     * Configuration has active jurisdiction-specific components (e.g.
+     * CGST/SGST vs IGST), taxing with only its {@code ALL} components would
+     * silently under-tax - so the calculation fails with the missing
+     * prerequisite instead. A configuration made only of {@code ALL}
+     * components needs no jurisdictions and is unaffected; one without any
+     * {@code ALL} component already fails (no applicable component).
+     */
+    private void requireJurisdictionsWhenConfigurationNeedsThem(
+            TaxConfiguration taxConfiguration,
+            TaxApplicabilityType transactionApplicability,
+            String record
+    ) {
+
+        if (transactionApplicability != TaxApplicabilityType.ALL) {
+            return;
+        }
+
+        List<TaxApplicabilityType> jurisdictionSpecific =
+                taxConfiguration.getComponents()
+                        .stream()
+                        .filter(component ->
+                                Boolean.TRUE.equals(component.getIsActive()))
+                        .map(TaxConfigurationComponent::getApplicabilityType)
+                        .filter(type -> type != null && type != TaxApplicabilityType.ALL)
+                        .distinct()
+                        .toList();
+
+        boolean hasJurisdictionIndependent =
+                taxConfiguration.getComponents()
+                        .stream()
+                        .anyMatch(component ->
+                                Boolean.TRUE.equals(component.getIsActive())
+                                        && component.getApplicabilityType() == TaxApplicabilityType.ALL);
+
+        if (hasJurisdictionIndependent && !jurisdictionSpecific.isEmpty()) {
+            throw new GlobalExceptionHandler
+                    .ValidationException(
+                    "Tax cannot be calculated for this " + record
+                            + ": its source and destination tax jurisdictions could not be determined, "
+                            + "but the Tax Configuration has jurisdiction-specific components ("
+                            + jurisdictionSpecific + "). Set the tax region and the project location "
+                            + "to a known tax region, then calculate tax again."
+            );
+        }
     }
 
     private boolean isApplicable(

@@ -28,6 +28,15 @@ public interface BillingSnapshotService {
     ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd, UUID billingConfigurationId);
 
     /**
+     * Read-only: every snapshot recorded against {@code billingConfigurationId},
+     * latest billing period first, whether that configuration is active,
+     * deactivated or expired. Only snapshots whose own
+     * {@code billingConfigurationId} matches are returned - never other
+     * snapshots of the same project. Empty when there are none.
+     */
+    ApiResponse<java.util.List<BillingSnapshotResponseDto>> getByBillingConfiguration(UUID billingConfigurationId);
+
+    /**
      * Phase 2B financial correction - rebuilds an already-persisted
      * {@code BillingSnapshot} in place from freshly re-acquired authoritative
      * source data (TMS, for Time &amp; Material), rather than creating a new
@@ -52,6 +61,14 @@ public interface BillingSnapshotService {
      * acquisition validation fails.
      */
     BillingSnapshot rebuildBillingSnapshot(UUID billingSnapshotId);
+
+    /**
+     * Cancels an un-invoiced Billing Snapshot and releases its claimed source
+     * records (clearing billedSourceReferenceId on items). If an invoice
+     * has already been generated from this snapshot, cancellation is prohibited.
+     * Repeated cancellation of an already cancelled snapshot is idempotent.
+     */
+    ApiResponse<Void> cancelBillingSnapshot(UUID billingSnapshotId);
 
     /**
      * Same rebuild as {@link #rebuildBillingSnapshot(UUID)}, additionally returning a bounded summary of the

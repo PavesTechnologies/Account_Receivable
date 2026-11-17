@@ -245,4 +245,40 @@ class BillingDataAcquisitionServiceImplTest {
         assertThat(dto.getLastInvoice()).isEqualTo("INV-0009");
         assertThat(dto.getSnapshotId()).isEqualTo(recorded.getSnapshotId());
     }
+
+    // ---------------------------------------------------------------- billing frequency
+
+    @Test
+    void milestonePlanWithoutBillingFrequency_isListed_withItsPaymentScheduleAsFrequency() {
+        configuration.setBillingType(BillingTypeMaster.builder()
+                .billingTypeId(UUID.randomUUID()).billingTypeName("Milestone Plan").build());
+        configuration.setBillingFrequency(null);
+
+        List<BillingDataAcquisitionResponseDto> result = service.getActiveConfigurations();
+
+        assertThat(result).singleElement().satisfies(dto -> {
+            assertThat(dto.getBillingType()).isEqualTo("Milestone Plan");
+            assertThat(dto.getFrequency()).isEqualTo(BillingDataAcquisitionServiceImpl.MILESTONE_PLAN_FREQUENCY);
+            assertThat(dto.getStatus()).isEqualTo(BillingAcquisitionStatus.NOT_ACQUIRED.name());
+        });
+    }
+
+    @Test
+    void frequencyBasedConfigurationWithoutBillingFrequency_isStillListed_withoutAFrequency() {
+        // Invalid data (T&M needs a frequency) is reported in the log; it must not break the console.
+        configuration.setBillingFrequency(null);
+
+        List<BillingDataAcquisitionResponseDto> result = service.getActiveConfigurations();
+
+        assertThat(result).singleElement().satisfies(dto -> {
+            assertThat(dto.getBillingConfigurationId()).isEqualTo(billingConfigurationId);
+            assertThat(dto.getFrequency()).isNull();
+        });
+    }
+
+    @Test
+    void configurationWithBillingFrequency_keepsItsFrequencyName() {
+        assertThat(service.getActiveConfigurations()).singleElement()
+                .satisfies(dto -> assertThat(dto.getFrequency()).isEqualTo("Monthly"));
+    }
 }

@@ -174,7 +174,8 @@ class LocalDemoSeedTaxRulesTest {
         BillingConfigurationRepository configurations = mock(BillingConfigurationRepository.class);
         when(configurations.findById(any())).thenReturn(Optional.of(new BillingConfiguration()));
         TaxCalculationServiceImpl service = new TaxCalculationServiceImpl(calculations, snapshots, mock(BillingScheduleRepository.class),
-                taxRepository(context), mock(TaxRegionMasterRepository.class), configurations);
+                taxRepository(context), mock(TaxRegionMasterRepository.class), configurations,
+                mock(com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl.class));
 
         new TransactionTemplate(context.getBean(PlatformTransactionManager.class))
                 .executeWithoutResult(status -> service.calculateTax(snapshot.getId()));

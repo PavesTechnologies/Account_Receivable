@@ -78,4 +78,16 @@ public class BillingSnapshotController {
                 return ResponseEntity.ok(response);
         }
 
+        /**
+         * Read-only history of one Billing Configuration's snapshots, including
+         * those of a deactivated or expired configuration, which the Acquisition
+         * Queue (ACTIVE configurations only) no longer lists.
+         */
+        @GetMapping
+        public ResponseEntity<ApiResponse<java.util.List<BillingSnapshotResponseDto>>> getByBillingConfiguration(
+                        @RequestParam java.util.UUID billingConfigurationId) {
+
+                return ResponseEntity.ok(billingSnapshotService.getByBillingConfiguration(billingConfigurationId));
+        }
+
 }

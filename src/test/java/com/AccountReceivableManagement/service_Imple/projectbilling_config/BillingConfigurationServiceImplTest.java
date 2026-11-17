@@ -9,7 +9,13 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeM
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PaymentStructure;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingAcquisitionRepository;
+import com.AccountReceivableManagement.security.Actor;
+import com.AccountReceivableManagement.security.FinancialAction;
+import com.AccountReceivableManagement.security.FinancialActionAuthorizer;
+import com.AccountReceivableManagement.dto.projectbilling_config.BillingConfigurationRejectRequestDto;
+import org.springframework.security.access.AccessDeniedException;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
 import com.AccountReceivableManagement.repo.client.ClientRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
@@ -65,6 +71,10 @@ class BillingConfigurationServiceImplTest {
     @Mock private RecordActionLockService recordActionLockService;
     @Mock private BillingConfigurationSnapshotRepository snapshotRepository;
     @Mock private BillingAcquisitionRepository billingAcquisitionRepository;
+    @Mock private FinancialActionAuthorizer financialActionAuthorizer;
+    @Mock private AutomaticBillingRunRepository automaticBillingRunRepository;
+
+    private static final Actor FINANCE_MANAGER = new Actor(20L, "finance.manager@example.com");
 
     private BillingConfigurationServiceImpl service;
 
@@ -91,13 +101,15 @@ class BillingConfigurationServiceImplTest {
                 billingOccurrenceService,
                 projectEligibilityRepository,
                 billingPeriodCalculatorService,
+                financialActionAuthorizer,
                 billingMilestonePlanRepository,
                 billingPaymentEntryRepository,
                 billingMilestonePlanService,
                 changeTrackingService,
                 recordActionLockService,
                 snapshotRepository,
-                billingAcquisitionRepository);
+                billingAcquisitionRepository,
+                automaticBillingRunRepository);
 
         configurationId = UUID.randomUUID();
         draftConfiguration = BillingConfiguration.builder()
@@ -178,6 +190,8 @@ class BillingConfigurationServiceImplTest {
     }
 
     private void stubApprovableConfiguration(BillingConfiguration configuration) {
+        when(financialActionAuthorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .thenReturn(FINANCE_MANAGER);
         when(billingConfigurationRepository.findById(configurationId)).thenReturn(Optional.of(configuration));
         when(billingConfigurationRepository.save(any(BillingConfiguration.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -249,6 +263,86 @@ class BillingConfigurationServiceImplTest {
         assertThatThrownBy(() -> service.approve(configurationId))
                 .isInstanceOf(GlobalExceptionHandler.ValidationException.class)
                 .hasMessage("Billing date is required for all payment entries");
+    }
+
+    // =========================================================
+    // APPROVE / REJECT - authorization and maker-checker
+    // =========================================================
+
+    @Test
+    void approve_authorizedFinanceManager_recordsThemAsTheDecider() {
+        BillingConfiguration configuration = pendingConfiguration();
+        configuration.setSubmittedByUserId(7L);
+        stubApprovableConfiguration(configuration);
+
+        service.approve(configurationId);
+
+        verify(financialActionAuthorizer).requireDifferentFromMaker(7L, FINANCE_MANAGER, "billing configuration");
+        assertThat(configuration.getApprovalStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(configuration.getApprovalDecidedByUserId()).isEqualTo(20L);
+        assertThat(configuration.getApprovalDecidedBy()).isEqualTo("finance.manager@example.com");
+    }
+
+    @Test
+    void approve_userWithoutTheConfiguredAuthority_isDeniedBeforeAnythingIsRead() {
+        when(financialActionAuthorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .thenThrow(new AccessDeniedException("You are not authorized to approve or reject billing configurations."));
+
+        assertThatThrownBy(() -> service.approve(configurationId))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("You are not authorized to approve or reject billing configurations.");
+
+        verifyNoInteractions(billingConfigurationRepository, recordActionLockService, billingOccurrenceService);
+    }
+
+    @Test
+    void approve_bySubmitter_isRejectedByMakerCheckerAndStaysPending() {
+        BillingConfiguration configuration = pendingConfiguration();
+        configuration.setSubmittedByUserId(FINANCE_MANAGER.userId());
+        when(financialActionAuthorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .thenReturn(FINANCE_MANAGER);
+        when(billingConfigurationRepository.findById(configurationId)).thenReturn(Optional.of(configuration));
+        org.mockito.Mockito.doThrow(new AccessDeniedException(
+                        "You submitted this billing configuration for approval, so it must be approved by another authorized user."))
+                .when(financialActionAuthorizer)
+                .requireDifferentFromMaker(FINANCE_MANAGER.userId(), FINANCE_MANAGER, "billing configuration");
+
+        assertThatThrownBy(() -> service.approve(configurationId))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("must be approved by another authorized user");
+
+        assertThat(configuration.getApprovalStatus()).isEqualTo(ApprovalStatus.PENDING_APPROVAL);
+        assertThat(configuration.getApprovalDecidedByUserId()).isNull();
+        verify(billingConfigurationRepository, never()).save(any());
+        verifyNoInteractions(billingOccurrenceService);
+    }
+
+    @Test
+    void reject_authorizedFinanceManager_rejectsManuallyWithReasonAndRecordsThem() {
+        BillingConfiguration configuration = pendingConfiguration();
+        configuration.setSubmittedByUserId(7L);
+        stubApprovableConfiguration(configuration);
+
+        service.reject(configurationId, new BillingConfigurationRejectRequestDto("Wrong rate"));
+
+        verify(recordActionLockService).validateLockOwner(
+                com.AccountReceivableManagement.entity_enums.common.LockResourceType.BILLING_CONFIGURATION, configurationId,
+                com.AccountReceivableManagement.entity_enums.common.LockActionType.APPROVAL);
+        assertThat(configuration.getApprovalStatus()).isEqualTo(ApprovalStatus.REJECTED);
+        assertThat(configuration.getRejectionReason()).isEqualTo("Wrong rate");
+        assertThat(configuration.getApprovalDecidedByUserId()).isEqualTo(20L);
+        verifyNoInteractions(billingOccurrenceService);
+    }
+
+    @Test
+    void reject_userWithoutTheConfiguredAuthority_isDeniedAndNothingChanges() {
+        when(financialActionAuthorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .thenThrow(new AccessDeniedException("You are not authorized to approve or reject billing configurations."));
+
+        assertThatThrownBy(() -> service.reject(configurationId, new BillingConfigurationRejectRequestDto("Wrong rate")))
+                .isInstanceOf(AccessDeniedException.class);
+
+        verifyNoInteractions(billingConfigurationRepository, recordActionLockService, snapshotRepository);
     }
 
     @Test

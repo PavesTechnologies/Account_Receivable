@@ -168,6 +168,14 @@ public class BillingFixedPriceServiceImpl implements BillingFixedPriceService {
 
         validateRequest(request);
 
+        // Same rule as create: Fixed Price periods are derived from the configuration's frequency.
+        if (configuration.getBillingFrequency() == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Frequency must be set on the Billing Configuration before updating Fixed Price configuration. " +
+                    "Please update the Billing Configuration with the selected Billing Frequency first."
+            );
+        }
+
         // Validate frequency eligibility for the date range
         LocalDate effectiveFrom = request.getEffectiveFrom() != null 
                 ? request.getEffectiveFrom() 

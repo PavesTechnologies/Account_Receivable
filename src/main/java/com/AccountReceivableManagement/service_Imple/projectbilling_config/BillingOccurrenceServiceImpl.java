@@ -8,6 +8,9 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingPayme
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingRecurringConfiguration;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingSchedule;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
+import com.AccountReceivableManagement.integration.billing_data_acquisition.BillingConfigurationIntegrationImpl;
+import com.AccountReceivableManagement.dto.projectbilling_config.BillingPeriodDto;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingScheduleType;
@@ -23,7 +26,6 @@ import com.AccountReceivableManagement.repo.projectbilling_config.BillingRecurri
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
 import com.AccountReceivableManagement.repo.tax_calculation.TaxCalculationRepository;
 import com.AccountReceivableManagement.service_interface.projectbilling_config.BillingOccurrenceTransactionService;
-import com.AccountReceivableManagement.service_interface.tax_calculation.TaxCalculationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,7 +36,11 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Slf4j
@@ -51,7 +57,7 @@ public class BillingOccurrenceServiceImpl {
     private final com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository billingConfigurationRepository;
     private final BillingFrequencyMasterRepository billingFrequencyRepository;
     private final TaxCalculationRepository taxCalculationRepository;
-    private final TaxCalculationService taxCalculationService;
+    private final com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
     private final BillingOccurrenceTransactionService billingOccurrenceTransactionService;
 
     /**
@@ -132,11 +138,51 @@ public class BillingOccurrenceServiceImpl {
 
         validateConfigurationApproved(configuration);
 
-        BillingRecurringConfiguration recurring = billingRecurringConfigurationRepository
-                .findByBillingConfigurationAndIsActiveTrue(configuration)
-                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
-                        "Recurring Configuration not found"));
+        List<BillingRecurringConfiguration> terms = activeRecurringTerms(configuration);
+        if (terms.isEmpty()) {
+            throw new GlobalExceptionHandler.ResourceNotFoundException("Recurring Configuration not found");
+        }
+        for (BillingRecurringConfiguration recurring : terms) {
+            generateRecurringTerm(configuration, recurring);
+        }
+    }
 
+    /**
+     * The active recurring terms of a configuration, earliest first: the
+     * original term and its approved renewals. Each term has its own dates,
+     * contract value and occurrences; renewal terms never overlap
+     * (RecurringBillingServiceImpl.renew).
+     */
+    private List<BillingRecurringConfiguration> activeRecurringTerms(BillingConfiguration configuration) {
+        return billingRecurringConfigurationRepository.findAllByBillingConfigurationAndIsActiveTrue(configuration)
+                .stream()
+                .sorted(java.util.Comparator.comparing(
+                        (BillingRecurringConfiguration term) -> term.getRecurringStartDate() != null
+                                ? term.getRecurringStartDate() : configuration.getEffectiveFrom(),
+                        java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                .toList();
+    }
+
+    /**
+     * Approval of the configuration approves its pending renewals: each
+     * becomes an active term (and so gets its occurrences); the terms it
+     * renews are left as they are and keep billing their own periods.
+     */
+    private void activateApprovedRenewals(BillingConfiguration configuration) {
+        List<BillingRecurringConfiguration> pending = billingRecurringConfigurationRepository
+                .findByBillingConfigurationAndRenewalApprovalStatus(configuration, ApprovalStatus.PENDING_APPROVAL);
+        for (BillingRecurringConfiguration renewal : pending) {
+            renewal.setRenewalApprovalStatus(ApprovalStatus.APPROVED);
+            renewal.setIsActive(true);
+            renewal.setUpdatedAt(java.time.LocalDateTime.now());
+            billingRecurringConfigurationRepository.save(renewal);
+            log.info("Renewal term {} ({} to {}) approved and activated for Billing Configuration {}",
+                    renewal.getRecurringConfigurationId(), renewal.getRecurringStartDate(),
+                    renewal.getRecurringEndDate(), configuration.getBillingConfigurationId());
+        }
+    }
+
+    private void generateRecurringTerm(BillingConfiguration configuration, BillingRecurringConfiguration recurring) {
         LocalDate effectiveFrom = recurring.getRecurringStartDate() != null
                 ? recurring.getRecurringStartDate()
                 : configuration.getEffectiveFrom();
@@ -180,6 +226,8 @@ public class BillingOccurrenceServiceImpl {
             return;
         }
 
+        Map<UUID, String> occurrencesBefore = occurrenceStates(configuration);
+
         String billingTypeName = billingType.getBillingTypeName().trim();
 
         if (billingTypeName.equalsIgnoreCase("Fixed Price")) {
@@ -190,6 +238,52 @@ public class BillingOccurrenceServiceImpl {
         } else if (billingTypeName.equalsIgnoreCase("Milestone Plan")) {
             reconcileMilestonePlanOccurrences(configuration);
         }
+
+        requeueFailedRunsOfUnbilledOccurrences(configuration, occurrencesBefore);
+    }
+
+    /** What reconciliation may change about each occurrence, to see which ones it re-planned. */
+    private Map<UUID, String> occurrenceStates(BillingConfiguration configuration) {
+        Map<UUID, String> states = new HashMap<>();
+        for (BillingSchedule s : billingScheduleRepository.findByBillingConfiguration(configuration)) {
+            states.put(s.getBillingScheduleId(), s.getIsActive() + "|" + s.getPeriodStartDate() + "|"
+                    + s.getPeriodEndDate() + "|" + s.getBillingDate() + "|"
+                    + (s.getBillingAmount() == null ? null : s.getBillingAmount().stripTrailingZeros()));
+        }
+        return states;
+    }
+
+    /**
+     * After a re-approval, an automatic billing run that failed is made due
+     * again when the re-approval can have addressed its failure: its
+     * occurrence was re-planned (amount, dates or reactivation), or it failed
+     * on configuration eligibility before any billing step. It is retried
+     * against the approved plan instead of keeping the occurrence from ever
+     * being billed; no new run is created for an occurrence that has one.
+     * Only FAILED runs of active, unbilled occurrences are touched.
+     */
+    private void requeueFailedRunsOfUnbilledOccurrences(BillingConfiguration configuration,
+            Map<UUID, String> occurrencesBefore) {
+        Map<UUID, String> occurrencesAfter = occurrenceStates(configuration);
+        List<UUID> unbilled = billingScheduleRepository
+                .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration).stream()
+                .filter(s -> !isBilled(s) && BillingSchedule.UNBILLED_STATUSES.contains(s.getPeriodStatus()))
+                .map(BillingSchedule::getBillingScheduleId)
+                .toList();
+        if (unbilled.isEmpty()) {
+            return;
+        }
+        List<UUID> replanned = unbilled.stream()
+                .filter(id -> !java.util.Objects.equals(occurrencesBefore.get(id), occurrencesAfter.get(id)))
+                .toList();
+        int requeued = automaticBillingRunRepository.requeueFailedRunsOfOccurrences(unbilled,
+                // An empty IN list is not portable SQL; no id matches the placeholder.
+                replanned.isEmpty() ? List.of(new UUID(0L, 0L)) : replanned,
+                java.time.LocalDateTime.now());
+        if (requeued > 0) {
+            log.info("Re-queued {} failed automatic billing run(s) of Billing Configuration {} after re-approval.",
+                    requeued, configuration.getBillingConfigurationId());
+        }
     }
 
     private void generateOneTimeFixedPriceOccurrence(
@@ -198,10 +292,35 @@ public class BillingOccurrenceServiceImpl {
             LocalDate effectiveFrom,
             LocalDate effectiveTo) {
 
-        if (billingScheduleRepository.existsByBillingConfigurationAndPeriodStartDateAndPeriodEndDateAndIsActiveTrue(
-                configuration, effectiveFrom, effectiveTo)) {
-            log.info("One-time occurrence already exists for configuration {}", configuration.getBillingConfigurationId());
-            return;
+        // A One-Time contract is one obligation. Any of its occurrences for other
+        // dates is either already in billing - then the dates cannot move, or a
+        // second full-value occurrence would exist - or still SCHEDULED, and is
+        // retired so exactly one active occurrence remains.
+        List<BillingSchedule> forOtherDates = billingScheduleRepository.findByBillingConfiguration(configuration)
+                .stream()
+                .filter(s -> !(effectiveFrom.equals(s.getPeriodStartDate()) && effectiveTo.equals(s.getPeriodEndDate())))
+                .toList();
+        forOtherDates.stream()
+                .filter(s -> Boolean.TRUE.equals(s.getIsInvoiced())
+                        || (Boolean.TRUE.equals(s.getIsActive())
+                        && s.getPeriodStatus() != BillingPeriodStatus.SCHEDULED
+                        && s.getPeriodStatus() != BillingPeriodStatus.CANCELLED))
+                .findFirst()
+                .ifPresent(inBilling -> {
+                    throw new GlobalExceptionHandler.ValidationException(
+                            "The One-Time Fixed Price occurrence " + inBilling.getPeriodStartDate() + " to "
+                                    + inBilling.getPeriodEndDate() + " is already "
+                                    + (Boolean.TRUE.equals(inBilling.getIsInvoiced()) ? "INVOICED"
+                                    : inBilling.getPeriodStatus())
+                                    + "; it cannot be re-dated to " + effectiveFrom + " to " + effectiveTo
+                                    + " without creating a second full-value obligation. Use the Finance "
+                                    + "correction process.");
+                });
+        List<BillingSchedule> staleScheduled = forOtherDates.stream()
+                .filter(s -> Boolean.TRUE.equals(s.getIsActive()) && s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+                .toList();
+        if (!staleScheduled.isEmpty()) {
+            retireReplaceableOccurrences(staleScheduled);
         }
 
         BillingSchedule schedule = BillingSchedule.builder()
@@ -220,8 +339,7 @@ public class BillingOccurrenceServiceImpl {
                 .build();
 
         try {
-            logScheduleInsert("generateOneTimeFixedPriceOccurrence", schedule);
-            billingScheduleRepository.save(schedule);
+            persistOccurrencesIdempotently("generateOneTimeFixedPriceOccurrence", List.of(schedule));
 
             log.info(
                     "Generated one-time occurrence for Fixed Price configuration {} with period {} to {}",
@@ -295,15 +413,27 @@ public class BillingOccurrenceServiceImpl {
             return;
         }
 
+        BigDecimal remainingValue = unbilledRemainder(fixedPrice.getContractValue(), processedSchedules,
+                "Fixed Price", configuration);
+        if (remainingValue.signum() == 0) {
+            log.info("Fixed Price configuration {} is fully billed; no further occurrences are generated.",
+                    configuration.getBillingConfigurationId());
+            return;
+        }
+
         List<BillingSchedule> newSchedules = calculateAndCreateSchedules(
                 configuration,
                 null,
                 frequency,
+                effectiveFrom,
                 generationStartDate,
                 effectiveTo,
-                fixedPrice.getContractValue(),
+                // Only what the retained billed periods have not already billed.
+                remainingValue,
                 BillingScheduleType.PRIMARY,
-                existingSchedules.size() + 1
+                // Numbered from the retained processed periods, so a period that
+                // is regenerated while its occurrence is still kept keeps its number.
+                processedSchedules.size() + 1
         );
 
 // Add this check here
@@ -316,8 +446,7 @@ public class BillingOccurrenceServiceImpl {
         }
 
         try {
-            newSchedules.forEach(s -> logScheduleInsert("generateRecurringFixedPriceOccurrences", s));
-            billingScheduleRepository.saveAll(newSchedules);
+            persistOccurrencesIdempotently("generateRecurringFixedPriceOccurrences", newSchedules);
 
             log.info(
                     "Generated {} occurrences for Fixed Price configuration {} from {} to {}",
@@ -390,20 +519,30 @@ public class BillingOccurrenceServiceImpl {
             return;
         }
 
+        BigDecimal remainingValue = unbilledRemainder(recurring.getContractValue(), processedSchedules,
+                "Recurring", configuration);
+        if (remainingValue.signum() == 0) {
+            log.info("Recurring configuration {} is fully billed; no further occurrences are generated.",
+                    recurring.getRecurringConfigurationId());
+            return;
+        }
+
         List<BillingSchedule> newSchedules = calculateAndCreateSchedules(
                 configuration,
                 recurring,
                 frequency,
+                effectiveFrom,
                 generationStartDate,
                 effectiveTo,
-                recurring.getContractValue(),
+                // Only what the retained billed periods have not already billed.
+                remainingValue,
                 BillingScheduleType.PRIMARY,
-                existingSchedules.size() + 1
+                // See generateRecurringFixedPriceOccurrences.
+                processedSchedules.size() + 1
         );
 
         try {
-            newSchedules.forEach(s -> logScheduleInsert("generateRecurringOccurrences", s));
-            billingScheduleRepository.saveAll(newSchedules);
+            persistOccurrencesIdempotently("generateRecurringOccurrences", newSchedules);
 
             log.info(
                     "Generated {} occurrences for Recurring configuration {} from {} to {}",
@@ -442,10 +581,246 @@ public class BillingOccurrenceServiceImpl {
         }
     }
 
+    /**
+     * The part of {@code contractValue} that regeneration may still allocate:
+     * the contract value less what the retained billed (tax-calculated or
+     * invoiced) occurrences already bill. Regenerating from the full value
+     * after some periods were billed would bill the contract more than once.
+     *
+     * @throws GlobalExceptionHandler.ValidationException when the billed
+     *         occurrences already exceed the contract value
+     */
+    private static BigDecimal unbilledRemainder(BigDecimal contractValue, List<BillingSchedule> billedSchedules,
+            String contractType, BillingConfiguration configuration) {
+        if (contractValue == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The " + contractType + " contract value of Billing Configuration "
+                            + configuration.getBillingConfigurationId() + " is missing.");
+        }
+        BigDecimal remaining = contractValue.subtract(allocatedAmount(billedSchedules));
+        if (remaining.signum() < 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The billed occurrences of Billing Configuration " + configuration.getBillingConfigurationId()
+                            + " already total more than the " + contractType + " contract value " + contractValue
+                            + "; the schedule cannot be regenerated. Use the Finance correction process.");
+        }
+        return remaining;
+    }
+
+    /**
+     * Writes generated occurrences so that generating the same period twice
+     * never creates a second occurrence. {@code uk_billing_schedule_period}
+     * identifies one occurrence per (configuration, period start, period end)
+     * and also covers inactive rows, so each generated period is first looked
+     * up by that key:
+     * <ul>
+     *   <li>none - inserted;</li>
+     *   <li>active - kept exactly as it is (it may already be due, taxed or
+     *       invoiced), the generated copy is dropped;</li>
+     *   <li>inactive and not invoiced (deactivated configuration, replaced
+     *       schedule) - reactivated with the generated values instead of
+     *       inserting a row the unique key would reject, the same way
+     *       {@link #generateOccurrencesForMilestonePlan} already does;</li>
+     *   <li>inactive and invoiced - left untouched.</li>
+     * </ul>
+     * Flushed so a key conflict with a concurrent writer is raised here and
+     * attributed to occurrence generation, not to the caller's commit.
+     *
+     * @return the number of occurrences inserted or reactivated
+     */
+    private int persistOccurrencesIdempotently(String source, List<BillingSchedule> generated) {
+        List<BillingSchedule> toSave = new ArrayList<>();
+
+        for (BillingSchedule schedule : generated) {
+            BillingSchedule existing = billingScheduleRepository
+                    .findByBillingConfigurationAndPeriodStartDateAndPeriodEndDate(
+                            schedule.getBillingConfiguration(),
+                            schedule.getPeriodStartDate(),
+                            schedule.getPeriodEndDate())
+                    .orElse(null);
+
+            if (existing == null) {
+                logScheduleInsert(source, schedule);
+                toSave.add(schedule);
+            } else if (Boolean.TRUE.equals(existing.getIsActive())) {
+                log.info("[BillingScheduleExists] source=BillingOccurrenceServiceImpl.{} occurrence {} already covers "
+                                + "period {} to {} (status {}); not generated again.",
+                        source, existing.getBillingScheduleId(), existing.getPeriodStartDate(),
+                        existing.getPeriodEndDate(), existing.getPeriodStatus());
+            } else if (Boolean.TRUE.equals(existing.getIsInvoiced())) {
+                log.warn("[BillingScheduleInvoicedInactive] source=BillingOccurrenceServiceImpl.{} inactive invoiced "
+                                + "occurrence {} covers period {} to {}; left untouched.",
+                        source, existing.getBillingScheduleId(), existing.getPeriodStartDate(),
+                        existing.getPeriodEndDate());
+            } else {
+                existing.setIsActive(true);
+                existing.setRecurringConfiguration(schedule.getRecurringConfiguration());
+                existing.setPeriodNumber(schedule.getPeriodNumber());
+                existing.setBillingDate(schedule.getBillingDate());
+                existing.setBillingAmount(schedule.getBillingAmount());
+                existing.setScheduleType(schedule.getScheduleType());
+                existing.setIsPartialPeriod(schedule.getIsPartialPeriod());
+                existing.setPeriodStatus(BillingPeriodStatus.SCHEDULED);
+                existing.setTaxStatus(BillingPeriodStatus.PENDING);
+                existing.setIsInvoiced(false);
+                existing.setInvoiceDate(null);
+                log.info("[BillingScheduleReactivated] source=BillingOccurrenceServiceImpl.{} occurrence {} for period "
+                                + "{} to {} reactivated.",
+                        source, existing.getBillingScheduleId(), existing.getPeriodStartDate(),
+                        existing.getPeriodEndDate());
+                toSave.add(existing);
+            }
+        }
+
+        if (!toSave.isEmpty()) {
+            billingScheduleRepository.saveAll(toSave);
+            billingScheduleRepository.flush();
+        }
+        return toSave.size();
+    }
+
+    /**
+     * The billing periods of a Time &amp; Material configuration, derived from
+     * its own Billing Frequency and billing range by the same period math
+     * that generates every other billing type's occurrences
+     * ({@link #calculatePeriodEndDate}) - so a T&amp;M period is never assumed
+     * to be a calendar month. Weekly, monthly from any start day, quarterly
+     * etc. all follow from the configured frequency and Effective From.
+     * <p>
+     * Read-only: T&amp;M has no persisted occurrences (its amount is only known
+     * once timesheets are acquired), so these periods are what an acquisition
+     * for the configuration is made against. Each period's billing date is its
+     * end date, as for every generated occurrence; a period is due on its
+     * billing date or on any later processing date.
+     * <p>
+     * The billing range ends at the earlier of Effective To and the project end
+     * date - the dates the configuration expires on - so the final, possibly
+     * partial, period is still returned after the configuration has expired.
+     * An open-ended configuration yields periods up to the one containing
+     * {@code asOf}.
+     */
+    public List<BillingPeriodDto> resolveTimeAndMaterialBillingPeriods(UUID billingConfigurationId, LocalDate asOf) {
+        BillingConfiguration configuration = billingConfigurationRepository
+                .findById(billingConfigurationId)
+                .orElseThrow(() -> new GlobalExceptionHandler.ResourceNotFoundException(
+                        "Billing Configuration not found"));
+
+        validateConfigurationApproved(configuration);
+
+        if (!isTimeAndMaterial(configuration.getBillingType())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing periods can only be resolved this way for Time & Material billing. "
+                            + "Other billing types use their generated Billing Occurrences.");
+        }
+
+        LocalDate rangeStart = configuration.getEffectiveFrom();
+        if (rangeStart == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Effective From is required to determine Time & Material billing periods.");
+        }
+
+        LocalDate rangeEnd = resolveBillingRangeEnd(configuration);
+
+        BillingFrequencyMaster frequency = configuration.getBillingFrequency();
+        if (frequency == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Frequency is required to determine Time & Material billing periods.");
+        }
+
+        List<BillingPeriodDto> periods = new ArrayList<>();
+
+        if (isOneTimeFrequency(frequency)) {
+            if (rangeEnd == null) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "A One-Time Time & Material configuration needs an Effective To or project end date.");
+            }
+            periods.add(billingPeriod(1, rangeStart, rangeEnd, false));
+            return periods;
+        }
+
+        if (frequency.getDurationUnit() == null || frequency.getDurationValue() == null
+                || frequency.getDurationValue() <= 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Frequency " + frequency.getBillingFrequencyName()
+                            + " has no valid duration to determine billing periods.");
+        }
+
+        LocalDate lastStart = rangeEnd != null ? rangeEnd : asOf;
+        LocalDate currentStart = rangeStart;
+        int periodNumber = 1;
+
+        while (!currentStart.isAfter(lastStart)) {
+            LocalDate fullPeriodEnd = calculatePeriodEndDate(rangeStart, currentStart, frequency);
+            LocalDate currentEnd = rangeEnd != null && fullPeriodEnd.isAfter(rangeEnd) ? rangeEnd : fullPeriodEnd;
+
+            periods.add(billingPeriod(periodNumber, currentStart, currentEnd, !currentEnd.isEqual(fullPeriodEnd)));
+
+            currentStart = currentEnd.plusDays(1);
+            periodNumber++;
+        }
+
+        return periods;
+    }
+
+    private BillingPeriodDto billingPeriod(int periodNumber, LocalDate start, LocalDate end, boolean partial) {
+        return BillingPeriodDto.builder()
+                .periodNumber(periodNumber)
+                .periodStartDate(start)
+                .periodEndDate(end)
+                .billingDate(end)
+                .isPartialPeriod(partial)
+                .build();
+    }
+
+    /**
+     * Earlier of Effective To and the project end date - the same two dates
+     * BillingConfigurationStatusScheduler expires the configuration on.
+     * {@code null} when neither is set (open-ended).
+     */
+    private LocalDate resolveBillingRangeEnd(BillingConfiguration configuration) {
+        LocalDate effectiveTo = configuration.getEffectiveTo();
+        LocalDate projectEnd = configuration.getProject() != null ? configuration.getProject().getEndDate() : null;
+
+        if (effectiveTo == null) {
+            return projectEnd;
+        }
+        if (projectEnd == null) {
+            return effectiveTo;
+        }
+        return effectiveTo.isBefore(projectEnd) ? effectiveTo : projectEnd;
+    }
+
+    /**
+     * Time &amp; Material billing type names in use: "Timesheet Based" (the
+     * master name the rate card validation requires) and the
+     * "Time &amp; Material" spellings InvoiceServiceImpl recognises.
+     */
+    private boolean isTimeAndMaterial(BillingTypeMaster billingType) {
+        if (billingType == null || billingType.getBillingTypeName() == null) {
+            return false;
+        }
+        return TIME_AND_MATERIAL_BILLING_TYPE_NAMES.contains(
+                billingType.getBillingTypeName().trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Lower-case Time &amp; Material billing type names in use: "Timesheet Based"
+     * (the master name the rate card validation requires) and the
+     * "Time &amp; Material" spellings InvoiceServiceImpl recognises.
+     */
+    public static final Set<String> TIME_AND_MATERIAL_BILLING_TYPE_NAMES = Set.of(
+            "timesheet based", "time & material", "time and material", "time_material");
+
+    private boolean isOneTimeFrequency(BillingFrequencyMaster frequency) {
+        return frequency.getBillingFrequencyName() != null
+                && frequency.getBillingFrequencyName().trim().equalsIgnoreCase("One-Time");
+    }
+
     private List<BillingSchedule> calculateAndCreateSchedules(
             BillingConfiguration configuration,
             BillingRecurringConfiguration recurring,
             BillingFrequencyMaster frequency,
+            LocalDate anchor,
             LocalDate startDate,
             LocalDate endDate,
             BigDecimal totalContractValue,
@@ -460,13 +835,10 @@ public class BillingOccurrenceServiceImpl {
         boolean isFixedPrice = (recurring == null);
 
         while (!currentStart.isAfter(endDate)) {
-            LocalDate currentEnd = calculatePeriodEndDate(currentStart, frequency);
+            LocalDate fullPeriodEnd = calculatePeriodEndDate(anchor, currentStart, frequency);
+            LocalDate currentEnd = fullPeriodEnd.isAfter(endDate) ? endDate : fullPeriodEnd;
 
-            if (currentEnd.isAfter(endDate)) {
-                currentEnd = endDate;
-            }
-
-            boolean isPartial = !calculatePeriodEndDate(currentStart, frequency).isEqual(currentEnd);
+            boolean isPartial = !fullPeriodEnd.isEqual(currentEnd);
             boolean isLastPeriod = currentEnd.isEqual(endDate);
 
             BigDecimal periodAmount;
@@ -476,6 +848,7 @@ public class BillingOccurrenceServiceImpl {
                 // This is handled by counting periods before the loop
                 periodAmount = calculateFixedPricePeriodAmount(
                         totalContractValue, 
+                        anchor,
                         startDate, 
                         endDate, 
                         frequency, 
@@ -537,6 +910,7 @@ public class BillingOccurrenceServiceImpl {
      */
     private BigDecimal calculateFixedPricePeriodAmount(
             BigDecimal totalContractValue,
+            LocalDate anchor,
             LocalDate startDate,
             LocalDate endDate,
             BillingFrequencyMaster frequency,
@@ -544,7 +918,7 @@ public class BillingOccurrenceServiceImpl {
             boolean isLastPeriod) {
         
         // Count total number of periods
-        int totalPeriods = countPeriods(startDate, endDate, frequency);
+        int totalPeriods = countPeriods(anchor, startDate, endDate, frequency);
         
         if (totalPeriods <= 0) {
             return totalContractValue;
@@ -571,12 +945,13 @@ public class BillingOccurrenceServiceImpl {
      * @param frequency Billing frequency
      * @return Number of periods
      */
-    private int countPeriods(LocalDate startDate, LocalDate endDate, BillingFrequencyMaster frequency) {
+    private int countPeriods(LocalDate anchor, LocalDate startDate, LocalDate endDate,
+            BillingFrequencyMaster frequency) {
         int count = 0;
         LocalDate currentStart = startDate;
         
         while (!currentStart.isAfter(endDate)) {
-            LocalDate currentEnd = calculatePeriodEndDate(currentStart, frequency);
+            LocalDate currentEnd = calculatePeriodEndDate(anchor, currentStart, frequency);
             if (currentEnd.isAfter(endDate)) {
                 currentEnd = endDate;
             }
@@ -611,15 +986,67 @@ public class BillingOccurrenceServiceImpl {
         return null;
     }
 
+    /**
+     * Last day of the period that starts on {@code startDate}. A period keeps
+     * its configured cycle (15 Oct - 14 Nov), except that a period starting on
+     * the last day of a month ends on the last day of the month the cycle
+     * reaches (31 Jan - 28/29 Feb, 31 Mar - 30 Apr). Without that rule
+     * {@code plusMonths} clamps 31 Jan to 28 Feb, the period ends 27 Feb, and
+     * every later period drifts to the 27th/28th.
+     */
     LocalDate calculatePeriodEndDate(LocalDate startDate, BillingFrequencyMaster frequency) {
         RenewalDurationUnit unit = frequency.getDurationUnit();
         Integer durationValue = frequency.getDurationValue();
+        boolean startsOnMonthEnd = startDate.getDayOfMonth() == startDate.lengthOfMonth();
 
         return switch (unit) {
             case DAYS -> startDate.plusDays(durationValue - 1);
-            case MONTHS -> startDate.plusMonths(durationValue).minusDays(1);
-            case YEARS -> startDate.plusYears(durationValue).minusDays(1);
+            case MONTHS -> startsOnMonthEnd
+                    ? lastDayOfMonth(startDate.plusMonths(durationValue))
+                    : startDate.plusMonths(durationValue).minusDays(1);
+            case YEARS -> startsOnMonthEnd
+                    ? lastDayOfMonth(startDate.plusYears(durationValue))
+                    : startDate.plusYears(durationValue).minusDays(1);
         };
+    }
+
+    /**
+     * Last day of the period starting on {@code periodStart} in a schedule
+     * whose first period started on {@code anchor} (its Effective From).
+     * Periods are inclusive and contiguous: each ends the day before the next
+     * starts, and the billing date is the period end.
+     * <ul>
+     *   <li>End-of-month anchor (the last day of its month): periods end on
+     *       month ends - 31 Jan - 28/29 Feb, then calendar months
+     *       ({@link #calculatePeriodEndDate(LocalDate, BillingFrequencyMaster)}).</li>
+     *   <li>Fixed day-of-month anchor: every period starts on the anchor day,
+     *       clamped to the last day of a shorter month and restored afterwards
+     *       (30 Jan, 28/29 Feb, 30 Mar). The next start is always derived from
+     *       the original anchor, never from a clamped date, so the day cannot
+     *       drift.</li>
+     *   <li>Day-based frequencies are fixed-length.</li>
+     * </ul>
+     * A {@code periodStart} that is not on the anchor's cycle (a regenerated
+     * schedule) runs to the next anchor date.
+     */
+    LocalDate calculatePeriodEndDate(LocalDate anchor, LocalDate periodStart, BillingFrequencyMaster frequency) {
+        RenewalDurationUnit unit = frequency.getDurationUnit();
+        Integer durationValue = frequency.getDurationValue();
+        if (anchor == null || unit == RenewalDurationUnit.DAYS || durationValue == null || durationValue <= 0
+                || anchor.getDayOfMonth() == anchor.lengthOfMonth()) {
+            return calculatePeriodEndDate(periodStart, frequency);
+        }
+        LocalDate nextStart = anchor;
+        for (long cycle = 1; !nextStart.isAfter(periodStart); cycle++) {
+            nextStart = unit == RenewalDurationUnit.MONTHS
+                    ? anchor.plusMonths(cycle * durationValue)
+                    : anchor.plusYears(cycle * durationValue);
+        }
+        return nextStart.minusDays(1);
+    }
+
+    private static LocalDate lastDayOfMonth(LocalDate date) {
+        return date.withDayOfMonth(date.lengthOfMonth());
     }
 
     /**
@@ -652,14 +1079,8 @@ public class BillingOccurrenceServiceImpl {
             return false;
         }
 
-        // Calculate the end of the first complete cycle
-        LocalDate cycleEnd;
-        switch (unit) {
-            case DAYS -> cycleEnd = effectiveFrom.plusDays(durationValue - 1);
-            case MONTHS -> cycleEnd = effectiveFrom.plusMonths(durationValue).minusDays(1);
-            case YEARS -> cycleEnd = effectiveFrom.plusYears(durationValue).minusDays(1);
-            default -> cycleEnd = effectiveFrom;
-        }
+        // The end of the first complete cycle - the same period math as generation.
+        LocalDate cycleEnd = calculatePeriodEndDate(effectiveFrom, frequency);
 
         // At least one complete cycle exists if cycleEnd <= effectiveTo
         return !cycleEnd.isAfter(effectiveTo);
@@ -677,6 +1098,13 @@ public class BillingOccurrenceServiceImpl {
         List<BillingSchedule> existingSchedules = billingScheduleRepository
                 .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration);
 
+        if (!existingSchedules.isEmpty() && matchesPlannedSchedule(existingSchedules,
+                plannedFixedPriceSchedule(configuration, fixedPrice, fixedPrice.getContractValue()))) {
+            log.info("Fixed Price configuration {} unchanged; its occurrences are left as they are.",
+                    configuration.getBillingConfigurationId());
+            return;
+        }
+
         ConfigurationChangeDetector changeDetector = detectFixedPriceChanges(configuration, fixedPrice, existingSchedules);
 
         if (changeDetector.hasEffectiveFromChanged()) {
@@ -691,16 +1119,23 @@ public class BillingOccurrenceServiceImpl {
     }
 
     private void reconcileRecurringOccurrences(BillingConfiguration configuration) {
-        BillingRecurringConfiguration recurring = billingRecurringConfigurationRepository
-                .findByBillingConfigurationAndIsActiveTrue(configuration)
-                .orElse(null);
-
-        if (recurring == null) {
-            return;
+        activateApprovedRenewals(configuration);
+        for (BillingRecurringConfiguration recurring : activeRecurringTerms(configuration)) {
+            reconcileRecurringTerm(configuration, recurring);
         }
+    }
+
+    private void reconcileRecurringTerm(BillingConfiguration configuration, BillingRecurringConfiguration recurring) {
 
         List<BillingSchedule> existingSchedules = billingScheduleRepository
                 .findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurring);
+
+        if (!existingSchedules.isEmpty() && matchesPlannedSchedule(existingSchedules,
+                plannedRecurringSchedule(configuration, recurring, recurring.getContractValue()))) {
+            log.info("Recurring configuration {} unchanged; its occurrences are left as they are.",
+                    recurring.getRecurringConfigurationId());
+            return;
+        }
 
         ConfigurationChangeDetector changeDetector = detectRecurringChanges(configuration, recurring, existingSchedules);
 
@@ -753,11 +1188,311 @@ public class BillingOccurrenceServiceImpl {
         }
     }
 
+    /**
+     * Checks that a Fixed Price occurrence can be billed as generated: its
+     * configuration still has an active Fixed Price configuration and a
+     * currency, its own amount is positive, and the configuration's active
+     * occurrences together do not exceed the contract value - so a schedule
+     * left over-allocated (e.g. regenerated from the full contract value after
+     * some periods were already billed) is reported, never invoiced. Reads
+     * only; the amount billed stays the occurrence's own {@code billingAmount}.
+     *
+     * @throws GlobalExceptionHandler.ValidationException naming what is wrong
+     */
+    @Transactional(readOnly = true)
+    public void requireFixedPriceOccurrenceBillable(UUID billingScheduleId) {
+        BillingSchedule occurrence = loadOccurrenceForBilling(billingScheduleId);
+        BillingConfiguration configuration = occurrence.getBillingConfiguration();
+
+        BillingFixedPriceConfiguration fixedPrice = billingFixedPriceRepository
+                .findByBillingConfigurationAndIsActiveTrue(configuration)
+                .orElseThrow(() -> new GlobalExceptionHandler.ValidationException(
+                        "No active Fixed Price configuration exists for Billing Configuration "
+                                + configuration.getBillingConfigurationId() + "."));
+
+        BigDecimal contractValue = fixedPrice.getContractValue();
+        if (contractValue == null || contractValue.signum() <= 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The Fixed Price contract value of Billing Configuration "
+                            + configuration.getBillingConfigurationId() + " is missing or not positive.");
+        }
+        requirePositiveAmountAndCurrency(occurrence, configuration);
+        requireWithinContractValue(configuration, activeBillableOccurrences(configuration), contractValue,
+                "Fixed Price contract value");
+    }
+
+    /**
+     * Checks that a Milestone Plan occurrence - one milestone payment
+     * (FULL_PAYMENT) or one installment (INSTALLMENTS) - can be billed as
+     * generated. The occurrence must still be the one its payment entry
+     * produced: an active entry with the same sequence, billing date and
+     * amount, represented by no other active occurrence (reconciliation only
+     * regenerates SCHEDULED occurrences, so one already further along can be
+     * left stale, or duplicated by a re-dated entry). Also requires a
+     * positive amount, a currency, and the plan's active occurrences not to
+     * exceed its total contract value. Reads only; the amount billed stays the
+     * occurrence's own {@code billingAmount}.
+     *
+     * @throws GlobalExceptionHandler.ValidationException naming what is wrong
+     */
+    @Transactional(readOnly = true)
+    public void requireMilestonePlanOccurrenceBillable(UUID billingScheduleId) {
+        BillingSchedule occurrence = loadOccurrenceForBilling(billingScheduleId);
+        BillingConfiguration configuration = occurrence.getBillingConfiguration();
+
+        BillingMilestonePlan plan = billingMilestonePlanRepository
+                .findByBillingConfigurationAndIsActiveTrue(configuration)
+                .orElseThrow(() -> new GlobalExceptionHandler.ValidationException(
+                        "No active Milestone Plan exists for Billing Configuration "
+                                + configuration.getBillingConfigurationId() + "."));
+
+        BigDecimal totalContractValue = plan.getTotalContractValue();
+        if (totalContractValue == null || totalContractValue.signum() <= 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The Milestone Plan total contract value of Billing Configuration "
+                            + configuration.getBillingConfigurationId() + " is missing or not positive.");
+        }
+        requirePositiveAmountAndCurrency(occurrence, configuration);
+
+        Integer sequence = occurrence.getPeriodNumber();
+        String payment = "Payment " + sequence;
+        BillingPaymentEntry entry = billingPaymentEntryRepository
+                .findByMilestonePlanAndIsActiveTrueOrderBySequenceAsc(plan).stream()
+                .filter(candidate -> sequence != null && sequence.equals(candidate.getSequence()))
+                .findFirst()
+                .orElseThrow(() -> new GlobalExceptionHandler.ValidationException(
+                        payment + " no longer exists in the active Milestone Plan; its Billing Occurrence "
+                                + "cannot be billed."));
+        if (entry.getBillingDate() == null || !entry.getBillingDate().equals(occurrence.getBillingDate())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    payment + " is now dated " + entry.getBillingDate() + " but its Billing Occurrence is dated "
+                            + occurrence.getBillingDate() + "; the occurrence must be reconciled before it is billed.");
+        }
+        if (entry.getAmount() == null || entry.getAmount().compareTo(occurrence.getBillingAmount()) != 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    payment + " is now " + entry.getAmount() + " but its Billing Occurrence is "
+                            + occurrence.getBillingAmount() + "; the occurrence must be reconciled before it is billed.");
+        }
+
+        List<BillingSchedule> active = activeBillableOccurrences(configuration);
+        long representations = active.stream()
+                .filter(schedule -> sequence.equals(schedule.getPeriodNumber()))
+                .count();
+        if (representations > 1) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    payment + " is represented by " + representations + " active Billing Occurrences; it cannot "
+                            + "be billed until the duplicate is resolved.");
+        }
+        requireWithinContractValue(configuration, active, totalContractValue,
+                "Milestone Plan total contract value");
+    }
+
+    /**
+     * Checks that a Recurring / Subscription occurrence can be billed as
+     * generated. Its amount is the period's prorated share of the recurring
+     * configuration's contract value, stored on the occurrence; this only
+     * confirms that the occurrence still belongs to an active recurring
+     * configuration of its billing configuration, lies within that
+     * configuration's term, overlaps no other active occurrence of the
+     * billing configuration (so a period - e.g. at a renewal boundary - is
+     * never billed twice), has a positive amount and a currency, and that the
+     * recurring configuration's active occurrences do not exceed its contract
+     * value (an update regenerates from the full value after the last
+     * invoiced period). Each renewal is its own recurring configuration with
+     * its own contract value and is checked on its own. Reads only.
+     *
+     * @throws GlobalExceptionHandler.ValidationException naming what is wrong
+     */
+    @Transactional(readOnly = true)
+    public void requireRecurringOccurrenceBillable(UUID billingScheduleId) {
+        BillingSchedule occurrence = loadOccurrenceForBilling(billingScheduleId);
+        BillingConfiguration configuration = occurrence.getBillingConfiguration();
+        String period = "Billing period " + occurrence.getPeriodStartDate() + " to " + occurrence.getPeriodEndDate();
+
+        BillingRecurringConfiguration recurring = occurrence.getRecurringConfiguration();
+        if (recurring == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    period + " has no Recurring configuration.");
+        }
+        if (recurring.getBillingConfiguration() == null
+                || !configuration.getBillingConfigurationId().equals(
+                        recurring.getBillingConfiguration().getBillingConfigurationId())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    period + " belongs to a Recurring configuration of another Billing Configuration.");
+        }
+        if (!Boolean.TRUE.equals(recurring.getIsActive())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The Recurring configuration of " + period.toLowerCase(java.util.Locale.ROOT)
+                            + " is no longer active.");
+        }
+
+        BigDecimal contractValue = recurring.getContractValue();
+        if (contractValue == null || contractValue.signum() <= 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The Recurring contract value of Billing Configuration "
+                            + configuration.getBillingConfigurationId() + " is missing or not positive.");
+        }
+        requirePositiveAmountAndCurrency(occurrence, configuration);
+
+        LocalDate start = occurrence.getPeriodStartDate();
+        LocalDate end = occurrence.getPeriodEndDate();
+        if (start == null || end == null || start.isAfter(end)) {
+            throw new GlobalExceptionHandler.ValidationException(period + " is not a valid billing period.");
+        }
+        LocalDate termStart = recurring.getRecurringStartDate() != null
+                ? recurring.getRecurringStartDate() : configuration.getEffectiveFrom();
+        LocalDate termEnd = recurring.getRecurringEndDate() != null
+                ? recurring.getRecurringEndDate() : configuration.getEffectiveTo();
+        if ((termStart != null && start.isBefore(termStart)) || (termEnd != null && end.isAfter(termEnd))) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    period + " lies outside the recurring term " + termStart + " to " + termEnd + ".");
+        }
+
+        for (BillingSchedule other : activeBillableOccurrences(configuration)) {
+            if (!other.getBillingScheduleId().equals(occurrence.getBillingScheduleId())
+                    && other.getPeriodStartDate() != null && other.getPeriodEndDate() != null
+                    && !other.getPeriodStartDate().isAfter(end) && !other.getPeriodEndDate().isBefore(start)) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        period + " overlaps billing period " + other.getPeriodStartDate() + " to "
+                                + other.getPeriodEndDate() + " (" + other.getPeriodStatus() + "); it cannot be "
+                                + "billed until the overlap is resolved.");
+            }
+        }
+
+        List<BillingSchedule> ofThisRecurring = billingScheduleRepository
+                .findByRecurringConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(recurring).stream()
+                .filter(schedule -> schedule.getPeriodStatus() != BillingPeriodStatus.CANCELLED)
+                .toList();
+        requireWithinContractValue(configuration, ofThisRecurring, contractValue, "Recurring contract value");
+    }
+
+    /**
+     * The financial checks every path that bills an occurrence applies - the
+     * manual tax and invoice endpoints as well as automatic billing: the
+     * occurrence is active and its configuration APPROVED (an edited
+     * configuration awaiting re-approval is not billed at its old values),
+     * and the billing type's rule holds - Fixed Price contract cap, Milestone
+     * / Installment payment entry, Recurring term, overlap and cap. The type
+     * is classified exactly as automatic billing classifies it. Reads only.
+     * Manual billing of an AUTOMATIC configuration stays allowed; the unique
+     * keys on tax calculation and invoice prevent billing it twice.
+     *
+     * @throws GlobalExceptionHandler.ValidationException naming what is wrong
+     */
+    /**
+     * G-32: Fixed Price terms that billing does not apply yet. Retention and
+     * advance received are captured and validated on the configuration, but
+     * no Finance rule says how they change an invoice (deduct, withhold,
+     * release, offset), so occurrences bill the full amount. Automatic
+     * billing must not issue such invoices on its own: it stops for a person
+     * (BUSINESS_DECISIONS.md BD-01/BD-02). Manual billing is unchanged.
+     *
+     * @return the undecided terms in force (empty when none)
+     */
+    @Transactional(readOnly = true)
+    public List<String> undecidedFixedPriceTerms(UUID billingConfigurationId) {
+        BillingConfiguration configuration = billingConfigurationRepository.findById(billingConfigurationId)
+                .orElse(null);
+        if (configuration == null) {
+            return List.of();
+        }
+        List<String> terms = new ArrayList<>();
+        billingFixedPriceRepository.findByBillingConfigurationAndIsActiveTrue(configuration).ifPresent(fixedPrice -> {
+            if (fixedPrice.getRetentionPercentage() != null && fixedPrice.getRetentionPercentage().signum() > 0) {
+                terms.add("retention " + fixedPrice.getRetentionPercentage() + "%");
+            }
+            if (fixedPrice.getAdvanceReceived() != null && fixedPrice.getAdvanceReceived().signum() > 0) {
+                terms.add("advance received");
+            }
+        });
+        return terms;
+    }
+
+    @Transactional(readOnly = true)
+    public void requireOccurrenceBillable(UUID billingScheduleId) {
+        BillingSchedule occurrence = loadOccurrenceForBilling(billingScheduleId);
+        BillingConfiguration configuration = occurrence.getBillingConfiguration();
+
+        if (configuration.getApprovalStatus() != ApprovalStatus.APPROVED) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Configuration " + configuration.getBillingConfigurationId()
+                            + " must be APPROVED before its occurrences are billed. Current status: "
+                            + configuration.getApprovalStatus() + ".");
+        }
+        if (!Boolean.TRUE.equals(occurrence.getIsActive())) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Occurrence " + billingScheduleId + " is inactive and cannot be billed.");
+        }
+
+        BillingType billingType = configuration.getBillingType() == null ? null
+                : BillingConfigurationIntegrationImpl.toBillingTypeEnum(
+                        configuration.getBillingType().getBillingTypeName());
+        if (billingType == BillingType.FIXED_PRICE) {
+            requireFixedPriceOccurrenceBillable(billingScheduleId);
+        } else if (billingType == BillingType.MILESTONE) {
+            requireMilestonePlanOccurrenceBillable(billingScheduleId);
+        } else if (billingType == BillingType.RETAINER) {
+            requireRecurringOccurrenceBillable(billingScheduleId);
+        } else {
+            requirePositiveAmountAndCurrency(occurrence, configuration);
+        }
+    }
+
+    private BillingSchedule loadOccurrenceForBilling(UUID billingScheduleId) {
+        BillingSchedule occurrence = billingScheduleRepository.findById(billingScheduleId)
+                .orElseThrow(() -> new GlobalExceptionHandler.ValidationException(
+                        "Billing Occurrence " + billingScheduleId + " no longer exists."));
+        if (occurrence.getBillingConfiguration() == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Occurrence " + billingScheduleId + " has no Billing Configuration.");
+        }
+        return occurrence;
+    }
+
+    private static void requirePositiveAmountAndCurrency(BillingSchedule occurrence,
+            BillingConfiguration configuration) {
+        if (occurrence.getBillingAmount() == null || occurrence.getBillingAmount().signum() <= 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Billing Occurrence " + occurrence.getPeriodNumber() + " has no positive billing amount.");
+        }
+        if (configuration.getCurrency() == null) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "No currency is configured for Billing Configuration "
+                            + configuration.getBillingConfigurationId() + ".");
+        }
+    }
+
+    private List<BillingSchedule> activeBillableOccurrences(BillingConfiguration configuration) {
+        return billingScheduleRepository
+                .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration).stream()
+                .filter(schedule -> schedule.getPeriodStatus() != BillingPeriodStatus.CANCELLED)
+                .toList();
+    }
+
+    private static void requireWithinContractValue(BillingConfiguration configuration,
+            List<BillingSchedule> activeOccurrences, BigDecimal contractValue, String contractValueName) {
+        BigDecimal allocated = activeOccurrences.stream()
+                .map(BillingSchedule::getBillingAmount)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (allocated.compareTo(contractValue) > 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The active Billing Occurrences of Billing Configuration "
+                            + configuration.getBillingConfigurationId() + " total " + allocated
+                            + ", more than the " + contractValueName + " " + contractValue
+                            + "; the schedule must be corrected before it is billed.");
+        }
+    }
+
     public void transitionScheduledToTaxPending() {
         LocalDate today = LocalDate.now();
 
+        // Only SCHEDULED occurrences can move to TAX_PENDING; selecting on the
+        // period status as well keeps rows that can never transition from being
+        // re-selected on every run.
         List<BillingSchedule> scheduledOccurrences = billingScheduleRepository
-                .findByBillingDateLessThanEqualAndTaxStatusAndIsActiveTrue(today, BillingPeriodStatus.PENDING);
+                .findByBillingDateLessThanEqualAndPeriodStatusAndTaxStatusAndIsActiveTrue(
+                        today, BillingPeriodStatus.SCHEDULED, BillingPeriodStatus.PENDING);
 
         int successCount = 0;
         int failureCount = 0;
@@ -779,8 +1514,14 @@ public class BillingOccurrenceServiceImpl {
             }
         }
 
-        log.info("Completed transition of SCHEDULED occurrences to TAX_PENDING: {} succeeded, {} failed", 
-                successCount, failureCount);
+        if (scheduledOccurrences.isEmpty()) {
+            // Not a failure: occurrences due on approval are already promoted then, and
+            // tax itself is calculated by automatic billing (or manually), never here.
+            log.debug("No SCHEDULED occurrence is due on or before {}; nothing to transition to TAX_PENDING", today);
+        } else {
+            log.info("Completed transition of SCHEDULED occurrences to TAX_PENDING (due on or before {}): "
+                    + "{} found, {} succeeded, {} failed", today, scheduledOccurrences.size(), successCount, failureCount);
+        }
     }
 
     private static class ConfigurationChangeDetector {
@@ -888,8 +1629,9 @@ public class BillingOccurrenceServiceImpl {
                     LocalDate periodStart = scheduleToUse.getPeriodStartDate();
                     LocalDate periodEnd = scheduleToUse.getPeriodEndDate();
                     
-                    // Calculate the duration in months using calendar-aware semantics
-                    long monthsBetween = ChronoUnit.MONTHS.between(periodStart, periodEnd);
+                    // Calculate the duration in months using calendar-aware semantics. The
+                    // period end is inclusive (1 Oct - 31 Oct is one month), hence + 1 day.
+                    long monthsBetween = ChronoUnit.MONTHS.between(periodStart, periodEnd.plusDays(1));
                     
                     // Map duration to expected frequency using BillingFrequencyMaster properties
                     oldFrequencyId = inferFrequencyIdFromDuration(monthsBetween, configuration);
@@ -900,11 +1642,12 @@ public class BillingOccurrenceServiceImpl {
                         boolean consistent = fullPeriodSchedules.stream()
                                 .allMatch(s -> {
                                     long months = ChronoUnit.MONTHS.between(
-                                            s.getPeriodStartDate(), 
-                                            s.getPeriodEndDate()
+                                            s.getPeriodStartDate(),
+                                            s.getPeriodEndDate().plusDays(1)
                                     );
                                     UUID freqId = inferFrequencyIdFromDuration(months, configuration);
-                                    return frequencyIdForComparison.equals(freqId);
+                                    // Either side may be null (duration matches no frequency master).
+                                    return java.util.Objects.equals(frequencyIdForComparison, freqId);
                                 });
                         
                         if (!consistent) {
@@ -920,12 +1663,17 @@ public class BillingOccurrenceServiceImpl {
                 detector.setFrequencyChanged(oldFrequencyId != null && !oldFrequencyId.equals(newFrequencyId));
             }
             
-            // Detect amount change by comparing with existing schedules
-            BigDecimal oldAmount = existingSchedules.get(0).getBillingAmount();
-            if (oldAmount != null && currentAmount != null) {
-                detector.setOldAmount(oldAmount);
+            // The contract value is the total the schedule allocates, so it is
+            // compared with the sum of the active occurrences - never with one
+            // (prorated or split) period's amount.
+            BigDecimal allocatedAmount = allocatedAmount(existingSchedules);
+            boolean amountsKnown = existingSchedules.stream()
+                    .filter(s -> s.getPeriodStatus() != BillingPeriodStatus.CANCELLED)
+                    .allMatch(s -> s.getBillingAmount() != null);
+            if (currentAmount != null && amountsKnown) {
+                detector.setOldAmount(allocatedAmount);
                 detector.setNewAmount(currentAmount);
-                detector.setAmountChanged(oldAmount.compareTo(currentAmount) != 0);
+                detector.setAmountChanged(allocatedAmount.compareTo(currentAmount) != 0);
             }
         } else {
             detector.setNewAmount(currentAmount);
@@ -991,12 +1739,17 @@ public class BillingOccurrenceServiceImpl {
                 detector.setFrequencyChanged(oldFrequencyId != null && !oldFrequencyId.equals(newFrequencyId));
             }
             
-            // Detect amount change by comparing with existing schedules
-            BigDecimal oldAmount = existingSchedules.get(0).getBillingAmount();
-            if (oldAmount != null && currentAmount != null) {
-                detector.setOldAmount(oldAmount);
+            // The contract value is the total the schedule allocates, so it is
+            // compared with the sum of the active occurrences - never with one
+            // (prorated or split) period's amount.
+            BigDecimal allocatedAmount = allocatedAmount(existingSchedules);
+            boolean amountsKnown = existingSchedules.stream()
+                    .filter(s -> s.getPeriodStatus() != BillingPeriodStatus.CANCELLED)
+                    .allMatch(s -> s.getBillingAmount() != null);
+            if (currentAmount != null && amountsKnown) {
+                detector.setOldAmount(allocatedAmount);
                 detector.setNewAmount(currentAmount);
-                detector.setAmountChanged(oldAmount.compareTo(currentAmount) != 0);
+                detector.setAmountChanged(allocatedAmount.compareTo(currentAmount) != 0);
             }
         } else {
             detector.setNewAmount(currentAmount);
@@ -1023,15 +1776,14 @@ public class BillingOccurrenceServiceImpl {
             return;
         }
         
-        List<BillingSchedule> scheduledBeforeNewStart = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
-                .filter(s -> s.getPeriodEndDate().isBefore(newEffectiveFrom))
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledBeforeNewStart.isEmpty()) {
-            billingScheduleRepository.deleteAll(scheduledBeforeNewStart);
-            log.info("Deleted {} scheduled occurrences before new effective from {} for Fixed Price configuration",
-                    scheduledBeforeNewStart.size(), newEffectiveFrom);
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for new effective from {} for Fixed Price configuration",
+                    replaceable.size(), newEffectiveFrom);
         }
         
         List<BillingSchedule> taxPendingOrCalculatedBeforeNewStart = existingSchedules.stream()
@@ -1064,15 +1816,14 @@ public class BillingOccurrenceServiceImpl {
             return;
         }
         
-        List<BillingSchedule> scheduledBeforeNewStart = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
-                .filter(s -> s.getPeriodEndDate().isBefore(newEffectiveFrom))
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledBeforeNewStart.isEmpty()) {
-            billingScheduleRepository.deleteAll(scheduledBeforeNewStart);
-            log.info("Deleted {} scheduled occurrences before new effective from {} for Recurring configuration",
-                    scheduledBeforeNewStart.size(), newEffectiveFrom);
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for new effective from {} for Recurring configuration",
+                    replaceable.size(), newEffectiveFrom);
         }
         
         List<BillingSchedule> taxPendingOrCalculatedBeforeNewStart = existingSchedules.stream()
@@ -1088,7 +1839,7 @@ public class BillingOccurrenceServiceImpl {
                     " processed billing occurrences. Please resolve these occurrences first.");
         }
         
-        generateOccurrencesForRecurring(configuration.getBillingConfigurationId());
+        generateRecurringTerm(configuration, recurring);
     }
 
     private void handleFrequencyChangeForFixedPrice(
@@ -1097,14 +1848,14 @@ public class BillingOccurrenceServiceImpl {
             List<BillingSchedule> existingSchedules,
             ConfigurationChangeDetector detector) {
         
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledSchedules.isEmpty()) {
-            billingScheduleRepository.deleteAll(scheduledSchedules);
-            log.info("Deleted {} scheduled occurrences for frequency change in Fixed Price configuration",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for frequency change in Fixed Price configuration",
+                    replaceable.size());
         }
         
         generateOccurrencesForFixedPrice(configuration.getBillingConfigurationId());
@@ -1116,17 +1867,17 @@ public class BillingOccurrenceServiceImpl {
             List<BillingSchedule> existingSchedules,
             ConfigurationChangeDetector detector) {
         
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledSchedules.isEmpty()) {
-            billingScheduleRepository.deleteAll(scheduledSchedules);
-            log.info("Deleted {} scheduled occurrences for frequency change in Recurring configuration",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for frequency change in Recurring configuration",
+                    replaceable.size());
         }
         
-        generateOccurrencesForRecurring(configuration.getBillingConfigurationId());
+        generateRecurringTerm(configuration, recurring);
     }
 
     private void handleAmountChangeForFixedPrice(
@@ -1134,78 +1885,10 @@ public class BillingOccurrenceServiceImpl {
             BillingFixedPriceConfiguration fixedPrice,
             List<BillingSchedule> existingSchedules,
             ConfigurationChangeDetector detector) {
-        
-        BigDecimal newContractValue = detector.getNewAmount();
-        
-        // Filter eligible occurrences for amount update (SCHEDULED and TAX_PENDING only)
-        List<BillingSchedule> eligibleSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED || 
-                           s.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING)
-                .toList();
-        
-        if (eligibleSchedules.isEmpty()) {
-            log.info("No eligible SCHEDULED or TAX_PENDING occurrences to update for Fixed Price configuration {}", 
-                    configuration.getBillingConfigurationId());
-            return;
-        }
-        
-        // Get the effective date range from the configuration
-        LocalDate effectiveFrom = fixedPrice.getEffectiveFrom() != null 
-                ? fixedPrice.getEffectiveFrom() 
-                : configuration.getEffectiveFrom();
-        LocalDate effectiveTo = fixedPrice.getEffectiveTo() != null 
-                ? fixedPrice.getEffectiveTo() 
-                : configuration.getEffectiveTo();
-        
-        BillingFrequencyMaster frequency = configuration.getBillingFrequency();
-        
-        // Distribute the new contract value equally across eligible occurrences
-        int totalEligiblePeriods = eligibleSchedules.size();
-        BigDecimal baseAmount = newContractValue
-                .divide(BigDecimal.valueOf(totalEligiblePeriods), 2, RoundingMode.HALF_EVEN);
-        
-        for (int i = 0; i < eligibleSchedules.size(); i++) {
-            BillingSchedule schedule = eligibleSchedules.get(i);
-            boolean isLastEligible = (i == eligibleSchedules.size() - 1);
-            
-            BigDecimal periodAmount;
-            if (isLastEligible) {
-                // Last eligible occurrence gets the remainder to ensure total matches exactly
-                BigDecimal allocatedAmount = baseAmount.multiply(BigDecimal.valueOf(totalEligiblePeriods - 1));
-                periodAmount = newContractValue.subtract(allocatedAmount).setScale(2, RoundingMode.HALF_EVEN);
-            } else {
-                periodAmount = baseAmount;
-            }
-            
-            if (schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED) {
-                schedule.setBillingAmount(periodAmount);
-                billingScheduleRepository.save(schedule);
-                log.info("Updated billing amount for SCHEDULED occurrence {} to {}", 
-                        schedule.getBillingScheduleId(), periodAmount);
-            } else if (schedule.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING) {
-                // First update the billing schedule amount
-                schedule.setBillingAmount(periodAmount);
-                billingScheduleRepository.save(schedule);
-                
-                // Then delete the tax calculation - this ensures schedule is updated before tax is invalidated
-                taxCalculationRepository.deleteByBillingScheduleId(schedule.getBillingScheduleId());
-                log.info("Updated billing amount for TAX_PENDING occurrence {} to {} and invalidated tax", 
-                        schedule.getBillingScheduleId(), periodAmount);
-            }
-        }
-        
-        // Check for TAX_CALCULATED or INVOICED occurrences and throw error if found
-        for (BillingSchedule schedule : existingSchedules) {
-            if (schedule.getPeriodStatus() == BillingPeriodStatus.TAX_CALCULATED) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Cannot change billing amount because occurrence " + schedule.getBillingScheduleId() +
-                        " is already TAX_CALCULATED. Please recalculate tax first or contact support.");
-            } else if (schedule.getIsInvoiced()) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Cannot change billing amount because occurrence " + schedule.getBillingScheduleId() +
-                        " is already INVOICED. Historical invoiced amounts cannot be modified.");
-            }
-        }
+
+        reallocateUnbilledOccurrences(existingSchedules,
+                plannedFixedPriceSchedule(configuration, fixedPrice, detector.getNewAmount()),
+                "Fixed Price");
     }
 
     private void handleAmountChangeForRecurring(
@@ -1213,35 +1896,200 @@ public class BillingOccurrenceServiceImpl {
             BillingRecurringConfiguration recurring,
             List<BillingSchedule> existingSchedules,
             ConfigurationChangeDetector detector) {
-        
-        BigDecimal newAmount = detector.getNewAmount();
-        
-        for (BillingSchedule schedule : existingSchedules) {
-            if (schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED) {
-                schedule.setBillingAmount(newAmount);
-                billingScheduleRepository.save(schedule);
-                log.info("Updated billing amount for SCHEDULED occurrence {} to {}", 
-                        schedule.getBillingScheduleId(), newAmount);
-            } else if (schedule.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING) {
-                // First update the billing schedule amount
-                schedule.setBillingAmount(newAmount);
-                billingScheduleRepository.save(schedule);
-                
-                // Then delete the tax calculation - this ensures schedule is updated before tax is invalidated
-                // If tax deletion fails, the schedule still has the new amount and can be recalculated
-                taxCalculationRepository.deleteByBillingScheduleId(schedule.getBillingScheduleId());
-                log.info("Updated billing amount for TAX_PENDING occurrence {} to {} and invalidated tax", 
-                        schedule.getBillingScheduleId(), newAmount);
-            } else if (schedule.getPeriodStatus() == BillingPeriodStatus.TAX_CALCULATED) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Cannot change billing amount because occurrence " + schedule.getBillingScheduleId() +
-                        " is already TAX_CALCULATED. Please recalculate tax first or contact support.");
-            } else if (schedule.getIsInvoiced()) {
-                throw new GlobalExceptionHandler.ValidationException(
-                        "Cannot change billing amount because occurrence " + schedule.getBillingScheduleId() +
-                        " is already INVOICED. Historical invoiced amounts cannot be modified.");
-            }
+
+        reallocateUnbilledOccurrences(existingSchedules,
+                plannedRecurringSchedule(configuration, recurring, detector.getNewAmount()),
+                "Recurring");
+    }
+
+    /**
+     * Applies a changed contract value to an unchanged schedule (same
+     * periods): each occurrence takes the amount schedule generation would
+     * give its period for the new value - the equal split (Fixed Price) or
+     * the day-prorated share (Recurring) - in place, so occurrence
+     * identities are kept. A TAX_PENDING occurrence's tax record is
+     * invalidated, as before.
+     * <p>
+     * Once any occurrence has been billed (tax calculated or invoiced) the
+     * change is refused: the existing rules never re-allocate a contract
+     * across billed periods, and billed amounts change only through the
+     * Finance correction process. Nothing is modified before that check.
+     */
+    private void reallocateUnbilledOccurrences(List<BillingSchedule> existingSchedules,
+            List<BillingSchedule> plannedSchedule, String contractType) {
+
+        long billed = existingSchedules.stream().filter(BillingOccurrenceServiceImpl::isBilled).count();
+        if (billed > 0) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "The " + contractType + " contract value cannot be changed because " + billed
+                            + " billing occurrence(s) have already been billed (tax calculated or invoiced). "
+                            + "Billed amounts are never re-allocated automatically; use the Finance "
+                            + "correction process.");
         }
+
+        Map<String, BigDecimal> plannedAmounts = new HashMap<>();
+        plannedSchedule.forEach(s -> plannedAmounts.put(periodKey(s), s.getBillingAmount()));
+
+        for (BillingSchedule schedule : existingSchedules) {
+            if (schedule.getPeriodStatus() == BillingPeriodStatus.CANCELLED) {
+                continue;
+            }
+            BigDecimal amount = plannedAmounts.get(periodKey(schedule));
+            if (amount == null) {
+                throw new GlobalExceptionHandler.ValidationException(
+                        "Billing occurrence " + schedule.getPeriodStartDate() + " to " + schedule.getPeriodEndDate()
+                                + " is not part of the " + contractType + " schedule, so the contract value "
+                                + "cannot be re-allocated to it.");
+            }
+            applyUnbilledAmount(schedule, amount);
+        }
+    }
+
+    /**
+     * Sets an unbilled (SCHEDULED or TAX_PENDING) occurrence's amount. A
+     * TAX_PENDING occurrence's tax record, if any, no longer matches and is
+     * removed so tax is calculated on the new amount.
+     */
+    private void applyUnbilledAmount(BillingSchedule schedule, BigDecimal amount) {
+        if (schedule.getBillingAmount() != null && schedule.getBillingAmount().compareTo(amount) == 0) {
+            return;
+        }
+        schedule.setBillingAmount(amount);
+        billingScheduleRepository.save(schedule);
+        if (schedule.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING) {
+            taxCalculationRepository.deleteByBillingScheduleId(schedule.getBillingScheduleId());
+        }
+        log.info("Billing amount of occurrence {} ({} to {}) changed", schedule.getBillingScheduleId(),
+                schedule.getPeriodStartDate(), schedule.getPeriodEndDate());
+    }
+
+    /** Tax calculated or invoiced: its amount is final and never re-allocated by reconciliation. */
+    private static boolean isBilled(BillingSchedule schedule) {
+        return Boolean.TRUE.equals(schedule.getIsInvoiced())
+                || schedule.getPeriodStatus() == BillingPeriodStatus.TAX_CALCULATED
+                || schedule.getPeriodStatus() == BillingPeriodStatus.INVOICED;
+    }
+
+    /** Sum of the amounts the given occurrences allocate (cancelled ones excluded). */
+    private static BigDecimal allocatedAmount(List<BillingSchedule> schedules) {
+        return schedules.stream()
+                .filter(s -> s.getPeriodStatus() != BillingPeriodStatus.CANCELLED)
+                .map(BillingSchedule::getBillingAmount)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private static String periodKey(BillingSchedule schedule) {
+        return schedule.getPeriodStartDate() + "|" + schedule.getPeriodEndDate();
+    }
+
+    /**
+     * True when the existing active occurrences are exactly the planned
+     * schedule - same periods, same amounts - so reconciliation has nothing
+     * to do (an unchanged re-approval).
+     */
+    private static boolean matchesPlannedSchedule(List<BillingSchedule> existingSchedules,
+            List<BillingSchedule> plannedSchedule) {
+        List<BillingSchedule> existing = existingSchedules.stream()
+                .filter(s -> s.getPeriodStatus() != BillingPeriodStatus.CANCELLED)
+                .toList();
+        if (plannedSchedule.isEmpty() || existing.size() != plannedSchedule.size()) {
+            return false;
+        }
+        Map<String, BigDecimal> planned = new HashMap<>();
+        plannedSchedule.forEach(s -> planned.put(periodKey(s), s.getBillingAmount()));
+        return existing.stream().allMatch(s -> {
+            BigDecimal amount = planned.get(periodKey(s));
+            return amount != null && s.getBillingAmount() != null && amount.compareTo(s.getBillingAmount()) == 0;
+        });
+    }
+
+    /**
+     * The complete Fixed Price schedule the configuration describes for
+     * {@code contractValue}, from Effective From - the same periods and
+     * amounts generation produces. Not persisted. Empty when the dates or
+     * frequency are incomplete.
+     */
+    private List<BillingSchedule> plannedFixedPriceSchedule(BillingConfiguration configuration,
+            BillingFixedPriceConfiguration fixedPrice, BigDecimal contractValue) {
+        LocalDate from = fixedPrice.getEffectiveFrom() != null ? fixedPrice.getEffectiveFrom()
+                : configuration.getEffectiveFrom();
+        LocalDate to = fixedPrice.getEffectiveTo() != null ? fixedPrice.getEffectiveTo()
+                : configuration.getEffectiveTo();
+        BillingFrequencyMaster frequency = configuration.getBillingFrequency();
+        if (from == null || to == null || from.isAfter(to) || frequency == null || contractValue == null) {
+            return List.of();
+        }
+        if (isOneTimeFrequency(frequency)) {
+            return List.of(BillingSchedule.builder().periodStartDate(from).periodEndDate(to)
+                    .billingAmount(contractValue).build());
+        }
+        if (frequency.getDurationUnit() == null || frequency.getDurationValue() == null) {
+            return List.of();
+        }
+        return calculateAndCreateSchedules(configuration, null, frequency, from, from, to, contractValue,
+                BillingScheduleType.PRIMARY, 1);
+    }
+
+    /** As {@link #plannedFixedPriceSchedule}, for a Recurring configuration's term. */
+    private List<BillingSchedule> plannedRecurringSchedule(BillingConfiguration configuration,
+            BillingRecurringConfiguration recurring, BigDecimal contractValue) {
+        LocalDate from = recurring.getRecurringStartDate() != null ? recurring.getRecurringStartDate()
+                : configuration.getEffectiveFrom();
+        LocalDate to = recurring.getRecurringEndDate() != null ? recurring.getRecurringEndDate()
+                : configuration.getEffectiveTo();
+        BillingFrequencyMaster frequency = recurring.getBillingFrequency() != null
+                ? recurring.getBillingFrequency() : configuration.getBillingFrequency();
+        if (from == null || to == null || !from.isBefore(to) || frequency == null || contractValue == null
+                || frequency.getDurationUnit() == null || frequency.getDurationValue() == null) {
+            return List.of();
+        }
+        return calculateAndCreateSchedules(configuration, recurring, frequency, from, from, to, contractValue,
+                BillingScheduleType.PRIMARY, 1);
+    }
+
+    /**
+     * Whether reconciliation may replace an occurrence with the corrected
+     * plan: active and not billed, and either SCHEDULED or TAX_PENDING (due,
+     * tax not yet calculated - no completed tax calculation exists). A
+     * tax-calculated or invoiced occurrence is final and only changes through
+     * the Finance correction process.
+     */
+    private boolean isReplaceable(BillingSchedule schedule) {
+        if (!Boolean.TRUE.equals(schedule.getIsActive()) || isBilled(schedule)) {
+            return false;
+        }
+        if (schedule.getPeriodStatus() == BillingPeriodStatus.SCHEDULED) {
+            return true;
+        }
+        return schedule.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING
+                && taxCalculationRepository.findByBillingScheduleId(schedule.getBillingScheduleId())
+                        .map(tax -> tax.getStatus() != com.AccountReceivableManagement.entity_enums.tax_calculation
+                                .TaxCalculationStatus.CALCULATED)
+                        .orElse(true);
+    }
+
+    /**
+     * Retires the unbilled occurrences reconciliation replaces. They are
+     * deactivated, not deleted: a regenerated period with the same dates
+     * reactivates the same row ({@link #persistOccurrencesIdempotently}) with
+     * the corrected amount, so the occurrence keeps its identity and any
+     * automatic billing run that refers to it stays linked - re-creating it
+     * under a new id would make its run's period key
+     * ({@code uk_automatic_billing_run_period}) collide. A period that is not
+     * regenerated stays inactive and is never billed. A TAX_PENDING
+     * occurrence's leftover (never completed) tax record is removed, so tax
+     * is calculated on the corrected amount and no stale result is reused.
+     */
+    private void retireReplaceableOccurrences(List<BillingSchedule> occurrences) {
+        for (BillingSchedule occurrence : occurrences) {
+            if (occurrence.getPeriodStatus() == BillingPeriodStatus.TAX_PENDING) {
+                taxCalculationRepository.deleteByBillingScheduleId(occurrence.getBillingScheduleId());
+            }
+            occurrence.setIsActive(false);
+        }
+        billingScheduleRepository.saveAll(occurrences);
+        billingScheduleRepository.flush();
     }
 
     private void handleEffectiveToChangeForFixedPrice(
@@ -1249,14 +2097,14 @@ public class BillingOccurrenceServiceImpl {
             BillingFixedPriceConfiguration fixedPrice,
             List<BillingSchedule> existingSchedules) {
         
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledSchedules.isEmpty()) {
-            billingScheduleRepository.deleteAll(scheduledSchedules);
-            log.info("Deleted {} scheduled occurrences for Effective To change in Fixed Price configuration",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for Effective To change in Fixed Price configuration",
+                    replaceable.size());
         }
         
         generateOccurrencesForFixedPrice(configuration.getBillingConfigurationId());
@@ -1267,17 +2115,17 @@ public class BillingOccurrenceServiceImpl {
             BillingRecurringConfiguration recurring,
             List<BillingSchedule> existingSchedules) {
         
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
                 .toList();
         
-        if (!scheduledSchedules.isEmpty()) {
-            billingScheduleRepository.deleteAll(scheduledSchedules);
-            log.info("Deleted {} scheduled occurrences for Effective To change in Recurring configuration",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for Effective To change in Recurring configuration",
+                    replaceable.size());
         }
         
-        generateOccurrencesForRecurring(configuration.getBillingConfigurationId());
+        generateRecurringTerm(configuration, recurring);
     }
 
     private void reconcileMilestonePlanOccurrences(BillingConfiguration configuration) {
@@ -1295,21 +2143,31 @@ public class BillingOccurrenceServiceImpl {
         List<BillingSchedule> existingSchedules = billingScheduleRepository
                 .findByBillingConfigurationAndIsActiveTrueOrderByPeriodNumberAsc(configuration);
 
-        // For milestone plans, we regenerate all SCHEDULED occurrences when the plan is updated
-        // This is simpler than trying to detect individual changes since milestone plans
-        // can have varying numbers of entries
-        List<BillingSchedule> scheduledSchedules = existingSchedules.stream()
-                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED)
+        // For milestone plans, all SCHEDULED occurrences are regenerated when the plan is
+        // updated (plans can have varying numbers of entries). A due TAX_PENDING occurrence is
+        // regenerated only when its payment entry changed (amount, date or removed), so it is
+        // billed at the plan's current value; an unchanged one is left as it is.
+        List<BillingSchedule> replaceable = existingSchedules.stream()
+                .filter(this::isReplaceable)
+                .filter(s -> s.getPeriodStatus() == BillingPeriodStatus.SCHEDULED || !matchesPaymentEntry(s, entries))
                 .toList();
 
-        if (!scheduledSchedules.isEmpty()) {
-            billingScheduleRepository.deleteAll(scheduledSchedules);
-            log.info("Deleted {} scheduled occurrences for Milestone Plan configuration update",
-                    scheduledSchedules.size());
+        if (!replaceable.isEmpty()) {
+            retireReplaceableOccurrences(replaceable);
+            log.info("Retired {} unbilled occurrences for Milestone Plan configuration update",
+                    replaceable.size());
         }
 
         // Generate new occurrences from milestone plan entries
         generateOccurrencesForMilestonePlan(configuration, milestonePlan, entries);
+    }
+
+    /** Whether the occurrence is still exactly what its payment entry generates (sequence, date, amount). */
+    private static boolean matchesPaymentEntry(BillingSchedule occurrence, List<BillingPaymentEntry> entries) {
+        return entries.stream().anyMatch(entry -> java.util.Objects.equals(entry.getSequence(), occurrence.getPeriodNumber())
+                && java.util.Objects.equals(entry.getBillingDate(), occurrence.getBillingDate())
+                && entry.getAmount() != null && occurrence.getBillingAmount() != null
+                && entry.getAmount().compareTo(occurrence.getBillingAmount()) == 0);
     }
 
     public void generateOccurrencesForMilestonePlan(

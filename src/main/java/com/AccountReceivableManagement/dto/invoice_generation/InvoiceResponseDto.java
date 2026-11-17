@@ -26,6 +26,9 @@ public class InvoiceResponseDto {
 
     private UUID billingScheduleId;
 
+    /** Billing configuration the invoice was generated under (derived from its snapshot or occurrence). */
+    private UUID billingConfigurationId;
+
     private String billingSnapshotNumber;
 
     private UUID taxCalculationId;
@@ -171,4 +174,17 @@ public class InvoiceResponseDto {
      * stored on the invoice itself.
      */
     private LocalDateTime lastCorrectedAt;
+
+    /**
+     * {@code true} when the invoice is {@code READY_TO_SEND} and its
+     * finalized PDF is actually stored. Says nothing about delivery - an
+     * available document does not mean the invoice was sent.
+     */
+    private boolean documentAvailable;
+
+    /**
+     * Relative API path of the finalized PDF ({@code GET}), present only
+     * when {@link #documentAvailable}. Never a storage location.
+     */
+    private String documentUrl;
 }

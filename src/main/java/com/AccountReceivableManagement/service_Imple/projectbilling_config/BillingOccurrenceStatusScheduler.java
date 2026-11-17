@@ -19,10 +19,10 @@ public class BillingOccurrenceStatusScheduler {
 //    @Scheduled(cron = "0 0 0 * * *")
     @Scheduled(cron = "0 * * * * *")
     public void transitionScheduledToTaxPending() {
-        log.info("Starting scheduled transition of SCHEDULED occurrences to TAX_PENDING");
+        log.debug("Starting scheduled transition of SCHEDULED occurrences to TAX_PENDING");
         try {
             billingOccurrenceService.transitionScheduledToTaxPending();
-            log.info("Completed scheduled transition of SCHEDULED occurrences to TAX_PENDING");
+            log.debug("Completed scheduled transition of SCHEDULED occurrences to TAX_PENDING");
         } catch (Exception e) {
             log.error("Fatal error during scheduled transition of SCHEDULED occurrences to TAX_PENDING", e);
             // This catch is for unexpected system-level errors (database connection, etc.)

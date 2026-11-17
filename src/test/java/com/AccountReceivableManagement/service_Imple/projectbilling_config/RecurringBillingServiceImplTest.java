@@ -297,8 +297,6 @@ class RecurringBillingServiceImplTest {
 
         when(billingConfigurationRepository.findById(billingConfigurationId))
                 .thenReturn(Optional.of(configuration));
-        when(billingFrequencyRepository.findById(monthlyFrequency.getBillingFrequencyId()))
-                .thenReturn(Optional.of(monthlyFrequency));
         when(billingRecurringRepository.existsByBillingConfigurationAndIsActiveTrue(any()))
                 .thenReturn(false);
 

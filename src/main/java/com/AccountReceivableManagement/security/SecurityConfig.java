@@ -18,6 +18,7 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@org.springframework.boot.context.properties.EnableConfigurationProperties(FinancialSecurityProperties.class)
 public class SecurityConfig {
 
     @Autowired
@@ -26,6 +27,8 @@ public class SecurityConfig {
     private CustomAuthenticationEntryPoint customAuthenticationEntryPoint;
     @Autowired
     private CorsConfigurationSource corsConfigurationSource;
+    @Autowired
+    private OperationsReportAccess operationsReportAccess;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -37,10 +40,17 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/health",
                                 "/public/**",
+                                // Load balancer / Kubernetes probes: status only, never details.
+                                "/health",
+                                "/actuator/health",
+                                "/actuator/health/liveness",
+                                "/actuator/health/readiness",
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
                                 "/swagger-ui.html"
                         ).permitAll()
+                        // Operations reports carry client and financial data: configured authorities only.
+                        .requestMatchers("/api/v1/operations/**").access(operationsReportAccess)
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().authenticated()
                 )
@@ -56,6 +66,27 @@ public class SecurityConfig {
                 );
 
         return http.build();
+    }
+
+    /**
+     * The UMS token decoder: signature against the issuer's published keys,
+     * plus {@link JwtTokenValidation}. Resolved on the first request (as
+     * Spring Boot's own issuer-uri decoder is), so startup does not depend on
+     * UMS being reachable.
+     */
+    @org.springframework.context.annotation.Bean
+    public org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String issuerUri,
+            FinancialSecurityProperties securityProperties) {
+        return new org.springframework.security.oauth2.jwt.SupplierJwtDecoder(() -> {
+            org.springframework.security.oauth2.jwt.NimbusJwtDecoder decoder =
+                    (org.springframework.security.oauth2.jwt.NimbusJwtDecoder)
+                            org.springframework.security.oauth2.jwt.JwtDecoders.fromIssuerLocation(issuerUri);
+            decoder.setJwtValidator(JwtTokenValidation.validator(issuerUri,
+                    securityProperties.getJwt().getAudiences()));
+            return decoder;
+        });
     }
 
     private JwtAuthenticationConverter jwtAuthenticationConverter() {

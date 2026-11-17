@@ -26,8 +26,10 @@ class ProjectDataProcessorImplTest {
     @Mock
     private ProjectMasterReferenceRepository projectMasterReferenceRepository;
 
-    @Mock
-    private CdcValueConverter valueConverter;
+    // Real conversion (stateless @Component): a bare mock mapped every non-id
+    // column (client_id, project_budget_currency, ...) to null.
+    @org.mockito.Spy
+    private CdcValueConverter valueConverter = new CdcValueConverter();
 
     @Mock
     private ClientBudgetSummaryService clientBudgetSummaryService;

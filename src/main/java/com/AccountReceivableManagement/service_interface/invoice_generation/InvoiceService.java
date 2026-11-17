@@ -25,6 +25,20 @@ public interface InvoiceService {
     InvoiceResponseDto generateInvoiceForSchedule(UUID billingScheduleId);
 
     /**
+     * Idempotent {@link #generateInvoice(UUID)}: returns the snapshot's
+     * existing invoice (in whatever approval status it is) instead of
+     * failing as a duplicate, otherwise generates it. Never approves.
+     */
+    InvoiceResponseDto findOrGenerateInvoice(UUID billingSnapshotId);
+
+    /**
+     * Idempotent {@link #generateInvoiceForSchedule(UUID)}: returns the
+     * occurrence's existing invoice instead of failing as a duplicate,
+     * otherwise generates it. Never approves.
+     */
+    InvoiceResponseDto findOrGenerateInvoiceForSchedule(UUID billingScheduleId);
+
+    /**
      * Read-only invoice preview for a billing snapshot. If an invoice already
      * exists it is returned as-is ({@code generated = true}). Otherwise, for a
      * {@code TAX_COMPLETED} snapshot, returns what generation would produce
@@ -69,6 +83,20 @@ public interface InvoiceService {
      * untouched.
      */
     InvoiceResponseDto submitForApproval(UUID invoiceId);
+
+    /**
+     * Finalizes the invoice document of an APPROVED invoice: checks the
+     * invoice is complete and its totals reconcile, renders the PDF with the
+     * existing {@code InvoiceDocumentService}, stores it and moves the
+     * invoice to READY_TO_SEND - all in one transaction, so a failure leaves
+     * the invoice APPROVED with no document. Idempotent: a READY_TO_SEND
+     * invoice is returned as it is, never regenerated. Any other status is
+     * rejected. Never sends anything.
+     */
+    InvoiceResponseDto finalizeInvoiceDocument(UUID invoiceId);
+
+    /** The stored, finalized document of a READY_TO_SEND invoice. */
+    com.AccountReceivableManagement.entity.invoice_generation.InvoiceDocument getInvoiceDocument(UUID invoiceId);
 
     /**
      * {@code PENDING_APPROVAL -> APPROVED}. Only the status changes and an

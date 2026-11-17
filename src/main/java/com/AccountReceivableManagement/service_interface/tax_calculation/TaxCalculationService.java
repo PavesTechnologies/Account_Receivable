@@ -20,6 +20,20 @@ public interface TaxCalculationService {
      */
     TaxCalculationResponseDto calculateTaxForSchedule(UUID billingScheduleId);
 
+    /**
+     * Idempotent {@link #calculateTax(UUID)}: returns the snapshot's existing
+     * CALCULATED tax calculation instead of failing as a duplicate, otherwise
+     * calculates it. Never creates a second tax record for one snapshot.
+     */
+    TaxCalculationResponseDto findOrCalculateTax(UUID billingSnapshotId);
+
+    /**
+     * Idempotent {@link #calculateTaxForSchedule(UUID)}: returns the
+     * occurrence's existing CALCULATED tax calculation instead of failing as
+     * a duplicate, otherwise calculates it.
+     */
+    TaxCalculationResponseDto findOrCalculateTaxForSchedule(UUID billingScheduleId);
+
     TaxCalculationResponseDto getTaxCalculationBySnapshotId(UUID billingSnapshotId);
 
     TaxCalculationResponseDto getTaxCalculationByScheduleId(UUID billingScheduleId);

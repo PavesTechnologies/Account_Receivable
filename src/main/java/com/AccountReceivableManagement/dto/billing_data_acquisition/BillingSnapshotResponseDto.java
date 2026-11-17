@@ -44,6 +44,14 @@ public class BillingSnapshotResponseDto {
     private String snapshotNumber;
 
     /**
+     * Billing Configuration this snapshot was acquired under, as recorded on
+     * the snapshot. Never re-resolved from the project, so it stays the
+     * original configuration after that configuration is deactivated or
+     * replaced.
+     */
+    private UUID billingConfigurationId;
+
+    /**
      * Project this snapshot was acquired for.
      */
     private Long projectId;

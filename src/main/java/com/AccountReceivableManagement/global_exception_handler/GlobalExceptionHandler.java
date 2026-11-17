@@ -10,6 +10,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -49,6 +50,21 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.builder()
                         .success(false)
                         .message(message)
+                        .data(null)
+                        .build());
+    }
+
+    /**
+     * Authenticated, but not permitted (missing authority, maker-checker,
+     * automatic billing attempting a human decision): 403.
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Object>> handleAccessDenied(
+            org.springframework.security.access.AccessDeniedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.builder()
+                        .success(false)
+                        .message(ex.getMessage())
                         .data(null)
                         .build());
     }
@@ -246,6 +262,24 @@ public class GlobalExceptionHandler {
                         .build());
     }
 
+    /** An unmapped path is a 404, not a server error. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Object>> handleNoResource(
+            NoResourceFoundException ex) {
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.builder()
+                        .success(false)
+                        .message("Resource not found.")
+                        .data(null)
+                        .build());
+    }
+
+    /**
+     * Unexpected failures: logged in full, answered generically - their
+     * message may carry SQL, constraint or connection details that must not
+     * reach a client. Expected failures have their own handlers above.
+     */
     /** Malformed JSON or an unknown enum value is a client error, not a 500. */
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Object>> handleUnreadableBody(
@@ -267,10 +301,12 @@ public class GlobalExceptionHandler {
                 request != null ? request.getMethod() : "?",
                 request != null ? request.getRequestURI() : "?", ex);
 
+        log.error("Unhandled exception: {}", ex.getClass().getName(), ex);
+
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.builder()
                         .success(false)
-                        .message(ex.getMessage())
+                        .message("An unexpected error occurred. Please try again or contact support.")
                         .data(null)
                         .build());
     }
