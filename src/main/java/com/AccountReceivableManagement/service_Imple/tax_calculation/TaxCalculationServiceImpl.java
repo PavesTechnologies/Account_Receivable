@@ -74,6 +74,9 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
     private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl
             billingOccurrenceService;
 
+    /** Temporary: forces applicability while project locations are country-only. */
+    private final com.AccountReceivableManagement.config.properties.TaxCalculationProperties taxProperties;
+
 //    private final BillingConfigurationService billingConfigurationService;
 
     @Override
@@ -692,6 +695,11 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
             BillingSnapshot snapshot
     ) {
 
+        TaxApplicabilityType override = applicabilityOverride();
+        if (override != null) {
+            return override;
+        }
+
         String source =
                 normalize(
                         snapshot
@@ -735,6 +743,13 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
             BillingConfiguration configuration
     ) {
 
+        TaxApplicabilityType override = applicabilityOverride();
+        if (override != null) {
+            log.debug("Applicability override in effect for schedule {}: {} (ar.tax.applicability-override)",
+                    schedule.getBillingScheduleId(), override);
+            return override;
+        }
+
         String source = null;
         String destination = null;
 
@@ -771,6 +786,22 @@ public class TaxCalculationServiceImpl implements TaxCalculationService {
 
         log.debug("Jurisdictions are DIFFERENT: {} != {}", source, destination);
         return TaxApplicabilityType.DIFFERENT_JURISDICTION;
+    }
+
+    /**
+     * The configured applicability override, or {@code null} when the
+     * jurisdictions are to be compared normally.
+     *
+     * <p>TEMPORARY (see {@code ar.tax.applicability-override}): a destination
+     * jurisdiction can only be resolved to a country today, so an Indian
+     * seller billing an Indian project always resolves SAME_JURISDICTION and
+     * is taxed CGST + SGST - a state-level split nothing here determined.
+     * Setting the override to DIFFERENT_JURISDICTION taxes those as IGST at
+     * the same total. Delete this method, its two call sites and
+     * {@code TaxCalculationProperties} once project locations carry state.
+     */
+    private TaxApplicabilityType applicabilityOverride() {
+        return taxProperties == null ? null : taxProperties.getApplicabilityOverride();
     }
 
     /**

@@ -220,7 +220,9 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 taxRegionMasterRepository,
                 billingConfigurationRepository,
                 org.mockito.Mockito.mock(
-                        com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl.class));
+                        com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl.class),
+                // No applicability override: jurisdictions are compared as in production defaults.
+                new com.AccountReceivableManagement.config.properties.TaxCalculationProperties());
 
         invoiceService = new InvoiceServiceImpl(
                 invoiceRepository,

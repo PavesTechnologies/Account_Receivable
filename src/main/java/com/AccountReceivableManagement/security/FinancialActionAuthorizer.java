@@ -32,10 +32,7 @@ public class FinancialActionAuthorizer {
     void registerWithActorContext() {
         ActorContext.registerCurrentUserIdResolver(currentUserService::getUserId);
         for (FinancialAction action : FinancialAction.values()) {
-            if (configured(action.authorities(properties.getAuthorization())).isEmpty()) {
-                log.warn("[FinancialAuth] no authorities configured for {}: nobody can {} until its "
-                        + "ar.security.authorization.* property (AR_AUTH_*) is set.", action, action.description());
-            }
+            log.info("[FinancialAuth] {} requires one of {}", action, requiredAuthorities(action));
         }
     }
 
@@ -51,12 +48,12 @@ public class FinancialActionAuthorizer {
             throw new AccessDeniedException("Automatic billing cannot " + action.description() + ".");
         }
         UserDTO user = currentUserService.getCurrentUser();
-        Set<String> required = configured(action.authorities(properties.getAuthorization()));
+        Set<String> required = requiredAuthorities(action);
         Set<String> held = heldAuthorities(user);
         if (required.stream().noneMatch(held::contains)) {
             // Claim values only (never the token), so a role/permission name mismatch can be diagnosed.
             log.warn("[FinancialAuth] denied {} to user {}: holds {}, requires one of {}",
-                    action, user.getId(), held, required.isEmpty() ? "(none configured)" : required);
+                    action, user.getId(), held, required);
             throw new AccessDeniedException("You are not authorized to " + action.description() + ".");
         }
         return actorOf(user);
@@ -100,6 +97,16 @@ public class FinancialActionAuthorizer {
             user.getPermissions().stream().map(RoleNames::canonical).filter(p -> !p.isEmpty()).forEach(held::add);
         }
         return held;
+    }
+
+    /**
+     * Who may take {@code action}: the configured override when one is set,
+     * otherwise the roles the action is bound to in {@link FinancialAction}.
+     * Never empty, so a missing property can no longer lock everybody out.
+     */
+    private Set<String> requiredAuthorities(FinancialAction action) {
+        Set<String> override = configured(action.authorities(properties.getAuthorization()));
+        return override.isEmpty() ? configured(action.defaultAuthorities()) : override;
     }
 
     private static Set<String> configured(List<String> allowed) {

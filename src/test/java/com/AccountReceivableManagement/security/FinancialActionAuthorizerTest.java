@@ -76,9 +76,18 @@ class FinancialActionAuthorizerTest {
     }
 
     @Test
-    void requirePermission_noAuthorityConfigured_deniesEvenAFinanceManager() {
+    void requirePermission_noAuthorityConfigured_fallsBackToTheRoleBoundToTheAction() {
         properties.getAuthorization().setConfigurationApprovalAuthorities(List.of());
-        UserDTO user = new UserDTO(10L, "manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of("CONFIG_APPROVE"));
+        UserDTO user = new UserDTO(10L, "manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of());
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        assertThat(authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL).userId()).isEqualTo(10L);
+    }
+
+    @Test
+    void requirePermission_noAuthorityConfigured_stillDeniesAnotherRole() {
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of());
+        UserDTO user = new UserDTO(11L, "exec@example.com", "Finance Executive", List.of("FINANCE_EXECUTIVE"), List.of());
         when(currentUserService.getCurrentUser()).thenReturn(user);
 
         assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
@@ -87,13 +96,54 @@ class FinancialActionAuthorizerTest {
     }
 
     @Test
-    void requirePermission_blankConfiguredAuthority_grantsNobody() {
-        // An env value like "AR_AUTH_CONFIGURATION_APPROVAL= " must not match anything.
+    void requirePermission_blankConfiguredAuthority_fallsBackToTheRoleBoundToTheAction() {
+        // An env value like "AR_AUTH_CONFIGURATION_APPROVAL= " is no override at all.
         properties.getAuthorization().setConfigurationApprovalAuthorities(List.of(" ", ""));
-        UserDTO user = new UserDTO(10L, "manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of(""));
+        UserDTO manager = new UserDTO(10L, "manager@example.com", "Finance Manager", List.of("FINANCE_MANAGER"), List.of(""));
+        UserDTO outsider = new UserDTO(12L, "someone@example.com", "Someone", List.of("EMPLOYEE"), List.of(""));
+        when(currentUserService.getCurrentUser()).thenReturn(manager, outsider);
+
+        assertThat(authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL).userId()).isEqualTo(10L);
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"FINANCE_MANAGER", "FINANCE_EXECUTIVE"})
+    void requirePermission_invoiceDelivery_defaultsToEitherFinanceRole(String umsRole) {
+        // Sending is not the manager's alone: both finance roles may send by default.
+        properties.getAuthorization().setInvoiceDeliveryAuthorities(List.of());
+        UserDTO user = new UserDTO(40L, "sender@example.com", "Sender", List.of(umsRole), List.of());
         when(currentUserService.getCurrentUser()).thenReturn(user);
 
+        assertThat(authorizer.requirePermission(FinancialAction.INVOICE_DELIVERY).userId()).isEqualTo(40L);
+    }
+
+    @Test
+    void requirePermission_invoiceDelivery_stillDeniesANonFinanceRole() {
+        properties.getAuthorization().setInvoiceDeliveryAuthorities(List.of());
+        UserDTO user = new UserDTO(41L, "someone@example.com", "Someone", List.of("EMPLOYEE"), List.of());
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.INVOICE_DELIVERY))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("You are not authorized to send invoices to clients.");
+    }
+
+    @Test
+    void requirePermission_approvalAndRecovery_remainManagerOnly() {
+        // Adding the executive to delivery must not widen the other actions.
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of());
+        properties.getAuthorization().setInvoiceApprovalAuthorities(List.of());
+        properties.getAuthorization().setOperationsRecoveryAuthorities(List.of());
+        UserDTO executive = new UserDTO(42L, "exec@example.com", "Exec", List.of("FINANCE_EXECUTIVE"), List.of());
+        when(currentUserService.getCurrentUser()).thenReturn(executive);
+
         assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.BILLING_CONFIGURATION_APPROVAL))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.INVOICE_APPROVAL))
+                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.OPERATIONS_RECOVERY))
                 .isInstanceOf(AccessDeniedException.class);
     }
 
@@ -142,11 +192,13 @@ class FinancialActionAuthorizerTest {
     }
 
     @Test
-    void requirePermission_financeManagerApprovalRole_doesNotGrantDeliveryOrRecovery() {
-        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of("ROLE_FINANCE_MANAGER"));
+    void requirePermission_configApprovalAuthority_doesNotGrantDeliveryOrRecovery() {
+        // The approval override grants approval alone: delivery and recovery keep their own
+        // authorities (here, their default role - which this user does not hold).
+        properties.getAuthorization().setConfigurationApprovalAuthorities(List.of("CONFIG_APPROVE"));
         properties.getAuthorization().setInvoiceDeliveryAuthorities(List.of());
         properties.getAuthorization().setOperationsRecoveryAuthorities(List.of());
-        UserDTO bindu = new UserDTO(30L, "bindu@example.com", "Bindu", List.of("FINANCE_MANAGER"), List.of());
+        UserDTO bindu = new UserDTO(30L, "bindu@example.com", "Bindu", List.of("EMPLOYEE"), List.of("CONFIG_APPROVE"));
         when(currentUserService.getCurrentUser()).thenReturn(bindu);
 
         assertThatThrownBy(() -> authorizer.requirePermission(FinancialAction.INVOICE_DELIVERY))
