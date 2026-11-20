@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/currency")
@@ -19,6 +20,7 @@ import java.util.UUID;
 public class CurrencyMasterController {
     private final CurrencyMasterService currencyService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<CurrencyResponseDto>> createCurrency(
             @Valid @RequestBody CurrencyRequestDto request) {
@@ -33,6 +35,7 @@ public class CurrencyMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{currencyId}")
     public ResponseEntity<CurrencyResponseDto> updateCurrency(
             @PathVariable UUID currencyId,
@@ -43,6 +46,7 @@ public class CurrencyMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/{currencyId}")
     public ResponseEntity<ApiResponse<CurrencyResponseDto>> getCurrencyById(
             @PathVariable UUID currencyId) {
@@ -58,6 +62,7 @@ public class CurrencyMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<CurrencyResponseDto>>> getAllCurrencies() {
 
@@ -72,6 +77,7 @@ public class CurrencyMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<List<CurrencyResponseDto>> getActiveCurrencies() {
 
@@ -80,6 +86,7 @@ public class CurrencyMasterController {
         );
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{currencyId}")
     public ResponseEntity<ApiResponse<Object>> deleteCurrency(
             @PathVariable UUID currencyId) {

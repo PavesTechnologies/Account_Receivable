@@ -9,6 +9,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/v1/billing-snapshots/{snapshotId}/invoice")
@@ -17,6 +19,7 @@ public class InvoiceController {
 
     private final InvoiceService invoiceService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -43,6 +46,7 @@ public class InvoiceController {
                 );
     }
 
+    @AnyFinanceRole
     @GetMapping
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>

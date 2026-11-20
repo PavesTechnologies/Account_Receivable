@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/project-tool-assignments")
@@ -21,6 +22,7 @@ public class ProjectToolAssignmentController {
 
     private final ProjectToolAssignmentService projectToolAssignmentService;
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<ProjectToolAssignmentResponseDto>>> getAll() {
 
@@ -34,6 +36,7 @@ public class ProjectToolAssignmentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/project/{projectId}")
     public ResponseEntity<ApiResponse<List<ProjectToolAssignmentResponseDto>>> getByProject(
             @PathVariable Long projectId) {
@@ -48,6 +51,7 @@ public class ProjectToolAssignmentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{id}")
     public ResponseEntity<ApiResponse<ProjectToolAssignmentResponseDto>> getById(
             @PathVariable UUID id) {
@@ -62,6 +66,7 @@ public class ProjectToolAssignmentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<ProjectToolAssignmentResponseDto>> create(
             @Valid @RequestBody ProjectToolAssignmentRequestDto request) {
@@ -76,6 +81,7 @@ public class ProjectToolAssignmentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<ProjectToolAssignmentResponseDto>> update(
             @PathVariable UUID id,
@@ -91,6 +97,7 @@ public class ProjectToolAssignmentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable UUID id) {
@@ -105,6 +112,7 @@ public class ProjectToolAssignmentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PostMapping("/{id}/renew")
     public ResponseEntity<ApiResponse<ProjectToolAssignmentResponseDto>> renew(
             @PathVariable UUID id,

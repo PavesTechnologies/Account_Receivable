@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/tax-configuration-components")
@@ -20,6 +21,7 @@ public class TaxConfigurationComponentController {
 
     private final TaxConfigurationComponentService componentService;
 
+    @ExecutiveOnly
     @PostMapping("/tax-configuration/{taxConfigurationId}")
     public ResponseEntity<ApiResponse<TaxConfigurationComponentResponseDto>>
     createComponent(
@@ -41,6 +43,7 @@ public class TaxConfigurationComponentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{taxConfigurationComponentId}")
     public ResponseEntity<ApiResponse<TaxConfigurationComponentResponseDto>>
     updateComponent(
@@ -62,6 +65,7 @@ public class TaxConfigurationComponentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{taxConfigurationComponentId}")
     public ResponseEntity<ApiResponse<TaxConfigurationComponentResponseDto>>
     getComponentById(
@@ -81,6 +85,7 @@ public class TaxConfigurationComponentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/tax-configuration/{taxConfigurationId}")
     public ResponseEntity<
             ApiResponse<List<TaxConfigurationComponentResponseDto>>
@@ -102,6 +107,7 @@ public class TaxConfigurationComponentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<
             ApiResponse<List<TaxConfigurationComponentResponseDto>>
@@ -119,6 +125,7 @@ public class TaxConfigurationComponentController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PatchMapping("/{taxConfigurationComponentId}/deactivate")
     public ResponseEntity<ApiResponse<Void>>
     deactivateComponent(

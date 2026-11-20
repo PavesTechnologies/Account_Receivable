@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/tool-catalog")
@@ -20,6 +21,7 @@ public class ToolCatalogController {
 
     private final ToolCatalogService toolCatalogService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<ToolCatalogResponseDto>> create(
             @Valid @RequestBody ToolCatalogRequestDto request) {
@@ -34,6 +36,7 @@ public class ToolCatalogController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{toolId}")
     public ResponseEntity<ApiResponse<ToolCatalogResponseDto>> update(
             @PathVariable UUID toolId,
@@ -49,6 +52,7 @@ public class ToolCatalogController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{toolId}")
     public ResponseEntity<ApiResponse<ToolCatalogResponseDto>> getById(
             @PathVariable UUID toolId) {
@@ -63,6 +67,7 @@ public class ToolCatalogController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<ToolCatalogResponseDto>>> getAll() {
 
@@ -76,6 +81,7 @@ public class ToolCatalogController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<ToolCatalogResponseDto>>> getActive() {
 
@@ -89,6 +95,7 @@ public class ToolCatalogController {
                         .build());
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{toolId}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable UUID toolId) {

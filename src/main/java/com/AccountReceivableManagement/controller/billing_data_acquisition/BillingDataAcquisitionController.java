@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * REST controller for the Billing Data Acquisition feature.
@@ -36,6 +37,7 @@ public class BillingDataAcquisitionController {
      *
      * @return wrapped list of {@link BillingDataAcquisitionResponseDto}
      */
+    @ExecutiveOnly
     @GetMapping("/active-configurations")
     public ResponseEntity<ApiResponse<List<BillingDataAcquisitionResponseDto>>> getActiveConfigurations() {
 
@@ -59,6 +61,7 @@ public class BillingDataAcquisitionController {
      * @param request {@link BillingAcquisitionRequestDto}
      * @return wrapped {@link AcquireDataResponseDto}
      */
+    @ExecutiveOnly
     @PostMapping("/acquire")
     public ResponseEntity<ApiResponse<AcquireDataResponseDto>> acquire(
             @Valid @RequestBody BillingAcquisitionRequestDto request) {

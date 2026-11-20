@@ -3,6 +3,8 @@ package com.AccountReceivableManagement.controller.company_profile;
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
 import com.AccountReceivableManagement.dto.company_profile.CompanySignatureResponseDto;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 import com.AccountReceivableManagement.security.FinanceExecutiveAuthorizer;
 import com.AccountReceivableManagement.service_interface.company_profile.CompanySignatureService;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +31,7 @@ public class CompanySignatureController {
     private final CompanySignatureService signatureService;
     private final FinanceExecutiveAuthorizer authorizer;
 
+    @ExecutiveOnly
     @PutMapping(value = "/{companyProfileId}/signature", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<CompanySignatureResponseDto>> upload(
             @PathVariable UUID companyProfileId,
@@ -39,6 +42,7 @@ public class CompanySignatureController {
         return ok("Authorized signature saved successfully.", signatureService.upload(companyProfileId, file));
     }
 
+    @AnyFinanceRole
     @GetMapping("/{companyProfileId}/signature")
     public ResponseEntity<ApiResponse<CompanySignatureResponseDto>> get(
             @PathVariable UUID companyProfileId,
@@ -48,6 +52,7 @@ public class CompanySignatureController {
         return ok("Authorized signature retrieved successfully.", signatureService.get(companyProfileId));
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{companyProfileId}/signature")
     public ResponseEntity<ApiResponse<CompanySignatureResponseDto>> remove(
             @PathVariable UUID companyProfileId,
@@ -58,6 +63,7 @@ public class CompanySignatureController {
     }
 
     /** Serves a stored signature image by its opaque id (verified token required); only signature assets can be addressed. */
+    @AnyFinanceRole
     @GetMapping("/signature-assets/{signatureReference}")
     public ResponseEntity<byte[]> image(
             @PathVariable String signatureReference,

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/proration-rule")
@@ -19,6 +20,7 @@ import java.util.UUID;
 public class ProrationRuleMasterController {
     private final ProrationRuleMasterService prorationRuleService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<ProrationRuleResponseDto>> createProrationRule(
             @Valid @RequestBody ProrationRuleRequestDto request) {
@@ -33,6 +35,7 @@ public class ProrationRuleMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{prorationRuleId}")
     public ResponseEntity<ApiResponse<ProrationRuleResponseDto>> updateProrationRule(
             @PathVariable UUID prorationRuleId,
@@ -50,6 +53,7 @@ public class ProrationRuleMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/{prorationRuleId}")
     public ResponseEntity<ApiResponse<ProrationRuleResponseDto>> getProrationRuleById(
             @PathVariable UUID prorationRuleId) {
@@ -65,6 +69,7 @@ public class ProrationRuleMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<ProrationRuleResponseDto>>> getAllProrationRules() {
 
@@ -79,6 +84,7 @@ public class ProrationRuleMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<ProrationRuleResponseDto>>> getActiveProrationRules() {
 
@@ -93,6 +99,7 @@ public class ProrationRuleMasterController {
         );
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{prorationRuleId}")
     public ResponseEntity<ApiResponse<Object>> deleteProrationRule(
             @PathVariable UUID prorationRuleId) {

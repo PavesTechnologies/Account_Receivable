@@ -94,12 +94,10 @@ public class FinancialActionAuthorizer {
     private static Set<String> heldAuthorities(UserDTO user) {
         Set<String> held = new TreeSet<>();
         if (user.getRoles() != null) {
-            user.getRoles().stream().map(FinancialActionAuthorizer::canonical).filter(r -> !r.isEmpty())
-                    .map(role -> role.startsWith("ROLE_") ? role : "ROLE_" + role).forEach(held::add);
+            user.getRoles().stream().map(RoleNames::roleAuthority).filter(r -> !r.isEmpty()).forEach(held::add);
         }
         if (user.getPermissions() != null) {
-            user.getPermissions().stream().map(FinancialActionAuthorizer::canonical).filter(p -> !p.isEmpty())
-                    .forEach(held::add);
+            user.getPermissions().stream().map(RoleNames::canonical).filter(p -> !p.isEmpty()).forEach(held::add);
         }
         return held;
     }
@@ -107,20 +105,9 @@ public class FinancialActionAuthorizer {
     private static Set<String> configured(List<String> allowed) {
         Set<String> required = new TreeSet<>();
         if (allowed != null) {
-            allowed.stream().map(FinancialActionAuthorizer::canonical).filter(a -> !a.isEmpty()).forEach(required::add);
+            allowed.stream().map(RoleNames::canonical).filter(a -> !a.isEmpty()).forEach(required::add);
         }
         return required;
-    }
-
-    /**
-     * UMS role/permission names are matched regardless of case and of space,
-     * hyphen or underscore separators ("Finance Manager", "finance-manager" and
-     * "FINANCE_MANAGER" are the same role), as {@link FinanceExecutiveAuthorizer}
-     * already does for its role. The name itself must still match exactly.
-     */
-    private static String canonical(String authority) {
-        return authority == null ? ""
-                : authority.trim().replaceAll("[\\s\\-_]+", "_").toUpperCase(java.util.Locale.ROOT);
     }
 
     private static Actor actorOf(UserDTO user) {

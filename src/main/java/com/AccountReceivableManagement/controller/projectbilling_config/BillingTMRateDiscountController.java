@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/billing-tm-rate-card")
@@ -20,6 +22,7 @@ public class BillingTMRateDiscountController {
 
     private final BillingTMRateDiscountService discountService;
 
+    @ExecutiveOnly
     @PostMapping("/tm-rate-cards/{rateCardId}/discounts")
     public ResponseEntity<ApiResponse<BillingTMRateDiscountResponseDto>> addDiscount(
             @PathVariable UUID rateCardId,
@@ -32,6 +35,7 @@ public class BillingTMRateDiscountController {
                         .build());
     }
 
+    @AnyFinanceRole
     @GetMapping("/tm-rate-cards/{rateCardId}/discounts")
     public ResponseEntity<ApiResponse<List<BillingTMRateDiscountResponseDto>>> getDiscounts(
             @PathVariable UUID rateCardId) {
@@ -42,6 +46,7 @@ public class BillingTMRateDiscountController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/tm-rate-discounts/{discountId}")
     public ResponseEntity<ApiResponse<BillingTMRateDiscountResponseDto>> getDiscount(
             @PathVariable UUID discountId) {
@@ -52,6 +57,7 @@ public class BillingTMRateDiscountController {
                 .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/tm-rate-discounts/{discountId}")
     public ResponseEntity<ApiResponse<BillingTMRateDiscountResponseDto>> updateDiscount(
             @PathVariable UUID discountId,
@@ -63,6 +69,7 @@ public class BillingTMRateDiscountController {
                 .build());
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/tm-rate-discounts/{discountId}")
     public ResponseEntity<ApiResponse<Void>> deleteDiscount(@PathVariable UUID discountId) {
         discountService.deleteDiscount(discountId);

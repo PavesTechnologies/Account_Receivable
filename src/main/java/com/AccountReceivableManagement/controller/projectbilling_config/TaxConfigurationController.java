@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/v1/tax-rate-configurations")
@@ -20,6 +21,7 @@ public class TaxConfigurationController {
 
     private final TaxConfigurationService taxRateConfigurationService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<TaxConfigurationResponseDto>> create(
             @Valid @RequestBody TaxConfigurationRequestDto request) {
@@ -34,6 +36,7 @@ public class TaxConfigurationController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{taxRateConfigurationId}")
     public ResponseEntity<ApiResponse<TaxConfigurationResponseDto>> update(
             @PathVariable UUID taxRateConfigurationId,
@@ -49,6 +52,7 @@ public class TaxConfigurationController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{taxRateConfigurationId}")
     public ResponseEntity<ApiResponse<TaxConfigurationResponseDto>> getById(
             @PathVariable UUID taxRateConfigurationId) {
@@ -63,6 +67,7 @@ public class TaxConfigurationController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<TaxConfigurationResponseDto>>> getAll() {
 
@@ -75,6 +80,7 @@ public class TaxConfigurationController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<TaxConfigurationResponseDto>>> getActive() {
 
@@ -87,6 +93,7 @@ public class TaxConfigurationController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/tax-region/{taxRegionId}")
     public ResponseEntity<ApiResponse<List<TaxConfigurationResponseDto>>> getByTaxRegion(
             @PathVariable UUID taxRegionId) {
@@ -101,6 +108,7 @@ public class TaxConfigurationController {
                 .build());
     }
 
+    @ExecutiveOnly
     @PatchMapping("/{taxRateConfigurationId}/deactivate")
     public ResponseEntity<ApiResponse<Void>> deactivate(
             @PathVariable UUID taxRateConfigurationId) {

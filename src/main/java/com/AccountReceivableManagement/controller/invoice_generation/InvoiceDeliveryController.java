@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.controller.invoice_generation;
 
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceDeliveryResponseDto;
 import com.AccountReceivableManagement.entity_enums.invoice_generation.InvoiceDeliveryStatus;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceDeliveryService;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * The real "Send to Client" workflow - genuinely sends the invoice by
@@ -36,6 +38,7 @@ public class InvoiceDeliveryController {
      * active company profile, invoice not found) is reported as an error
      * response instead, before any delivery record is created.
      */
+    @ExecutiveOnly
     @PostMapping("/{invoiceId}/send")
     public ResponseEntity<ApiResponse<InvoiceDeliveryResponseDto>> sendInvoice(
             @PathVariable UUID invoiceId
@@ -70,6 +73,7 @@ public class InvoiceDeliveryController {
      * delivery state is the first entry. Lets the frontend stop relying on
      * localStorage as the source of truth.
      */
+    @AnyFinanceRole
     @GetMapping("/{invoiceId}/deliveries")
     public ResponseEntity<ApiResponse<List<InvoiceDeliveryResponseDto>>> getDeliveryHistory(
             @PathVariable UUID invoiceId

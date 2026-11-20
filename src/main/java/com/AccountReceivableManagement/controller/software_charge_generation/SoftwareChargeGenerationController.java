@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * Turns Finance's selected software (Phase 3 output) into runtime charge
@@ -25,6 +26,7 @@ public class SoftwareChargeGenerationController {
 
     private final SoftwareChargeGenerationService softwareChargeGenerationService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<List<SoftwareChargeLineDto>>> generateChargeLines(
             @RequestBody List<InvoiceSoftwareSelectionResponseDto> selectedAssets) {

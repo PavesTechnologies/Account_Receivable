@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ManagerOnly;
 
 /**
  * Read-only receivable monitoring for Finance. Receivables are created by
@@ -26,6 +27,7 @@ public class ReceivableController {
      * Receivables with a balance owed (outstandingBalance &gt; 0), earliest
      * due first. Zero-balance receivables are excluded but kept.
      */
+    @ManagerOnly
     @GetMapping("/outstanding")
     public ResponseEntity<ApiResponse<List<ReceivableResponseDto>>> getOutstandingReceivables(
             @RequestParam(required = false) UUID clientId,
@@ -45,6 +47,7 @@ public class ReceivableController {
     /**
      * One receivable in any status, including settled.
      */
+    @ManagerOnly
     @GetMapping("/{receivableId}")
     public ResponseEntity<ApiResponse<ReceivableResponseDto>> getReceivableById(
             @PathVariable UUID receivableId

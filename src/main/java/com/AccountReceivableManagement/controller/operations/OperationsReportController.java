@@ -18,6 +18,15 @@ import java.util.List;
  * Read-only operations reports for Finance and AR support. Access is limited
  * to the authorities in {@code ar.operations.report-authorities}
  * (SecurityConfig); nothing here writes.
+ *
+ * <p>Deliberately carries no access annotation, unlike every other controller.
+ * {@code RBAC_ENDPOINT_MATRIX.md} §7.2 assigns these reports to the Finance
+ * Manager but enforces that through the authority list, not a role literal, so
+ * the reports can be opened to an operations or support role without a code
+ * change. Adding {@code @ManagerOnly} here would require <em>both</em> that
+ * role and a configured authority, silently narrowing the list to whoever also
+ * happens to be a Finance Manager. Set the role through
+ * {@code AR_OPERATIONS_REPORT_AUTHORITIES} instead.
  */
 @RestController
 @RequestMapping("/api/v1/operations")

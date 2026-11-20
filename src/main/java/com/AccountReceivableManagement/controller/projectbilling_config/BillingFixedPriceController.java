@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/billing-fixed-price")
@@ -20,6 +21,7 @@ public class BillingFixedPriceController {
 
     private final BillingFixedPriceService billingFixedPriceService;
 
+    @ExecutiveOnly
     @PostMapping("/{billingConfigurationId}/fixed-price")
     public ResponseEntity<ApiResponse<BillingFixedPriceResponseDto>> create(
             @PathVariable UUID billingConfigurationId,
@@ -44,6 +46,7 @@ public class BillingFixedPriceController {
                 );
     }
 
+    @ExecutiveOnly
     @PutMapping("/fixed-price/{fixedPriceConfigurationId}")
     public ResponseEntity<ApiResponse<BillingFixedPriceResponseDto>> update(
             @PathVariable UUID fixedPriceConfigurationId,
@@ -66,6 +69,7 @@ public class BillingFixedPriceController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/fixed-price/{fixedPriceConfigurationId}")
     public ResponseEntity<ApiResponse<BillingFixedPriceResponseDto>> get(
             @PathVariable UUID fixedPriceConfigurationId) {
@@ -86,6 +90,7 @@ public class BillingFixedPriceController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/{billingConfigurationId}/fixed-price")
     public ResponseEntity<ApiResponse<List<BillingFixedPriceResponseDto>>> getAll(
             @PathVariable UUID billingConfigurationId) {
@@ -106,6 +111,7 @@ public class BillingFixedPriceController {
         );
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/fixed-price/{fixedPriceConfigurationId}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable UUID fixedPriceConfigurationId) {

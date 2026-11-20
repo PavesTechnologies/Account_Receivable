@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.controller.invoice_generation;
 
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceSummaryResponseDto;
 import com.AccountReceivableManagement.service_interface.invoice_generation.InvoiceService;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * Read-only Invoice Generation workspace listing. Separate from
@@ -26,6 +28,7 @@ public class InvoiceListController {
 
     private final InvoiceService invoiceService;
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<
             ApiResponse<List<InvoiceSummaryResponseDto>>
@@ -50,6 +53,7 @@ public class InvoiceListController {
      * for an Invoice Preview screen when only the invoice id is in hand
      * (e.g. from the approval workspace).
      */
+    @AnyFinanceRole
     @GetMapping("/{invoiceId}")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>

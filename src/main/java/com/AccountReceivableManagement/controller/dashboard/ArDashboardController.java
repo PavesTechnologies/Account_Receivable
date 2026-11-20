@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
 
 /**
  * Read-only AR dashboard data.
@@ -37,6 +38,7 @@ public class ArDashboardController {
      * @param period MTD (default), QTD or YTD
      * @param asOf   reference date, yyyy-MM-dd; defaults to today
      */
+    @AnyFinanceRole
     @GetMapping("/summary")
     public ResponseEntity<ApiResponse<ArDashboardSummaryDto>> getSummary(
             @RequestParam(required = false) String period,
@@ -58,6 +60,7 @@ public class ArDashboardController {
      * @param limit rows to return (default 50, capped at 200)
      * @param asOf  reference date for overdue/aging, yyyy-MM-dd; defaults to today
      */
+    @AnyFinanceRole
     @GetMapping("/invoices")
     public ResponseEntity<ApiResponse<List<DashboardInvoiceRowDto>>> getInvoices(
             @RequestParam(required = false) String view,

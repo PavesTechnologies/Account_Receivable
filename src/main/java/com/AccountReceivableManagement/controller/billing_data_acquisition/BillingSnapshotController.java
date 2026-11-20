@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * REST Controller for Billing Snapshot operations.
@@ -54,6 +55,7 @@ public class BillingSnapshotController {
          * @param request Billing Snapshot request
          * @return Billing Snapshot response
          */
+        @ExecutiveOnly
         @PostMapping
         public ResponseEntity<ApiResponse<BillingSnapshotResponseDto>> createBillingSnapshot(
                         @Valid @RequestBody BillingSnapshotCreateRequestDto request) {
@@ -64,6 +66,7 @@ public class BillingSnapshotController {
                 return ResponseEntity.ok(response);
         }
 
+        @ExecutiveOnly
         @GetMapping("/by-period")
         public ResponseEntity<ApiResponse<BillingSnapshotResponseDto>> getByProjectAndPeriod(
                         @RequestParam Long projectId,
@@ -83,6 +86,7 @@ public class BillingSnapshotController {
          * those of a deactivated or expired configuration, which the Acquisition
          * Queue (ACTIVE configurations only) no longer lists.
          */
+        @ExecutiveOnly
         @GetMapping
         public ResponseEntity<ApiResponse<java.util.List<BillingSnapshotResponseDto>>> getByBillingConfiguration(
                         @RequestParam java.util.UUID billingConfigurationId) {
