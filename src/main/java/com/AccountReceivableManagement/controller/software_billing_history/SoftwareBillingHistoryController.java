@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/software-billing-history")
@@ -20,6 +21,7 @@ public class SoftwareBillingHistoryController {
 
     private final SoftwareBillingHistoryService softwareBillingHistoryService;
 
+    @ExecutiveOnly
     @GetMapping("/assets/{assetId}")
     public ResponseEntity<ApiResponse<List<SoftwareBillingHistoryResponseDto>>> getHistoryForAsset(
             @PathVariable UUID assetId) {

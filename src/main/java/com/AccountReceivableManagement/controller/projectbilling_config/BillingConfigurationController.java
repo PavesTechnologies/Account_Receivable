@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
+import com.AccountReceivableManagement.security.ManagerOnly;
 
 @RestController
 @RequestMapping("/api/billing-configurations")
@@ -19,6 +22,7 @@ import java.util.UUID;
 public class BillingConfigurationController {
     private final BillingConfigurationService billingConfigurationService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> create(
             @Valid @RequestBody BillingConfigurationRequestDto request) {
@@ -34,6 +38,7 @@ public class BillingConfigurationController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{billingConfigurationId}")
     public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> update(
             @PathVariable UUID billingConfigurationId,
@@ -49,6 +54,7 @@ public class BillingConfigurationController {
                 .build());
     }
 
+    @ExecutiveOnly
     @PostMapping("/preview-schedule")
     public ResponseEntity<ApiResponse<List<BillingPeriodDto>>> previewSchedule(
             @Valid @RequestBody BillingSchedulePreviewRequest request) {
@@ -64,6 +70,7 @@ public class BillingConfigurationController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/project/{projectId}")
     public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> getApprovedByProjectId(
             @PathVariable Long projectId) {
@@ -78,6 +85,7 @@ public class BillingConfigurationController {
                 .build());
     }
 
+    @ManagerOnly
     @PutMapping("/{billingConfigurationId}/approve")
     public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> approve(
             @PathVariable UUID billingConfigurationId) {
@@ -90,6 +98,7 @@ public class BillingConfigurationController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/clients")
     public ResponseEntity<ApiResponse<List<ClientResponseDto>>> getClients() {
 
@@ -101,6 +110,7 @@ public class BillingConfigurationController {
                         .build());
     }
 
+    @AnyFinanceRole
     @GetMapping("/projects/{clientId}")
     public ResponseEntity<ApiResponse<List<ProjectResponseDto>>> getProjects(
             @PathVariable UUID clientId) {
@@ -113,6 +123,7 @@ public class BillingConfigurationController {
                         .build());
     }
 
+    @AnyFinanceRole
     @GetMapping("/{billingConfigurationId}")
     public ResponseEntity<BillingConfigurationResponseDto> getBillingConfiguration(
             @PathVariable UUID billingConfigurationId) {
@@ -121,6 +132,7 @@ public class BillingConfigurationController {
                 billingConfigurationService.getBillingConfiguration(billingConfigurationId));
     }
 
+    @AnyFinanceRole
     @GetMapping
     public ResponseEntity<List<BillingConfigurationResponseDto>> getAllBillingConfigurations() {
 
@@ -128,6 +140,7 @@ public class BillingConfigurationController {
                 billingConfigurationService.getAllBillingConfigurations());
     }
 
+    @ManagerOnly
     @PatchMapping("/{billingConfigurationId}/deactivate")
     public ResponseEntity<ApiResponse<String>> deactivateBillingConfiguration(
             @PathVariable UUID billingConfigurationId) {
@@ -143,6 +156,7 @@ public class BillingConfigurationController {
                         .build());
     }
 
+    @ManagerOnly
     @PutMapping("/{billingConfigurationId}/reject")
     public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>> reject(
             @PathVariable UUID billingConfigurationId,
@@ -160,6 +174,7 @@ public class BillingConfigurationController {
     }
 
 
+    @ExecutiveOnly
     @DeleteMapping("/{billingConfigurationId}")
     public ResponseEntity<ApiResponse<Void>> deleteBillingConfiguration(
             @PathVariable UUID billingConfigurationId) {
@@ -175,6 +190,7 @@ public class BillingConfigurationController {
         );
     }
     
+    @ExecutiveOnly
     @PostMapping("/draft")
     public ResponseEntity<ApiResponse<BillingConfigurationDraftResponseDto>> createDraft(
             @Valid @RequestBody BillingConfigurationDraftRequestDto request) {
@@ -193,6 +209,7 @@ public class BillingConfigurationController {
                 );
     }
 
+    @ExecutiveOnly
     @PutMapping("/{billingConfigurationId}/draft")
     public ResponseEntity<ApiResponse<BillingConfigurationDraftResponseDto>> saveDraft(
             @PathVariable UUID billingConfigurationId,
@@ -212,6 +229,7 @@ public class BillingConfigurationController {
         );
     }
 
+    @ExecutiveOnly
     @PutMapping("/{billingConfigurationId}/submit")
     public ResponseEntity<ApiResponse<BillingConfigurationResponseDto>>
     submitForApproval(
@@ -230,6 +248,7 @@ public class BillingConfigurationController {
         );
     }
 
+    @ManagerOnly
     @GetMapping("/pending-approvals")
     public ResponseEntity<ApiResponse<List<BillingConfigurationResponseDto>>>
     getPendingApprovals() {
@@ -243,6 +262,7 @@ public class BillingConfigurationController {
         );
     }
 
+    @AnyFinanceRole
     @GetMapping("/available-projects")
     public ResponseEntity<ApiResponse<List<ProjectResponseDto>>> getAvailableProjectsForNewConfiguration(
             @RequestParam UUID clientId) {

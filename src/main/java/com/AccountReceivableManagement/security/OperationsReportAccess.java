@@ -31,12 +31,15 @@ public class OperationsReportAccess implements AuthorizationManager<RequestAutho
         if (current == null || !current.isAuthenticated()) {
             return new AuthorizationDecision(false);
         }
+        // Canonical on both sides (RoleNames), so a configured "ROLE_Finance_Executive"
+        // still matches the authority the JWT converter produced for Finance_Executive.
         Set<String> allowed = properties.getReportAuthorities().stream()
-                .map(String::trim)
+                .map(RoleNames::canonical)
                 .filter(value -> !value.isEmpty())
                 .collect(Collectors.toSet());
         boolean granted = current.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
+                .map(RoleNames::canonical)
                 .anyMatch(allowed::contains);
         return new AuthorizationDecision(granted);
     }

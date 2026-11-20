@@ -40,6 +40,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         com.AccountReceivableManagement.security.CustomAccessDeniedHandler.class,
         com.AccountReceivableManagement.security.CustomAuthenticationEntryPoint.class})
 @org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc(addFilters = false)
+// Tax configuration is Finance Executive work (RBAC_ENDPOINT_MATRIX.md §7.4). The filters are off, so
+// nothing populates the SecurityContext, but @EnableMethodSecurity still evaluates the controller's
+// @ExecutiveOnly: without an authenticated user the request fails before validation can be observed.
+@org.springframework.security.test.context.support.WithMockUser(roles = "FINANCE_EXECUTIVE")
 class TaxConfigurationControllerValidationTest {
 
     @Autowired

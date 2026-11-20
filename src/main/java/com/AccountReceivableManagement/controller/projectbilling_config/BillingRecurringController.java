@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/billing-recurring")
@@ -22,6 +23,7 @@ public class BillingRecurringController {
 
     private final RecurringBillingService recurringBillingService;
 
+    @ExecutiveOnly
     @PostMapping("/{billingConfigurationId}")
     public ResponseEntity<ApiResponse<RecurringBillingResponseDto>> create(
             @PathVariable UUID billingConfigurationId,
@@ -38,6 +40,7 @@ public class BillingRecurringController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{recurringConfigurationId}")
     public ResponseEntity<ApiResponse<RecurringBillingResponseDto>> update(
             @PathVariable UUID recurringConfigurationId,
@@ -53,6 +56,7 @@ public class BillingRecurringController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{recurringConfigurationId}")
     public ResponseEntity<ApiResponse<RecurringBillingResponseDto>> get(
             @PathVariable UUID recurringConfigurationId) {
@@ -66,6 +70,7 @@ public class BillingRecurringController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/billing-configuration/{billingConfigurationId}")
     public ResponseEntity<ApiResponse<List<RecurringBillingResponseDto>>> getByBillingConfiguration(
             @PathVariable UUID billingConfigurationId) {
@@ -79,6 +84,7 @@ public class BillingRecurringController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{recurringConfigurationId}/schedule")
     public ResponseEntity<ApiResponse<List<BillingPeriodDto>>> getBillingSchedule(
             @PathVariable UUID recurringConfigurationId) {
@@ -95,6 +101,7 @@ public class BillingRecurringController {
         );
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{recurringConfigurationId}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable UUID recurringConfigurationId) {
@@ -107,6 +114,7 @@ public class BillingRecurringController {
                 .build());
     }
 
+    @ExecutiveOnly
     @PostMapping("/{recurringConfigurationId}/renew")
     public ResponseEntity<ApiResponse<RecurringBillingResponseDto>> renew(
             @PathVariable UUID recurringConfigurationId,
@@ -123,6 +131,7 @@ public class BillingRecurringController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{recurringConfigurationId}/renewal-history")
     public ResponseEntity<ApiResponse<List<RecurringBillingResponseDto>>> getRenewalHistory(
             @PathVariable UUID recurringConfigurationId) {

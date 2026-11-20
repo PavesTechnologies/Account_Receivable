@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * Read-only pre-generation invoice preview. Separate from
@@ -24,6 +25,7 @@ public class InvoicePreviewController {
 
     private final InvoiceService invoiceService;
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<InvoiceResponseDto>> previewInvoice(
             @PathVariable UUID snapshotId

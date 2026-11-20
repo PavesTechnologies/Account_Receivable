@@ -25,6 +25,8 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/billing-occurrences")
@@ -39,6 +41,7 @@ public class BillingOccurrenceController {
     private final TaxCalculationService taxCalculationService;
         private final InvoiceService invoiceService;
 
+    @AnyFinanceRole
     @GetMapping("/{occurrenceId}")
     public ResponseEntity<BillingOccurrenceResponseDto> getOccurrence(
             @PathVariable UUID occurrenceId) {
@@ -50,6 +53,7 @@ public class BillingOccurrenceController {
         return ResponseEntity.ok(mapToResponse(schedule));
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<List<BillingOccurrenceResponseDto>> getOccurrences(
             @RequestParam(required = false) UUID billingConfigurationId,
@@ -143,6 +147,7 @@ public class BillingOccurrenceController {
                 .collect(Collectors.toList()));
     }
 
+    @AnyFinanceRole
     @GetMapping("/{occurrenceId}/tax-calculation")
     public ResponseEntity<TaxCalculationResponseDto> getTaxCalculation(
             @PathVariable UUID occurrenceId) {
@@ -158,6 +163,7 @@ public class BillingOccurrenceController {
                         "Tax calculation not found for this billing occurrence"));
     }
 
+    @ExecutiveOnly
     @PostMapping("/{occurrenceId}/calculate-tax")
     public ResponseEntity<TaxCalculationResponseDto> calculateTax(
             @PathVariable UUID occurrenceId) {
@@ -174,6 +180,7 @@ public class BillingOccurrenceController {
         return ResponseEntity.ok(taxCalculationService.calculateTaxForSchedule(occurrenceId));
     }
 
+        @ExecutiveOnly
         @PostMapping("/{occurrenceId}/invoice")
         public ResponseEntity<ApiResponse<InvoiceResponseDto>> generateInvoice(
                         @PathVariable UUID occurrenceId) {

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/payment-terms")
@@ -20,6 +21,7 @@ public class PaymentTermsMasterController {
 
     private final PaymentTermsMasterService paymentTermsService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<PaymentTermsResponseDto>> createPaymentTerm(
             @Valid @RequestBody PaymentTermsRequestDto request) {
@@ -34,6 +36,7 @@ public class PaymentTermsMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{paymentTermId}")
     public ResponseEntity<ApiResponse<PaymentTermsResponseDto>> updatePaymentTerm(
             @PathVariable UUID paymentTermId,
@@ -52,6 +55,7 @@ public class PaymentTermsMasterController {
     }
 
 
+    @ExecutiveOnly
     @GetMapping("/{paymentTermId}")
     public ResponseEntity<ApiResponse<PaymentTermsResponseDto>> getPaymentTermById(
             @PathVariable UUID paymentTermId) {
@@ -68,6 +72,7 @@ public class PaymentTermsMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<PaymentTermsResponseDto>>> getAllPaymentTerms() {
 
@@ -83,6 +88,7 @@ public class PaymentTermsMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<PaymentTermsResponseDto>>> getActivePaymentTerms() {
 
@@ -98,6 +104,7 @@ public class PaymentTermsMasterController {
         );
     }
 
+    @ExecutiveOnly
     @PutMapping("/{paymentTermId}/activate")
     public ResponseEntity<ApiResponse<Void>> activatePaymentTerm(
             @PathVariable UUID paymentTermId) {
@@ -113,6 +120,7 @@ public class PaymentTermsMasterController {
         );
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{paymentTermId}")
     public ResponseEntity<ApiResponse<Void>> deletePaymentTerm(
             @PathVariable UUID paymentTermId) {

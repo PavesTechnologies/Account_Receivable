@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * Software/Tools/Licenses available for selection under Invoice Draft →
@@ -24,6 +25,7 @@ public class InvoiceSoftwareSelectionController {
 
     private final InvoiceSoftwareSelectionService invoiceSoftwareSelectionService;
 
+    @ExecutiveOnly
     @GetMapping("/projects/{projectId}")
     public ResponseEntity<ApiResponse<List<InvoiceSoftwareSelectionResponseDto>>> getSelectableAssets(
             @PathVariable Long projectId) {

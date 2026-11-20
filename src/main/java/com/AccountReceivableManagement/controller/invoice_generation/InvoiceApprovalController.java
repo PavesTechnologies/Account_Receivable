@@ -1,6 +1,8 @@
 package com.AccountReceivableManagement.controller.invoice_generation;
 
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ManagerOnly;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalHistoryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalSummaryResponseDto;
 import com.AccountReceivableManagement.dto.invoice_generation.InvoiceApprovalWorkspaceResponseDto;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * Invoice Approval: {@code GENERATED -> PENDING_APPROVAL -> APPROVED}, with
@@ -44,6 +47,7 @@ public class InvoiceApprovalController {
 
     private final InvoiceFinancialCorrectionService invoiceFinancialCorrectionService;
 
+    @ExecutiveOnly
     @PostMapping("/{invoiceId}/submit-for-approval")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -74,6 +78,7 @@ public class InvoiceApprovalController {
      * document can be generated again with {@code POST /{invoiceId}/document}.
      * Nothing is sent to the client.
      */
+    @ManagerOnly
     @PostMapping("/{invoiceId}/approve")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -117,6 +122,7 @@ public class InvoiceApprovalController {
      * invoice: APPROVED -> READY_TO_SEND. Used when generation failed at
      * approval, or for an invoice approved before documents were finalized.
      */
+    @ManagerOnly
     @PostMapping("/{invoiceId}/document")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -135,6 +141,7 @@ public class InvoiceApprovalController {
     }
 
     /** The finalized invoice PDF, exactly as it will be sent. */
+    @AnyFinanceRole
     @GetMapping("/{invoiceId}/document")
     public ResponseEntity<byte[]> downloadDocument(
             @PathVariable UUID invoiceId
@@ -149,6 +156,7 @@ public class InvoiceApprovalController {
                 .body(document.getContent());
     }
 
+    @ManagerOnly
     @PostMapping("/{invoiceId}/reject")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -172,6 +180,7 @@ public class InvoiceApprovalController {
         );
     }
 
+    @ExecutiveOnly
     @PostMapping("/{invoiceId}/refresh-after-correction")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -201,6 +210,7 @@ public class InvoiceApprovalController {
      * is accepted, and the invoice stays {@code REJECTED} until explicitly
      * resubmitted via {@link #submitForApproval(UUID)}.
      */
+    @ExecutiveOnly
     @PatchMapping("/{invoiceId}/non-financial-correction")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -240,6 +250,7 @@ public class InvoiceApprovalController {
      * Phase 2C's {@link #correctNonFinancialFields(UUID,
      * InvoiceNonFinancialCorrectionRequestDto)}.
      */
+    @ExecutiveOnly
     @PostMapping("/{invoiceId}/financial-correction/reacquire")
     public ResponseEntity<
             ApiResponse<InvoiceResponseDto>
@@ -264,6 +275,7 @@ public class InvoiceApprovalController {
         );
     }
 
+    @AnyFinanceRole
     @GetMapping("/{invoiceId}/approval-history")
     public ResponseEntity<
             ApiResponse<List<InvoiceApprovalHistoryResponseDto>>
@@ -287,6 +299,7 @@ public class InvoiceApprovalController {
         );
     }
 
+    @ManagerOnly
     @GetMapping("/pending-approval")
     public ResponseEntity<
             ApiResponse<List<InvoiceApprovalSummaryResponseDto>>
@@ -307,6 +320,7 @@ public class InvoiceApprovalController {
         );
     }
 
+    @ManagerOnly
     @GetMapping("/approval-workspace")
     public ResponseEntity<
             ApiResponse<List<InvoiceApprovalWorkspaceResponseDto>>

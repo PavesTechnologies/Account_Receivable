@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/billing-frequency")
@@ -21,6 +22,7 @@ public class BillingFrequencyMasterController {
     private final BillingFrequencyMasterService billingFrequencyService;
 
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<BillingFrequencyResponseDto>> createBillingFrequency(
             @Valid @RequestBody BillingFrequencyRequestDto request) {
@@ -35,6 +37,7 @@ public class BillingFrequencyMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{billingFrequencyId}")
     public ResponseEntity<ApiResponse<BillingFrequencyResponseDto>> updateBillingFrequency(
             @PathVariable UUID billingFrequencyId,
@@ -50,6 +53,7 @@ public class BillingFrequencyMasterController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{billingFrequencyId}")
     public ResponseEntity<ApiResponse<BillingFrequencyResponseDto>> getBillingFrequencyById(
             @PathVariable UUID billingFrequencyId) {
@@ -64,6 +68,7 @@ public class BillingFrequencyMasterController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<BillingFrequencyResponseDto>>> getAllBillingFrequencies() {
 
@@ -77,6 +82,7 @@ public class BillingFrequencyMasterController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<BillingFrequencyResponseDto>>> getActiveBillingFrequencies() {
 
@@ -90,6 +96,7 @@ public class BillingFrequencyMasterController {
                 .build());
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{billingFrequencyId}")
     public ResponseEntity<ApiResponse<Void>> deleteBillingFrequency(
             @PathVariable UUID billingFrequencyId) {
@@ -103,6 +110,7 @@ public class BillingFrequencyMasterController {
                 .build());
     }
 
+    @ExecutiveOnly
     @PatchMapping("/{billingFrequencyId}/activate")
     public ResponseEntity<ApiResponse<BillingFrequencyResponseDto>> activateBillingFrequency(
             @PathVariable UUID billingFrequencyId) {

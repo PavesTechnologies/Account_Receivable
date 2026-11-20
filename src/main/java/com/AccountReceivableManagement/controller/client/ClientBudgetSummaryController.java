@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/client-budget-summary")
@@ -15,6 +16,7 @@ import java.util.UUID;
 public class ClientBudgetSummaryController {
 
     private final ClientBudgetSummaryService clientBudgetSummaryService;
+    @ExecutiveOnly
     @GetMapping("/{clientId}")
     public ResponseEntity<ApiResponse<ClientBudgetSummaryResponseDto>> getClientBudget(
             @PathVariable UUID clientId) {
@@ -30,6 +32,7 @@ public class ClientBudgetSummaryController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PostMapping("/refresh/{clientId}")
     public ResponseEntity<ApiResponse<String>> refreshBudget(
             @PathVariable UUID clientId) {

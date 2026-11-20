@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
 
 @RestController
 @RequestMapping("/api/record-locks")
@@ -19,6 +20,7 @@ public class RecordActionLockController {
 
     private final RecordActionLockService lockService;
 
+    @AnyFinanceRole
     @PostMapping("/{resourceType}/{resourceId}")
     public ResponseEntity<RecordLockResponse> acquireLock(
 
@@ -45,6 +47,7 @@ public class RecordActionLockController {
     /**
      * Get lock status.
      */
+    @AnyFinanceRole
     @GetMapping("/{resourceType}/{resourceId}")
     public ResponseEntity<RecordLockResponse> getLockStatus(
 
@@ -66,6 +69,7 @@ public class RecordActionLockController {
     /**
      * Heartbeat.
      */
+    @AnyFinanceRole
     @PutMapping("/{resourceType}/{resourceId}/heartbeat")
     public ResponseEntity<RecordLockResponse> heartbeat(
 
@@ -87,6 +91,7 @@ public class RecordActionLockController {
     /**
      * Release lock.
      */
+    @AnyFinanceRole
     @DeleteMapping("/{resourceType}/{resourceId}")
     public ResponseEntity<Void> releaseLock(
 
