@@ -116,7 +116,7 @@ These are the endpoints FM uses when FE has raised a request.
 | GET | `/api/billing-configurations/pending-approvals` | Queue of configs waiting for approval | **FM** (hidden from FE) | – | **Gap** |
 | PUT | `/api/billing-configurations/{id}/approve` | Approve a submitted config | **FM** | LOCK-OWNER (APPROVAL) | Yes – `BILLING_CONFIGURATION_APPROVAL` + maker-checker |
 | PUT | `/api/billing-configurations/{id}/reject` | Reject with reason | **FM** | LOCK-OWNER (APPROVAL) | Yes – `BILLING_CONFIGURATION_APPROVAL` + maker-checker |
-| PATCH | `/api/billing-configurations/{id}/deactivate` | Deactivate an **approved** config | **FM** | NOT-LOCKED | **Gap** – changes an already-approved record, so it bypasses the approval step if FE can do it |
+| PATCH | `/api/billing-configurations/{id}/deactivate` | Deactivate an **approved** config | **FE + FM** | NOT-LOCKED | Decided: the FE owns configuration lifecycle (create / update / delete / submit), so deactivation stays with them too; the FM keeps it as well. Deactivation does not alter billed amounts – it stops future occurrences – and re-activation is only possible through re-approval by the FM. |
 
 ### 5.2 Invoice approval
 
@@ -168,7 +168,7 @@ A Finance Executive must **not** be able to open these, by URL or by UI. Enforce
 | GET | `/api/v1/operations/alerts` | Operational alerts |
 | GET | `/api/v1/recovery/automatic-billing-runs/{runId}/events` | Automatic billing run event log |
 
-Related FM-only actions that FE must also not reach: approve / reject (config and invoice), finalize document (`POST /api/v1/invoices/{invoiceId}/document`), deactivate an approved configuration, every `/api/v1/recovery/**` POST, reference-data writes, and the `APPROVAL` lock. FE keeps the shared screens: lists, details, `approval-history`, `deliveries` and downloads.
+Related FM-only actions that FE must also not reach: approve / reject (config and invoice), finalize document (`POST /api/v1/invoices/{invoiceId}/document`), every `/api/v1/recovery/**` POST, reference-data writes, and the `APPROVAL` lock. FE keeps the shared screens: lists, details, `approval-history`, `deliveries` and downloads.
 
 ---
 
@@ -635,7 +635,7 @@ Use this to tick off coverage. Role is the value used in the sections above.
 | GET | `/api/billing-configurations/projects/{clientId}` | BOTH |
 | GET | `/api/billing-configurations/{billingConfigurationId}` | BOTH |
 | GET | `/api/billing-configurations` | BOTH |
-| PATCH | `/api/billing-configurations/{billingConfigurationId}/deactivate` | FM |
+| PATCH | `/api/billing-configurations/{billingConfigurationId}/deactivate` | FE + FM |
 | PUT | `/api/billing-configurations/{billingConfigurationId}/reject` | FM |
 | DELETE | `/api/billing-configurations/{billingConfigurationId}` | FE |
 | POST | `/api/billing-configurations/draft` | FE |
@@ -1057,7 +1057,7 @@ Use this to tick off coverage. Role is the value used in the sections above.
 | Endpoint | Role |
 |---|---|
 | `PATCH /api/v1/invoices/{invoiceId}/non-financial-correction` | FE |
-| `PATCH /api/billing-configurations/{billingConfigurationId}/deactivate` | FM |
+| `PATCH /api/billing-configurations/{billingConfigurationId}/deactivate` | FE + FM |
 | `PATCH /api/billing-frequency/{billingFrequencyId}/activate` | FE |
 | `PATCH /api/billing-types/{billingTypeId}/activate` | FE |
 | `PATCH /api/tax-component-master/{taxComponentId}/deactivate` | FE |
