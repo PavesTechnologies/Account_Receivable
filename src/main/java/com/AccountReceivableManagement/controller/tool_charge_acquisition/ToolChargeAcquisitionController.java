@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/tool-charge-acquisition")
@@ -21,6 +22,7 @@ public class ToolChargeAcquisitionController {
 
     private final ToolChargeAcquisitionService toolChargeAcquisitionService;
 
+    @ExecutiveOnly
     @PostMapping("/preview")
     public ResponseEntity<ApiResponse<List<ToolChargePreviewDto>>> preview(
             @Valid @RequestBody ToolChargeAcquisitionRequestDto request) {

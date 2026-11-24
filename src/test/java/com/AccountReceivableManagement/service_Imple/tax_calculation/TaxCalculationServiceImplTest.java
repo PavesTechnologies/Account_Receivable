@@ -60,6 +60,14 @@ class TaxCalculationServiceImplTest {
     @Mock
     private BillingConfigurationRepository billingConfigurationRepository;
 
+    /**
+     * Real settings, not a mock: the override is plain configuration and each
+     * test sets it explicitly. Default (unset) keeps the jurisdiction compare.
+     */
+    @org.mockito.Spy
+    private com.AccountReceivableManagement.config.properties.TaxCalculationProperties taxProperties =
+            new com.AccountReceivableManagement.config.properties.TaxCalculationProperties();
+
     @InjectMocks
     private TaxCalculationServiceImpl taxCalculationService;
 
@@ -703,6 +711,73 @@ class TaxCalculationServiceImplTest {
                 .extracting("taxTypeCode")
                 .containsExactly("IGST");
         assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("30240.00");
+    }
+
+    // CASE 16 — TEMPORARY: ar.tax.applicability-override forces IGST on a
+    // same-jurisdiction transaction, because a country-only destination cannot
+    // establish the state relationship CGST/SGST asserts. Delete with the property.
+    @Test
+    void calculateTax_applicabilityOverriddenToDifferentJurisdiction_appliesIgstOnSameJurisdiction() {
+        taxProperties.setApplicabilityOverride(TaxApplicabilityType.DIFFERENT_JURISDICTION);
+
+        // Identical source and destination: without the override this is CASE 14 (CGST + SGST).
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"), "IN", "IN");
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(igstType, "18.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, true)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+        when(taxCalculationRepository.save(any(TaxCalculation.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
+
+        TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
+
+        assertThat(response.getComponents())
+                .extracting("taxTypeCode")
+                .containsExactly("IGST");
+        // The total is unchanged by the override: 18% either way, only the split differs.
+        assertThat(response.getTotalTaxAmount()).isEqualByComparingTo("30240.00");
+    }
+
+    // CASE 17 — The override is off by default, so jurisdictions are still compared.
+    @Test
+    void calculateTax_noApplicabilityOverride_stillComparesJurisdictions() {
+        assertThat(taxProperties.getApplicabilityOverride()).isNull();
+
+        BillingSnapshot snapshot = readySnapshot(new BigDecimal("168000.00"), "IN", "IN");
+
+        TaxConfiguration configuration = configurationOf(
+                componentOf(cgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(sgstType, "9.0000", TaxApplicabilityType.SAME_JURISDICTION, true),
+                componentOf(igstType, "18.0000", TaxApplicabilityType.DIFFERENT_JURISDICTION, true)
+        );
+
+        when(billingSnapshotRepository.findById(snapshotId)).thenReturn(Optional.of(snapshot));
+        when(taxCalculationRepository.existsByBillingSnapshotId(snapshotId)).thenReturn(false);
+        when(taxConfigurationRepository.findApplicableConfigurations(taxRegionId, billingPeriodStart))
+                .thenReturn(List.of(configuration));
+        when(taxCalculationRepository.save(any(TaxCalculation.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(billingConfigurationRepository.findById(any()))
+                .thenReturn(Optional.of(snapshotBillingConfiguration()));
+
+        TaxCalculationResponseDto response = taxCalculationService.calculateTax(snapshotId);
+
+        assertThat(response.getComponents())
+                .extracting("taxTypeCode")
+                .containsExactlyInAnyOrder("CGST", "SGST");
     }
 
     // GET — existing calculation retrieved.

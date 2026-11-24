@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * Read-only Invoice Generation workspace: invoice candidates (TAX_COMPLETED
@@ -21,6 +22,7 @@ public class InvoiceGenerationWorkspaceController {
 
     private final InvoiceService invoiceService;
 
+    @ExecutiveOnly
     @GetMapping("/workspace")
     public ResponseEntity<ApiResponse<InvoiceGenerationWorkspaceResponseDto>> getWorkspace() {
 

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/billing-tm-rate-card")
@@ -19,6 +20,7 @@ import java.util.UUID;
 public class BillingTMRateCardController {
     private final BillingTMRateCardService billingTMRateCardService;
 
+    @ExecutiveOnly
     @PostMapping("/{billingConfigurationId}/tm-rate-cards")
     public ResponseEntity<ApiResponse<BillingTMRateCardResponseDto>> addRateCard(
             @PathVariable UUID billingConfigurationId,
@@ -37,6 +39,7 @@ public class BillingTMRateCardController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/tm-rate-cards/{rateCardId}")
     public ResponseEntity<ApiResponse<BillingTMRateCardResponseDto>> updateRateCard(
             @PathVariable UUID rateCardId,
@@ -55,6 +58,7 @@ public class BillingTMRateCardController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{billingConfigurationId}/tm-rate-cards")
     public ResponseEntity<ApiResponse<List<BillingTMRateCardResponseDto>>> getAllRateCards(
             @PathVariable UUID billingConfigurationId) {
@@ -71,6 +75,7 @@ public class BillingTMRateCardController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/tm-rate-cards/{rateCardId}")
     public ResponseEntity<ApiResponse<BillingTMRateCardResponseDto>> getRateCard(
             @PathVariable UUID rateCardId) {
@@ -86,6 +91,7 @@ public class BillingTMRateCardController {
                         .build());
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/tm-rate-cards/{rateCardId}")
     public ResponseEntity<ApiResponse<Void>> deleteRateCard(
             @PathVariable UUID rateCardId) {
@@ -99,6 +105,7 @@ public class BillingTMRateCardController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PostMapping("/{billingConfigurationId}/tm-rate-cards/save")
     public ResponseEntity<ApiResponse<BillingTMRateCardResponseDto>> saveRateCard(
             @PathVariable UUID billingConfigurationId,

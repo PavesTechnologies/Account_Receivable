@@ -134,6 +134,13 @@ import static org.mockito.Mockito.when;
         "ar.automatic-billing.cron=0 0 0 29 2 *"
 })
 @ActiveProfiles("test")
+// The pipeline is driven by calling controllers directly, so @EnableMethodSecurity evaluates their
+// access annotations against the SecurityContext, which these tests would otherwise leave empty.
+// Both roles are granted because one test walks the whole cycle - the executive drafts, generates
+// and sends; the manager approves. What each role may do on its own is proved by
+// ArAccessAnnotationsTest and ArEndpointAccessTest, not here.
+@org.springframework.security.test.context.support.WithMockUser(
+        roles = {"FINANCE_EXECUTIVE", "FINANCE_MANAGER"})
 class AutomaticBillingEndToEndTest {
 
     private static final BigDecimal GST_HALF = new BigDecimal("9.00");

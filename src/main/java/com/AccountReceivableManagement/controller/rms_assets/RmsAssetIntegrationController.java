@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * Read-only view onto RMS project asset assignments, for AR consumption only.
@@ -25,6 +26,7 @@ public class RmsAssetIntegrationController {
 
     private final RmsAssetIntegrationService rmsAssetIntegrationService;
 
+    @ExecutiveOnly
     @GetMapping("/projects/{projectId}/billable-assets")
     public ResponseEntity<ApiResponse<List<ProjectBillableAssetResponseDto>>> getBillableAssets(
             @PathVariable Long projectId) {

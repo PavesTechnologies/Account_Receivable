@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/tax-region")
@@ -20,6 +21,7 @@ public class TaxRegionMasterController {
 
     private final TaxRegionMasterService taxRegionService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<TaxRegionResponseDto>> create(
             @Valid @RequestBody TaxRegionRequestDto request) {
@@ -32,6 +34,7 @@ public class TaxRegionMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{taxRegionId}")
     public ResponseEntity<ApiResponse<TaxRegionResponseDto>> update(
             @PathVariable UUID taxRegionId,
@@ -49,6 +52,7 @@ public class TaxRegionMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/{taxRegionId}")
     public ResponseEntity<ApiResponse<TaxRegionResponseDto>> getById(
             @PathVariable UUID taxRegionId) {
@@ -62,6 +66,7 @@ public class TaxRegionMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<TaxRegionResponseDto>>> getAll() {
 
@@ -74,6 +79,7 @@ public class TaxRegionMasterController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<TaxRegionResponseDto>>> getActive() {
 
@@ -86,6 +92,7 @@ public class TaxRegionMasterController {
         );
     }
 
+    @ExecutiveOnly
     @PatchMapping("/{taxRegionId}/deactivate")
     public ResponseEntity<ApiResponse<Void>> deactivate(
             @PathVariable UUID taxRegionId) {

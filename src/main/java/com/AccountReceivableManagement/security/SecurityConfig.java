@@ -89,6 +89,22 @@ public class SecurityConfig {
         });
     }
 
+    /**
+     * Maps the UMS token's {@code roles} and {@code permissions} claims to
+     * authorities.
+     *
+     * <p>Roles are normalised by {@link RoleNames}: UMS spells them
+     * {@code Finance_Executive}, which would not match
+     * {@code hasAnyRole('FINANCE_EXECUTIVE')} if passed through literally, and
+     * the denial would carry no explanation. Each becomes {@code ROLE_} plus
+     * the canonical name, prefixed exactly once. Blank entries are dropped
+     * rather than becoming an authority named {@code ROLE_}.
+     *
+     * <p>Permissions are deliberately <strong>not</strong> normalised. They are
+     * passed through exactly as UMS sends them, as they always have been:
+     * nothing in AR matches a permission against a literal of its own, so
+     * folding their case would change an established contract to no purpose.
+     */
     private JwtAuthenticationConverter jwtAuthenticationConverter() {
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
         converter.setJwtGrantedAuthoritiesConverter(jwt -> {
@@ -96,7 +112,10 @@ public class SecurityConfig {
             List<String> roles = jwt.getClaimAsStringList("roles");
             if (roles != null) {
                 for (String role : roles) {
-                    authorities.add(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + role));
+                    String authority = RoleNames.roleAuthority(role);
+                    if (!authority.isEmpty()) {
+                        authorities.add(new org.springframework.security.core.authority.SimpleGrantedAuthority(authority));
+                    }
                 }
             }
             List<String> permissions = jwt.getClaimAsStringList("permissions");

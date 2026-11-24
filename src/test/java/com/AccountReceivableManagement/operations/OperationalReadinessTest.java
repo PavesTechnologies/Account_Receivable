@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.core.env.Environment;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -53,8 +54,16 @@ class OperationalReadinessTest {
         return mockMvc.perform(get(path)).andReturn();
     }
 
+    /**
+     * A Finance Executive, the role that owns the manual billing APIs
+     * (RBAC_ENDPOINT_MATRIX.md §6). A bare {@code jwt()} is authenticated but
+     * holds no role, so since RBAC it is answered 403 rather than 200 - which
+     * is the point of {@link #unauthenticated} staying 401: the two failures
+     * are different and both are checked.
+     */
     private MvcResult authenticated(String path) throws Exception {
-        return mockMvc.perform(get(path).with(jwt())).andReturn();
+        return mockMvc.perform(get(path)
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_FINANCE_EXECUTIVE")))).andReturn();
     }
 
     // ================================================================ probes

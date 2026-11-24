@@ -13,6 +13,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * The seller/issuing-company counterpart of the Client API - previously
@@ -27,6 +29,7 @@ public class CompanyProfileController {
 
     private final CompanyProfileService companyProfileService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<CompanyProfileResponseDto>> create(
             @Valid @RequestBody CompanyProfileRequestDto request
@@ -42,6 +45,7 @@ public class CompanyProfileController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{companyProfileId}")
     public ResponseEntity<ApiResponse<CompanyProfileResponseDto>> update(
             @PathVariable UUID companyProfileId,
@@ -58,6 +62,7 @@ public class CompanyProfileController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{companyProfileId}")
     public ResponseEntity<ApiResponse<CompanyProfileResponseDto>> getById(
             @PathVariable UUID companyProfileId
@@ -73,6 +78,7 @@ public class CompanyProfileController {
                 .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/invoice-content-defaults")
     public ResponseEntity<ApiResponse<InvoiceContentDefaultsResponseDto>> getInvoiceContentDefaults() {
 
@@ -83,6 +89,7 @@ public class CompanyProfileController {
                 .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/invoice-content-defaults")
     public ResponseEntity<ApiResponse<InvoiceContentDefaultsResponseDto>> updateInvoiceContentDefaults(
             @Valid @RequestBody InvoiceContentDefaultsRequestDto request
@@ -99,6 +106,7 @@ public class CompanyProfileController {
      * The active seller/company profile for invoice generation and
      * Invoice Preview.
      */
+    @AnyFinanceRole
     @GetMapping
     public ResponseEntity<ApiResponse<CompanyProfileResponseDto>> getActive() {
 

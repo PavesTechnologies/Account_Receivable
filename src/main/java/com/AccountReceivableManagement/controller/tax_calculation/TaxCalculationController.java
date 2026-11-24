@@ -9,6 +9,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/v1/billing-snapshots/{snapshotId}/tax-calculation")
@@ -17,6 +19,7 @@ public class TaxCalculationController {
 
     private final TaxCalculationService taxCalculationService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<
             ApiResponse<TaxCalculationResponseDto>
@@ -43,6 +46,7 @@ public class TaxCalculationController {
                 );
     }
 
+    @AnyFinanceRole
     @GetMapping
     public ResponseEntity<
             ApiResponse<TaxCalculationResponseDto>

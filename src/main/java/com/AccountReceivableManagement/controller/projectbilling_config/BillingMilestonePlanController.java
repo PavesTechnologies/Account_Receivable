@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.AnyFinanceRole;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/billing-milestone-plan")
@@ -20,6 +22,7 @@ public class BillingMilestonePlanController {
 
     private final BillingMilestonePlanService billingMilestonePlanService;
 
+    @ExecutiveOnly
     @PostMapping("/{billingConfigurationId}/milestone-plan")
     public ResponseEntity<ApiResponse<BillingMilestonePlanResponseDto>> create(
             @PathVariable UUID billingConfigurationId,
@@ -44,6 +47,7 @@ public class BillingMilestonePlanController {
                 );
     }
 
+    @ExecutiveOnly
     @PutMapping("/milestone-plan/{milestonePlanId}")
     public ResponseEntity<ApiResponse<BillingMilestonePlanResponseDto>> update(
             @PathVariable UUID milestonePlanId,
@@ -66,6 +70,7 @@ public class BillingMilestonePlanController {
         );
     }
 
+    @ExecutiveOnly
     @GetMapping("/milestone-plan/{milestonePlanId}")
     public ResponseEntity<ApiResponse<BillingMilestonePlanResponseDto>> get(
             @PathVariable UUID milestonePlanId) {
@@ -86,6 +91,7 @@ public class BillingMilestonePlanController {
         );
     }
 
+    @AnyFinanceRole
     @GetMapping("/{billingConfigurationId}/milestone-plan")
     public ResponseEntity<ApiResponse<BillingMilestonePlanResponseDto>> getByBillingConfiguration(
             @PathVariable UUID billingConfigurationId) {
@@ -106,6 +112,7 @@ public class BillingMilestonePlanController {
         );
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/milestone-plan/{milestonePlanId}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable UUID milestonePlanId) {

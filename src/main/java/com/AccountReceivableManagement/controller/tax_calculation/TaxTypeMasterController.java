@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/tax-type-master")
@@ -20,6 +21,7 @@ public class TaxTypeMasterController {
 
     private final TaxTypeMasterService taxTypeMasterService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<TaxTypeResponseDto>> createTaxType(
             @Valid @RequestBody TaxTypeRequestDto request
@@ -36,6 +38,7 @@ public class TaxTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{taxTypeId}")
     public ResponseEntity<ApiResponse<TaxTypeResponseDto>> updateTaxType(
             @PathVariable UUID taxTypeId,
@@ -56,6 +59,7 @@ public class TaxTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{taxTypeId}")
     public ResponseEntity<ApiResponse<TaxTypeResponseDto>> getTaxTypeById(
             @PathVariable UUID taxTypeId
@@ -72,6 +76,7 @@ public class TaxTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<TaxTypeResponseDto>>> getAllTaxTypes() {
 
@@ -86,6 +91,7 @@ public class TaxTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<TaxTypeResponseDto>>> getActiveTaxTypes() {
 
@@ -100,6 +106,7 @@ public class TaxTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PatchMapping("/{taxTypeId}/deactivate")
     public ResponseEntity<ApiResponse<Void>> deactivateTaxType(
             @PathVariable UUID taxTypeId
