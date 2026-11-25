@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.integration.billing_data_acquisition;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -13,9 +14,14 @@ import java.time.LocalDate;
  * Raw shape of one entry in the TMS billing-timesheets response.
  * Deserialization target only — never leaves the Integration layer.
  *
- * Fields match the TMS GET /api/timesheets/billing response contract exactly:
+ * Fields match the TMS GET /api/timesheets/billing response contract:
  * timesheetId, resourceId, resourceName, workDate, hours, role,
- * approvalStatus, billable.
+ * approvalStatus. One record per TMS timesheet that has billable entries for
+ * the project; {@code hours} is the sum of those billable entries only. TMS
+ * sends no billable flag on this endpoint (billable by its contract, see
+ * {@code TimesheetIntegrationImpl#resolveBillable}); an explicit
+ * {@code billable} / {@code isBillable}, if ever sent, is still honoured.
+ * Any other TMS fields are ignored.
  */
 @Getter
 @Setter
@@ -53,9 +59,19 @@ public class TmsTimesheetEntry {
     private String approvalStatus;
 
     /**
-     * TMS billable flag, carried through as sent. Boxed so an omitted value
-     * stays distinguishable from an explicit {@code false}; either way the
-     * entry is not treated as billable.
+     * Optional explicit billable flag sent as {@code "billable"}. Boxed so an
+     * omitted value (the normal case for this endpoint) stays distinguishable
+     * from an explicit {@code false}, which is never overridden.
      */
     private Boolean billable;
+
+    /**
+     * The same optional flag sent as {@code "isBillable"} (TMS's entry-level
+     * name). Kept as its own property, not a {@code @JsonAlias} of
+     * {@link #billable}, so a record carrying both with different values is
+     * detected instead of the last one silently winning. Resolved by
+     * {@code TimesheetIntegrationImpl#resolveBillable}.
+     */
+    @JsonProperty("isBillable")
+    private Boolean isBillable;
 }
