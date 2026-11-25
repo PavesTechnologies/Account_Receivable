@@ -140,7 +140,7 @@ public class BillingConfigurationController {
                 billingConfigurationService.getAllBillingConfigurations());
     }
 
-    @ManagerOnly
+    @AnyFinanceRole
     @PatchMapping("/{billingConfigurationId}/deactivate")
     public ResponseEntity<ApiResponse<String>> deactivateBillingConfiguration(
             @PathVariable UUID billingConfigurationId) {

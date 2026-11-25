@@ -41,6 +41,7 @@ class BillingOccurrenceControllerTest {
     @Mock private BillingConfigurationService billingConfigurationService;
     @Mock private TaxCalculationService taxCalculationService;
     @Mock private InvoiceService invoiceService;
+    @Mock private com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl billingOccurrenceService;
 
     private BillingOccurrenceController controller;
     private UUID occurrenceId;
@@ -56,7 +57,8 @@ class BillingOccurrenceControllerTest {
                 taxCalculationRepository,
                 billingConfigurationService,
                 taxCalculationService,
-                invoiceService);
+                invoiceService,
+                billingOccurrenceService);
 
         occurrenceId = UUID.randomUUID();
         configurationId = UUID.randomUUID();

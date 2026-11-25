@@ -40,6 +40,7 @@ public class BillingOccurrenceController {
     private final BillingConfigurationService billingConfigurationService;
     private final TaxCalculationService taxCalculationService;
         private final InvoiceService invoiceService;
+    private final com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl billingOccurrenceService;
 
     @AnyFinanceRole
     @GetMapping("/{occurrenceId}")
@@ -221,7 +222,10 @@ public class BillingOccurrenceController {
                 .remarks(schedule.getRemarks())
                 .isActive(schedule.getIsActive())
                 .createdAt(schedule.getCreatedAt())
-                .updatedAt(schedule.getUpdatedAt());
+                .updatedAt(schedule.getUpdatedAt())
+                // Derived, not stored: a milestone completed early reads UPCOMING until its planned due date and
+                // READY_FOR_TAX from that date on, which is the same value the scheduled transition gates on.
+                .milestoneTaxReadiness(billingOccurrenceService.milestoneTaxReadiness(schedule));
 
         if (schedule.getBillingConfiguration() != null) {
             builder.billingConfigurationId(schedule.getBillingConfiguration().getBillingConfigurationId())

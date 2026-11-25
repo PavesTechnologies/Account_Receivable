@@ -3,6 +3,7 @@ package com.AccountReceivableManagement.dto.projectbilling_config;
 import com.AccountReceivableManagement.dto.tax_calculation.TaxCalculationComponentResponseDto;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.MilestoneTaxReadiness;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingScheduleType;
 import com.AccountReceivableManagement.entity_enums.tax_calculation.TaxCalculationStatus;
 import lombok.AllArgsConstructor;
@@ -39,6 +40,17 @@ public class BillingOccurrenceResponseDto {
     private Boolean isPartialPeriod;
     private BillingPeriodStatus periodStatus;
     private BillingPeriodStatus taxStatus;
+
+    /**
+     * For a Milestone Plan occurrence, where its milestone stands for tax hand-off: READY_FOR_TAX (completed in PMS and
+     * due today or earlier - the occurrence moves to TAX_PENDING on the next scheduler run), UPCOMING (completed ahead
+     * of its planned due date - it waits) or NOT_COMPLETED. Null for every other billing type.
+     *
+     * <p>Derived on read, so it changes by itself the day the planned due date arrives; nothing has to rewrite it and
+     * it cannot go stale. The scheduled transition gates on the same value, so this is exactly why an occurrence is or
+     * is not moving.</p>
+     */
+    private MilestoneTaxReadiness milestoneTaxReadiness;
     private Boolean isInvoiced;
     private LocalDate invoiceDate;
     private String remarks;

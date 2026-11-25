@@ -21,6 +21,13 @@ import java.util.List;
 @RequiredArgsConstructor
 public class InboxEventProcessor {
 
+    /**
+     * How many times an event is attempted before it is dead-lettered. One shared constant: the retry sweep selects on
+     * it and {@code markAsFailed} dead-letters on it, so the two can never disagree and leave an event that is neither
+     * retried nor recorded as abandoned.
+     */
+    static final int MAX_RETRIES = 3;
+
     private final CdcInboxService cdcInboxService;
     private final ClientDataProcessor clientDataProcessor;
     private final ProjectDataProcessor projectDataProcessor;
@@ -76,8 +83,8 @@ public class InboxEventProcessor {
             log.error("Failed to process CDC inbox event - ID: {}, EntityType: {}, EntityId: {}",
                     inboxEvent.getId(), inboxEvent.getEntityType(), inboxEvent.getEntityId(), e);
 
-            // Mark as failed with error message for retry
-            cdcInboxService.markAsFailed(inboxEvent.getId(), e.getMessage());
+            // Back to FAILED for the retry sweep, or DEAD_LETTER once the attempts are used up.
+            cdcInboxService.markAsFailed(inboxEvent.getId(), e.getMessage(), MAX_RETRIES);
         }
     }
 
@@ -132,13 +139,13 @@ public class InboxEventProcessor {
 
     /**
      * Process failed events that are eligible for retry.
-     * Runs every 30 seconds.
+     * Runs every 30 seconds. An event whose attempts are used up is not selected here: it has already been
+     * dead-lettered by {@code markAsFailed}, and is reported by {@code CdcInboxDeadLetterMonitor} until it is replayed.
      */
     @Scheduled(fixedDelay = 30000, initialDelay = 30000)
     public void retryFailedEvents() {
         try {
-            int maxRetries = 3;
-            List<CdcInbox> failedEvents = cdcInboxService.findFailedEventsForRetry(maxRetries);
+            List<CdcInbox> failedEvents = cdcInboxService.findFailedEventsForRetry(MAX_RETRIES);
 
             if (failedEvents.isEmpty()) {
                 return;

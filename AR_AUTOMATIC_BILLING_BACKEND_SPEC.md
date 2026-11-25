@@ -441,7 +441,7 @@ All paths are relative to the base URL (§4.0). "JWT" = any authenticated user. 
 | Submit | PUT | `/api/billing-configurations/{id}/submit` | — | `ApiResponse<BillingConfigurationResponseDto>` | JWT | 200, 400, 404, 409 |
 | Approve | PUT | `/api/billing-configurations/{id}/approve` | — | `ApiResponse<BillingConfigurationResponseDto>` | BILLING_CONFIGURATION_APPROVAL + APPROVAL lock; maker-checker; 400 when another live configuration of the same project (APPROVED, not manually deactivated, not EXPIRED) has an overlapping effective period | 200, 400, 403, 404, 409 |
 | Reject | PUT | `/api/billing-configurations/{id}/reject` | `{ rejectionReason }` (`@NotBlank`, ≤500) | `ApiResponse<BillingConfigurationResponseDto>` | BILLING_CONFIGURATION_APPROVAL + APPROVAL lock | 200, 400, 403, 404, 409 |
-| Deactivate | PATCH | `/api/billing-configurations/{id}/deactivate` | — | `ApiResponse<String>` (`"SUCCESS"`) | JWT | 200, 400, 404, 409 |
+| Deactivate | PATCH | `/api/billing-configurations/{id}/deactivate` | — | `ApiResponse<String>` (`"SUCCESS"`) | JWT + Finance Executive or Finance Manager (`@AnyFinanceRole`) | 200, 400, 403, 404, 409 |
 | Delete draft | DELETE | `/api/billing-configurations/{id}` | — | `ApiResponse<Void>` | JWT | 200, 400, 404, 409 |
 | Get one | GET | `/api/billing-configurations/{id}` | — | **unwrapped** `BillingConfigurationResponseDto` | JWT | 200, 404 |
 | List all | GET | `/api/billing-configurations` | — | **unwrapped** `List<BillingConfigurationResponseDto>` | JWT | 200 |

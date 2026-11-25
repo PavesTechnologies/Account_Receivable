@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.dto.projectbilling_config;
 
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.MilestoneBillingState;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.MilestoneTaxReadiness;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -79,4 +80,15 @@ public class ProjectMilestoneResponseDto {
 
     /** Why {@code eligibleForBilling} is false; null when it is true. */
     private String ineligibilityReason;
+
+    /**
+     * Where the milestone stands for tax hand-off: READY_FOR_TAX (COMPLETED in PMS and its planned due date today or
+     * past), UPCOMING (COMPLETED but still ahead of that date) or NOT_COMPLETED.
+     *
+     * <p>Derived on read from the synchronised execution status and planned due date, so it changes by itself the day
+     * the planned due date arrives - a milestone finished early shows UPCOMING until then and needs no action to
+     * become ready. The scheduled transition to TAX_PENDING gates on this same value, so a screen showing UPCOMING is
+     * showing exactly why the occurrence has not moved yet.</p>
+     */
+    private MilestoneTaxReadiness milestoneTaxReadiness;
 }
