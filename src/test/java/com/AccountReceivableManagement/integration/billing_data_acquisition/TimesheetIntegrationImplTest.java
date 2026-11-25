@@ -2,6 +2,10 @@ package com.AccountReceivableManagement.integration.billing_data_acquisition;
 
 import com.AccountReceivableManagement.config.properties.UmsServiceAuthProperties;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.TimesheetDto;
+import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingAcquisitionResultDto;
+import com.AccountReceivableManagement.dto.billing_data_acquisition.ValidationResultDto;
+import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository;
+import com.AccountReceivableManagement.validator.billing_data_acquisition.BillingAcquisitionValidator;
 import com.AccountReceivableManagement.integration.ums.UmsAuthenticationException;
 import com.AccountReceivableManagement.integration.ums.UmsServiceTokenProvider;
 import com.AccountReceivableManagement.security.ActorContext;
@@ -9,6 +13,9 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.client.ResourceAccessException;
@@ -30,6 +37,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -37,6 +45,9 @@ import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * TMS-to-AR mapping: approval and billability come from TMS's own values,
@@ -219,11 +230,35 @@ class TimesheetIntegrationImplTest {
     }
 
     @Test
-    void missingBillableOrApprovalValues_areNotTreatedAsEligible() {
+    void missingApproval_isNotTreatedAsApproved() {
         TimesheetDto dto = integration.toTimesheetDto(entry(null, null));
 
         assertThat(dto.isApproved()).isFalse();
-        assertThat(dto.isBillable()).isFalse();
+    }
+
+    @Test
+    void billingEndpointRecordWithoutAFlag_isBillableByTheEndpointContract() {
+        TimesheetDto dto = integration.toTimesheetDto(entry("APPROVED", null));
+
+        assertThat(dto.isBillable()).isTrue();
+    }
+
+    @Test
+    void isBillableEntry_mapsAsBillable() {
+        TmsTimesheetEntry entry = entry("APPROVED", null);
+        entry.setIsBillable(true);
+
+        TimesheetDto dto = integration.toTimesheetDto(entry);
+
+        assertThat(dto.isBillable()).isTrue();
+    }
+
+    @Test
+    void explicitIsBillableFalse_isNeverOverriddenByTheContract() {
+        TmsTimesheetEntry entry = entry("APPROVED", null);
+        entry.setIsBillable(false);
+
+        assertThat(integration.toTimesheetDto(entry).isBillable()).isFalse();
     }
 
     // ================================================================ HTTP call
@@ -612,6 +647,224 @@ class TimesheetIntegrationImplTest {
         assertThatThrownBy(() -> tms.getApprovedTimesheets(7L, START, END))
                 .isInstanceOf(TmsInvalidResponseException.class)
                 .hasMessageContaining("Timesheet [TS-2] has no work date");
+    }
+
+    // ================================================================ billable flag: billable / isBillable
+
+    private static final LocalDate NOV_START = LocalDate.of(2026, 11, 1);
+    private static final LocalDate NOV_END = LocalDate.of(2026, 11, 10);
+
+    /**
+     * Shape of the actual TMS billing-endpoint response for project 37,
+     * 2026-11-01..2026-11-10: one record per timesheet with billable entries for
+     * the project, {@code hours} = sum of those billable entries, and no
+     * billable / isBillable / timesheetEntryId / rate. Ordered by workDate,
+     * then user, as the TMS query does.
+     */
+    private static final String PROJECT_37_NOV = """
+            {"projectId":37,"billingPeriodStart":"2026-11-01","billingPeriodEnd":"2026-11-10","timesheets":[
+              {"timesheetId":76,"resourceId":12,"resourceName":"Employee","workDate":"2026-11-02","hours":9,
+               "role":"Developer","approvalStatus":"APPROVED"},
+              {"timesheetId":77,"resourceId":12,"resourceName":"Employee","workDate":"2026-11-03","hours":9,
+               "role":"Developer","approvalStatus":"APPROVED"},
+              {"timesheetId":78,"resourceId":12,"resourceName":"Employee","workDate":"2026-11-04","hours":9,
+               "role":"Developer","approvalStatus":"APPROVED"},
+              {"timesheetId":80,"resourceId":12,"resourceName":"Employee","workDate":"2026-11-05","hours":9,
+               "role":"Developer","approvalStatus":"APPROVED"},
+              {"timesheetId":79,"resourceId":12,"resourceName":"Employee","workDate":"2026-11-06","hours":9,
+               "role":"Developer","approvalStatus":"APPROVED"}]}
+            """;
+
+    private final BillingSnapshotItemRepository claimedItems = mock(BillingSnapshotItemRepository.class);
+    private final BillingAcquisitionValidator validator = new BillingAcquisitionValidator(claimedItems);
+
+    /** The billing endpoint's records as the Builder would receive them: rate applied, then validated. */
+    private ValidationResultDto acquireAndValidate(String tmsResponse) throws IOException {
+        TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(200, tmsResponse), "svc");
+        List<TimesheetDto> timesheets = tms.getApprovedTimesheets(37L, NOV_START, NOV_END);
+        // The rate never comes from TMS; the strategy sets it from the rate card.
+        timesheets.forEach(t -> t.setHourlyRate(new BigDecimal("1000")));
+        return validator.validate(BillingAcquisitionResultDto.builder()
+                .billingConfigurationId(UUID.randomUUID()).timesheets(timesheets).build());
+    }
+
+    /** {@link #PROJECT_37_NOV} with {@code from} replaced by {@code to} inside timesheet {@code id}'s record only. */
+    private static String withChangeIn(int id, String from, String to) {
+        String marker = "{\"timesheetId\":" + id + ",";
+        int recordStart = PROJECT_37_NOV.indexOf(marker);
+        int recordEnd = PROJECT_37_NOV.indexOf('}', recordStart);
+        String record = PROJECT_37_NOV.substring(recordStart, recordEnd);
+        assertThat(record).contains(from);
+        return PROJECT_37_NOV.substring(0, recordStart) + record.replace(from, to)
+                + PROJECT_37_NOV.substring(recordEnd);
+    }
+
+    @Test
+    void project37Response_withoutAnyBillableProperty_allFiveTimesheetsAreBillable_45Hours() throws IOException {
+        TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(200, PROJECT_37_NOV), "svc");
+
+        List<TimesheetDto> timesheets = tms.getApprovedTimesheets(37L, NOV_START, NOV_END);
+
+        assertThat(timesheets).extracting(TimesheetDto::getSourceReferenceId)
+                .containsExactly("76", "77", "78", "80", "79");
+        assertThat(timesheets).allSatisfy(t -> {
+            assertThat(t.isBillable()).isTrue();
+            assertThat(t.isApproved()).isTrue();
+            assertThat(t.getHours()).isEqualByComparingTo("9");
+            assertThat(t.getHourlyRate()).isNull();
+        });
+        assertThat(timesheets.stream().map(TimesheetDto::getHours).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .isEqualByComparingTo("45");
+    }
+
+    @Test
+    void project37Response_passesTheWholeValidation() throws IOException {
+        ValidationResultDto outcome = acquireAndValidate(PROJECT_37_NOV);
+
+        assertThat(outcome.isSuccess()).as(outcome.getValidationMessage()).isTrue();
+        assertThat(outcome.getAcquisitionResult().getTimesheets()).hasSize(5)
+                .allSatisfy(t -> assertThat(t.isBillable()).isTrue());
+    }
+
+    @Test
+    void project37Response_aNonApprovedTimesheet_isStillRejected() throws IOException {
+        ValidationResultDto outcome = acquireAndValidate(
+                withChangeIn(77, "\"approvalStatus\":\"APPROVED\"", "\"approvalStatus\":\"SUBMITTED\""));
+
+        assertThat(outcome.isSuccess()).isFalse();
+        assertThat(outcome.getValidationMessage()).isEqualTo("Timesheet [77] is not approved.");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\"hours\":0", "\"hours\":-1", "\"hours\":null"})
+    void project37Response_zeroNegativeOrMissingHours_areStillRejected(String hours) throws IOException {
+        ValidationResultDto outcome = acquireAndValidate(withChangeIn(79, "\"hours\":9", hours));
+
+        assertThat(outcome.isSuccess()).isFalse();
+        assertThat(outcome.getValidationMessage()).isEqualTo("Timesheet [79] has invalid hours.");
+    }
+
+    @Test
+    void project37Response_aDuplicateTimesheetId_isStillRejected() throws IOException {
+        ValidationResultDto outcome = acquireAndValidate(withChangeIn(80, "\"timesheetId\":80", "\"timesheetId\":78"));
+
+        assertThat(outcome.isSuccess()).isFalse();
+        assertThat(outcome.getValidationMessage()).isEqualTo("Timesheet [78] is a duplicate source reference.");
+    }
+
+    @Test
+    void project37Response_aTimesheetAlreadyClaimedByAnotherSnapshot_isStillRejected() throws IOException {
+        when(claimedItems.findClaimedSourceReferenceIds(any(), any(), any(), any())).thenReturn(List.of("78"));
+
+        ValidationResultDto outcome = acquireAndValidate(PROJECT_37_NOV);
+
+        assertThat(outcome.isSuccess()).isFalse();
+        assertThat(outcome.getValidationMessage())
+                .isEqualTo("Timesheet(s) [78] are already included in another Billing Snapshot and cannot be billed again.");
+    }
+
+    @Test
+    void project37Response_aTimesheetWithoutAnId_isStillRejected() throws IOException {
+        ValidationResultDto outcome = acquireAndValidate(withChangeIn(80, "\"timesheetId\":80,", "\"timesheetId\":null,"));
+
+        assertThat(outcome.isSuccess()).isFalse();
+        assertThat(outcome.getValidationMessage()).contains("has no TMS timesheet id");
+    }
+
+    @Test
+    void project37Response_anExplicitIsBillableFalse_isStillRejected() throws IOException {
+        ValidationResultDto outcome = acquireAndValidate(
+                withChangeIn(78, "\"approvalStatus\":\"APPROVED\"", "\"approvalStatus\":\"APPROVED\",\"isBillable\":false"));
+
+        assertThat(outcome.isSuccess()).isFalse();
+        assertThat(outcome.getValidationMessage()).isEqualTo("Timesheet [78] is not billable.");
+    }
+
+    /** One approved entry for project 7 / TS-1 whose billable flag(s) are {@code flags} (JSON members or ""). */
+    private static String oneTimesheetWith(String flags) {
+        return """
+                {"projectId":7,"billingPeriodStart":"2026-10-05","billingPeriodEnd":"2026-10-11","timesheets":[
+                  {"timesheetId":"TS-1","resourceId":1,"resourceName":"Asha","workDate":"2026-10-06","hours":8,
+                   "role":"Developer","approvalStatus":"APPROVED"%s}]}
+                """.formatted(flags.isEmpty() ? "" : "," + flags);
+    }
+
+    private TimesheetDto acquireOne(String flags) throws IOException {
+        TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(200, oneTimesheetWith(flags)), "svc");
+        List<TimesheetDto> timesheets = tms.getApprovedTimesheets(7L, START, END);
+        assertThat(timesheets).hasSize(1);
+        return timesheets.get(0);
+    }
+
+    @ParameterizedTest(name = "[{index}] {0} -> billable={1}")
+    @CsvSource(delimiter = '|', value = {
+            "\"isBillable\":true                       | true",
+            "\"isBillable\":false                      | false",
+            "\"billable\":true                         | true",
+            "\"billable\":false                        | false",
+            "\"billable\":true,\"isBillable\":true     | true",
+            "\"isBillable\":true,\"billable\":true     | true",
+            "\"billable\":false,\"isBillable\":false   | false",
+            "\"billable\":true,\"isBillable\":null     | true",
+            "\"billable\":null,\"isBillable\":true     | true",
+            "\"billable\":null,\"isBillable\":null     | true",
+            "\"isBillable\":\"true\"                   | true",
+    })
+    void billableFlag_fromTheTmsJson(String flags, boolean billable) throws IOException {
+        assertThat(acquireOne(flags.trim()).isBillable()).isEqualTo(billable);
+    }
+
+    @Test
+    void noBillableProperty_isBillableByTheBillingEndpointContract() throws IOException {
+        assertThat(acquireOne("").isBillable()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "\"billable\":true,\"isBillable\":false",
+            "\"isBillable\":false,\"billable\":true",
+            "\"billable\":false,\"isBillable\":true",
+            "\"isBillable\":true,\"billable\":false"})
+    void conflictingBillableFlags_rejectTheWholeResponse(String flags) throws IOException {
+        TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(tmsAnswering(200, oneTimesheetWith(flags)), "svc");
+
+        assertThatThrownBy(() -> tms.getApprovedTimesheets(7L, START, END))
+                .isInstanceOf(TmsInvalidResponseException.class)
+                .hasMessageContaining("Timesheet [TS-1] has conflicting billable flags")
+                .hasMessageNotContaining("Asha");
+    }
+
+    @Test
+    void unreadableIsBillable_isAMalformedResponse_neverBillable() throws IOException {
+        TimesheetIntegrationImpl tms = new TimesheetIntegrationImpl(
+                tmsAnswering(200, oneTimesheetWith("\"isBillable\":\"Y\"")), "svc");
+
+        assertThatThrownBy(() -> tms.getApprovedTimesheets(7L, START, END))
+                .isInstanceOf(RestClientException.class);
+    }
+
+    @ParameterizedTest(name = "[{index}] billable={0}, isBillable={1} -> {2}")
+    @CsvSource(nullValues = "null", value = {
+            "true,  null,  TRUE",
+            "false, null,  FALSE",
+            "null,  true,  TRUE",
+            "null,  false, FALSE",
+            "true,  true,  TRUE",
+            "false, false, FALSE",
+            "null,  null,  BY_BILLING_ENDPOINT_CONTRACT",
+    })
+    void resolveBillable_table(Boolean billable, Boolean isBillable, TimesheetIntegrationImpl.BillableFlag expected) {
+        assertThat(TimesheetIntegrationImpl.resolveBillable("TS-9", billable, isBillable)).isEqualTo(expected);
+    }
+
+    @Test
+    void resolveBillable_conflict_throws() {
+        assertThatThrownBy(() -> TimesheetIntegrationImpl.resolveBillable("TS-9", true, false))
+                .isInstanceOf(TmsInvalidResponseException.class)
+                .hasMessage("Timesheet [TS-9] has conflicting billable flags (billable=true, isBillable=false); "
+                        + "nothing was billed.");
+        assertThatThrownBy(() -> TimesheetIntegrationImpl.resolveBillable("TS-9", false, true))
+                .isInstanceOf(TmsInvalidResponseException.class);
     }
 
     private static void callerSends(String authorization) {

@@ -85,6 +85,21 @@ class BillingAcquisitionValidatorTest {
     }
 
     @Test
+    void validate_timesheetNotMarkedBillable_isRejected_billabilityIsNeverAssumedHere() {
+        // Only the TMS billing endpoint's mapping applies its "billable by contract" rule; a timesheet
+        // from anywhere else that does not set billable stays non-billable (the field defaults to false).
+        TimesheetDto fromElsewhere = TimesheetDto.builder()
+                .sourceReferenceId("TS-5").workDate(LocalDate.of(2026, 10, 6)).hours(new BigDecimal("8"))
+                .hourlyRate(new BigDecimal("1500")).approvalStatus("APPROVED").approved(true).build();
+
+        ValidationResultDto outcome = validator.validate(result(fromElsewhere));
+
+        assertThat(fromElsewhere.isBillable()).isFalse();
+        assertThat(outcome.isSuccess()).isFalse();
+        assertThat(outcome.getValidationMessage()).isEqualTo("Timesheet [TS-5] is not billable.");
+    }
+
+    @Test
     void validate_unapprovedTimesheet_failsWholeAcquisition() {
         TimesheetDto submitted = timesheet("TS-3");
         submitted.setApproved(false);

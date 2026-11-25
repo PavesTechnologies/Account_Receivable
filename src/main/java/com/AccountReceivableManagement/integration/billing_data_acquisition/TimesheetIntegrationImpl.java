@@ -416,12 +416,49 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
     }
 
     /**
-     * Maps one TMS entry as sent - approval and billability are taken from
-     * TMS's own {@code approvalStatus} and {@code billable} values, never
-     * assumed, so {@code BillingAcquisitionValidator} decides eligibility
-     * from the real source data.
+     * Billability of one record of the TMS billing endpoint: an explicit flag
+     * TMS sent, or - with none sent - the endpoint's own contract.
+     */
+    enum BillableFlag { TRUE, FALSE, BY_BILLING_ENDPOINT_CONTRACT }
+
+    /**
+     * Resolves the billability of one record returned by
+     * {@code GET /api/timesheets/billing}.
+     * <p>
+     * That endpoint's contract (its query) returns only timesheets having
+     * billable entries ({@code isBillable = true}) for the requested project,
+     * with {@code hours} summed over those billable entries alone - so a record
+     * without a flag is billable by contract
+     * ({@link BillableFlag#BY_BILLING_ENDPOINT_CONTRACT}). This applies to this
+     * endpoint only: it is resolved here, in its mapping, and nowhere else.
+     * <p>
+     * A flag TMS does send ({@code billable} or {@code isBillable}) is still
+     * honoured: an explicit {@code false} is never overridden, and two flags
+     * that disagree make the whole response unverifiable - nothing is billed.
+     */
+    static BillableFlag resolveBillable(String timesheetId, Boolean billable, Boolean isBillable) {
+        if (billable != null && isBillable != null && !billable.equals(isBillable)) {
+            throw new TmsInvalidResponseException("Timesheet [" + Objects.toString(timesheetId, "?")
+                    + "] has conflicting billable flags (billable=" + billable + ", isBillable=" + isBillable
+                    + "); nothing was billed.");
+        }
+        Boolean value = billable != null ? billable : isBillable;
+        if (value == null) {
+            return BillableFlag.BY_BILLING_ENDPOINT_CONTRACT;
+        }
+        return value ? BillableFlag.TRUE : BillableFlag.FALSE;
+    }
+
+    /**
+     * Maps one record of the TMS billing endpoint. Approval comes from TMS's
+     * own {@code approvalStatus}, never assumed; billability from an explicit
+     * flag if TMS sends one, otherwise from the billing endpoint's contract
+     * (see {@link #resolveBillable}). {@code hours} are the billable hours TMS
+     * summed for the project. {@code BillingAcquisitionValidator} still
+     * checks approval, hours, rate, duplicates and earlier claims.
      */
     TimesheetDto toTimesheetDto(TmsTimesheetEntry entry) {
+        BillableFlag billable = resolveBillable(entry.getTimesheetId(), entry.getBillable(), entry.getIsBillable());
         return TimesheetDto.builder()
                 .resourceId(entry.getResourceId())
                 .resourceName(entry.getResourceName())
@@ -432,7 +469,7 @@ public class TimesheetIntegrationImpl implements TimesheetIntegration {
                 .approvalStatus(entry.getApprovalStatus())
                 .approved(entry.getApprovalStatus() != null
                         && APPROVED_STATUS.equalsIgnoreCase(entry.getApprovalStatus().trim()))
-                .billable(Boolean.TRUE.equals(entry.getBillable()))
+                .billable(billable != BillableFlag.FALSE)
                 .build();
     }
 
