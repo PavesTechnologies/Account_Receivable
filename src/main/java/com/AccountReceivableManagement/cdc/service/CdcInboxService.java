@@ -93,20 +93,40 @@ public class CdcInboxService {
     }
 
     /**
-     * Mark event as failed
+     * Record that processing this event failed. The event goes back to FAILED, to be picked up by the retry sweep,
+     * until {@code maxRetries} attempts are used up; then it becomes {@link CdcInbox.ProcessingStatus#DEAD_LETTER}.
+     *
+     * <p>The status matters because the retry sweep selects FAILED events with {@code retryCount < maxRetries}: an
+     * exhausted event was previously left FAILED, which simply stopped matching that query. Nothing recorded that it had
+     * been abandoned, so the mirror row it should have updated stayed stale with no log line, no metric and no way to
+     * replay it short of restarting the application (which repairs milestones only as a side effect of the startup
+     * re-read). DEAD_LETTER names that state so it can be counted, reported and replayed.</p>
      */
     @Transactional
-    public void markAsFailed(UUID eventId, String errorMessage) {
+    public void markAsFailed(UUID eventId, String errorMessage, int maxRetries) {
         CdcInbox inboxEvent = cdcInboxRepository.findById(eventId)
                 .orElseThrow(() -> new IllegalArgumentException("CDC Inbox event not found: " + eventId));
 
-        inboxEvent.setStatus(CdcInbox.ProcessingStatus.FAILED);
-        inboxEvent.setRetryCount(inboxEvent.getRetryCount() + 1);
+        int attempts = inboxEvent.getRetryCount() + 1;
+        inboxEvent.setRetryCount(attempts);
         inboxEvent.setErrorMessage(errorMessage);
 
+        if (attempts >= maxRetries) {
+            inboxEvent.setStatus(CdcInbox.ProcessingStatus.DEAD_LETTER);
+            cdcInboxRepository.save(inboxEvent);
+            log.error("[CDC-INBOX] DEAD LETTER after {} attempt(s) - ID={}, Connector={}, EntityType={}, EntityId={}, "
+                            + "Operation={}, Error={}. This event will NOT be retried; {} {} is now stale in AR until "
+                            + "it is replayed.",
+                    attempts, eventId, inboxEvent.getConnectorName(), inboxEvent.getEntityType(),
+                    inboxEvent.getEntityId(), inboxEvent.getOperation(), errorMessage,
+                    inboxEvent.getEntityType(), inboxEvent.getEntityId());
+            return;
+        }
+
+        inboxEvent.setStatus(CdcInbox.ProcessingStatus.FAILED);
         cdcInboxRepository.save(inboxEvent);
-        log.error("Marked CDC event as failed: ID={}, RetryCount={}, Error={}",
-                eventId, inboxEvent.getRetryCount(), errorMessage);
+        log.error("Marked CDC event as failed: ID={}, RetryCount={}/{}, Error={}",
+                eventId, attempts, maxRetries, errorMessage);
     }
 
     /**
@@ -150,5 +170,46 @@ public class CdcInboxService {
     @Transactional(readOnly = true)
     public List<CdcInbox> findFailedEventsForRetry(int maxRetries) {
         return cdcInboxRepository.findByStatusAndRetryCountLessThan(CdcInbox.ProcessingStatus.FAILED, maxRetries);
+    }
+
+    /** How many events have exhausted their retries and are waiting to be replayed. */
+    @Transactional(readOnly = true)
+    public long getDeadLetterCount() {
+        return cdcInboxRepository.countByStatus(CdcInbox.ProcessingStatus.DEAD_LETTER);
+    }
+
+    /** Dead-lettered events grouped as (connectorName, entityType, count, oldestCreatedAt), for reporting. */
+    @Transactional(readOnly = true)
+    public List<Object[]> summariseDeadLetters() {
+        return cdcInboxRepository.summariseDeadLetters();
+    }
+
+    /**
+     * Put every dead-lettered event back in the queue: status PENDING and the retry count reset, so the normal
+     * processing sweep picks it up within seconds and it gets a fresh set of attempts.
+     *
+     * <p>This is the repair to run once the cause of the failure is fixed. Before, the only thing that recovered an
+     * abandoned event was restarting the application, and then only for milestones, because
+     * {@code MilestoneInitialSyncRunner} re-reads PMS at startup - client and project events had no recovery at all.
+     * Replaying is safe to run at any time: every processor upserts by primary key and drops events that are not newer
+     * than what is already stored, so a replayed event that has since been superseded changes nothing.</p>
+     *
+     * @return how many events were queued for replay
+     */
+    @Transactional
+    public int replayDeadLetters() {
+        List<CdcInbox> deadLettered = cdcInboxRepository.findByStatus(CdcInbox.ProcessingStatus.DEAD_LETTER);
+        for (CdcInbox event : deadLettered) {
+            event.setStatus(CdcInbox.ProcessingStatus.PENDING);
+            event.setRetryCount(0);
+            event.setErrorMessage(null);
+            cdcInboxRepository.save(event);
+            log.info("[CDC-INBOX] Replaying dead-lettered event - ID={}, EntityType={}, EntityId={}",
+                    event.getId(), event.getEntityType(), event.getEntityId());
+        }
+        if (!deadLettered.isEmpty()) {
+            log.warn("[CDC-INBOX] Queued {} dead-lettered event(s) for replay", deadLettered.size());
+        }
+        return deadLettered.size();
     }
 }
