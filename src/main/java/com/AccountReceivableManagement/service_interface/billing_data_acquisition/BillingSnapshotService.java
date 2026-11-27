@@ -18,6 +18,20 @@ public interface BillingSnapshotService {
 
     ApiResponse<BillingSnapshotResponseDto> createBillingSnapshot(BillingSnapshotCreateRequestDto request);
 
+    /**
+     * Incremental acquisition: creates a NEW acquisition batch (Billing Snapshot plus its acquisition
+     * record) for the request's billing configuration and period from only those approved, billable
+     * timesheets and eligible expenses that no live (non-cancelled) snapshot claims yet - however many
+     * batches, snapshots or invoices the period already has. Existing snapshots and invoices are never
+     * read for reuse, changed or re-priced. Fails, creating nothing, when there is no new record (no empty
+     * snapshot) or when any new record fails validation (rate, approval, billability).
+     *
+     * @param idempotencyKey optional; a repeated request with the same configuration and key returns the
+     *                       batch the first one created instead of acquiring again
+     */
+    ApiResponse<BillingSnapshotResponseDto> createIncrementalBatch(BillingSnapshotCreateRequestDto request,
+            String idempotencyKey);
+
     ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
 
     /**

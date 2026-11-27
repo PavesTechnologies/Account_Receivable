@@ -1658,8 +1658,8 @@ class InvoiceServiceImplTest {
         lenient().when(taxCalculationRepository.findByBillingSnapshotId(snapshotId))
                 .thenReturn(Optional.of(completedTaxCalculation()));
         lenient().when(billingSnapshotRepository
-                .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(any(), any(), any()))
-                .thenReturn(Optional.empty());
+                .findAllByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(any(), any(), any()))
+                .thenReturn(List.of());
     }
 
     private BillingSchedule recurringScheduleCandidate(String billingTypeName) {
@@ -1743,10 +1743,10 @@ class InvoiceServiceImplTest {
         BillingSchedule schedule = recurringScheduleCandidate("Time & Material");
         stubWorkspace(List.of(), List.of(tm), List.of(schedule));
         when(billingSnapshotRepository
-                .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                .findAllByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
                         schedule.getBillingConfiguration().getBillingConfigurationId(),
                         schedule.getPeriodStartDate(), schedule.getPeriodEndDate()))
-                .thenReturn(Optional.of(tm));
+                .thenReturn(List.of(tm));
 
         var response = invoiceService.getInvoiceGenerationWorkspace();
 

@@ -19,9 +19,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BillingSnapshotRepositoryTest {
 
     @Test
-    void findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd_eagerlyFetchesItems() throws NoSuchMethodException {
+    void findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc_eagerlyFetchesItems() throws NoSuchMethodException {
         Method method = BillingSnapshotRepository.class.getMethod(
-                "findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd",
+                "findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc",
                 Long.class, LocalDate.class, LocalDate.class);
 
         EntityGraph entityGraph = method.getAnnotation(EntityGraph.class);

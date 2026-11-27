@@ -33,10 +33,21 @@ import java.util.UUID;
 @Entity
 @Table(
         name = "billing_snapshot",
-        uniqueConstraints = @UniqueConstraint(
-                name = "uk_billing_snapshot_project_period",
-                columnNames = {"project_id", "billing_period_start", "billing_period_end"}
-        )
+        uniqueConstraints = {
+                // Several acquisition batches may bill one project and period (incremental
+                // Time & Material billing); each is numbered. Replaces the former
+                // uk_billing_snapshot_project_period - added by V19__incremental_tm_billing_batches.sql;
+                // the old key is dropped by scripts/dba/V19_incremental_tm_billing_batches_dba.sql.
+                @UniqueConstraint(
+                        name = "uk_billing_snapshot_period_batch",
+                        columnNames = {"project_id", "billing_period_start", "billing_period_end", "batch_sequence"}
+                ),
+                // A repeated acquisition request (same client idempotency key) returns the batch it created.
+                @UniqueConstraint(
+                        name = "uk_billing_snapshot_config_idempotency",
+                        columnNames = {"billing_configuration_id", "idempotency_key"}
+                )
+        }
 )
 @Getter
 @Setter
@@ -118,6 +129,18 @@ public class BillingSnapshot {
 
     @Column(name = "billing_period_end", nullable = false)
     private LocalDate billingPeriodEnd;
+
+    /**
+     * 1, 2, 3 ... per project and billing period: the acquisition batch this
+     * snapshot is. Snapshots written before incremental billing are batch 1
+     * (NULL until the V19 DBA script backfills them; treated as 1 either way).
+     */
+    @Column(name = "batch_sequence")
+    private Integer batchSequence;
+
+    /** Client-supplied key of the acquisition request that created this batch; null for other paths. */
+    @Column(name = "idempotency_key", length = 100)
+    private String idempotencyKey;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)

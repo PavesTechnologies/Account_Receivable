@@ -3,6 +3,7 @@ package com.AccountReceivableManagement.demo;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
@@ -38,7 +39,12 @@ public class DemoJwtConfig {
      */
     public static final String ISSUER = "https://ar-demo.invalid/local";
 
+    /**
+     * {@code @Primary}: {@code SecurityConfig} always declares its own UMS {@code jwtDecoder}, so under this profile two
+     * decoders exist and the resource server would fail to start; this one must win. Profile-gated like the class.
+     */
     @Bean
+    @Primary
     JwtDecoder demoJwtDecoder(@Value("${ar.demo.jwt.secret}") String secret) {
         byte[] key = secret.getBytes(StandardCharsets.UTF_8);
         if (key.length < LocalDemoIsolationValidator.MIN_JWT_SECRET_LENGTH) {

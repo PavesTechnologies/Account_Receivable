@@ -107,20 +107,19 @@ class BillingAcquisitionServiceImplTest {
                 .build();
     }
 
+    /** The acquisition record found for the batch (snapshot) on the first and on later lookups. */
     private void stubFindAcquisition(Optional<BillingAcquisition> first, Optional<BillingAcquisition> then) {
-        when(billingAcquisitionRepository
-                .findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
-                        billingConfigurationId, PERIOD_START, PERIOD_END))
+        when(billingAcquisitionRepository.findFirstBySnapshotId(any()))
                 .thenReturn(first, then);
     }
 
-    // Test 6 - repeated acquisition updates the existing record
+    // Test 6 - repeated acquisition of the same batch updates its existing record
     @Test
-    void createManualAcquisition_calledRepeatedly_updatesSingleRecord() {
+    void createManualAcquisition_sameBatchRecordedRepeatedly_updatesSingleRecord() {
         when(billingConfigurationRepository.findById(billingConfigurationId)).thenReturn(Optional.of(configuration));
 
         UUID firstSnapshotId = UUID.randomUUID();
-        UUID secondSnapshotId = UUID.randomUUID();
+        UUID secondSnapshotId = firstSnapshotId;
         UUID recordId = UUID.randomUUID();
         ArgumentCaptor<BillingAcquisition> savedCaptor = ArgumentCaptor.forClass(BillingAcquisition.class);
         when(billingAcquisitionRepository.saveAndFlush(savedCaptor.capture())).thenAnswer(invocation -> {
@@ -131,9 +130,7 @@ class BillingAcquisitionServiceImplTest {
             return saved;
         });
         // No record on the first call; the record from the first call on the second.
-        when(billingAcquisitionRepository
-                .findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
-                        billingConfigurationId, PERIOD_START, PERIOD_END))
+        when(billingAcquisitionRepository.findFirstBySnapshotId(firstSnapshotId))
                 .thenReturn(Optional.empty())
                 .thenAnswer(invocation -> Optional.of(savedCaptor.getAllValues().get(0)));
 
@@ -149,6 +146,32 @@ class BillingAcquisitionServiceImplTest {
         // The second save is the same record updated in place, not a new insert.
         assertThat(saves.get(1)).isSameAs(saves.get(0));
         assertThat(saves.get(1).getStatus()).isEqualTo(BillingAcquisitionStatus.READY);
+    }
+
+    // Incremental billing - a second batch of the same period gets its own record; the first is untouched
+    @Test
+    void createManualAcquisition_newBatchOfAlreadyAcquiredPeriod_getsItsOwnRecord() {
+        when(billingConfigurationRepository.findById(billingConfigurationId)).thenReturn(Optional.of(configuration));
+        UUID firstBatchSnapshotId = UUID.randomUUID();
+        BillingAcquisition firstBatchRecord = existingAcquisition(firstBatchSnapshotId,
+                BillingAcquisitionStatus.ALREADY_BILLED);
+        UUID secondBatchSnapshotId = UUID.randomUUID();
+        when(billingAcquisitionRepository.findFirstBySnapshotId(secondBatchSnapshotId)).thenReturn(Optional.empty());
+        when(billingAcquisitionRepository
+                .findAllByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                        billingConfigurationId, PERIOD_START, PERIOD_END))
+                .thenReturn(List.of(firstBatchRecord));
+        when(billingAcquisitionRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.createManualAcquisition(request(secondBatchSnapshotId, "READY"));
+
+        ArgumentCaptor<BillingAcquisition> savedCaptor = ArgumentCaptor.forClass(BillingAcquisition.class);
+        verify(billingAcquisitionRepository).saveAndFlush(savedCaptor.capture());
+        assertThat(savedCaptor.getValue()).isNotSameAs(firstBatchRecord);
+        assertThat(savedCaptor.getValue().getSnapshotId()).isEqualTo(secondBatchSnapshotId);
+        // The earlier batch's record keeps its snapshot and status.
+        assertThat(firstBatchRecord.getSnapshotId()).isEqualTo(firstBatchSnapshotId);
+        assertThat(firstBatchRecord.getStatus()).isEqualTo(BillingAcquisitionStatus.ALREADY_BILLED);
     }
 
     // Test 4 (acquisition record) - lost concurrent insert is retried in a new transaction
@@ -236,9 +259,14 @@ class BillingAcquisitionServiceImplTest {
     }
 
     @Test
-    void recordAcquisitionForSnapshot_existingRecord_keepsStatusAndRepointsSnapshot() {
-        BillingAcquisition existing = existingAcquisition(UUID.randomUUID(), BillingAcquisitionStatus.ALREADY_BILLED);
-        stubFindAcquisition(Optional.of(existing), Optional.of(existing));
+    void recordAcquisitionForSnapshot_recordWithoutSnapshot_isAdoptedKeepingItsStatus() {
+        // A period record written before its snapshot existed is adopted by that snapshot.
+        BillingAcquisition existing = existingAcquisition(null, BillingAcquisitionStatus.ALREADY_BILLED);
+        stubFindAcquisition(Optional.empty(), Optional.empty());
+        when(billingAcquisitionRepository
+                .findAllByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+                        billingConfigurationId, PERIOD_START, PERIOD_END))
+                .thenReturn(List.of(existing));
         when(billingAcquisitionRepository.saveAndFlush(existing)).thenReturn(existing);
         UUID snapshotId = UUID.randomUUID();
 

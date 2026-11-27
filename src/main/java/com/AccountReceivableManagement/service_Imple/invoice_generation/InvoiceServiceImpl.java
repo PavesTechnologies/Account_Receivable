@@ -608,16 +608,23 @@ public class InvoiceServiceImpl implements InvoiceService {
         
         if (isTimeMaterial) {
             // T&M requires a Billing Snapshot
-            BillingSnapshot snapshot = billingSnapshotRepository
-                    .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+            List<BillingSnapshot> periodSnapshots = billingSnapshotRepository
+                    .findAllByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
                             schedule.getBillingConfiguration().getBillingConfigurationId(),
                             schedule.getPeriodStartDate(),
                             schedule.getPeriodEndDate()
-                    )
-                    .orElseThrow(() ->
-                            new GlobalExceptionHandler.ResourceNotFoundException(
-                                    "Billing Snapshot not found for Time & Material billing occurrence. Invoice cannot be generated."
-                            ));
+                    );
+            if (periodSnapshots == null || periodSnapshots.isEmpty()) {
+                throw new GlobalExceptionHandler.ResourceNotFoundException(
+                        "Billing Snapshot not found for Time & Material billing occurrence. Invoice cannot be generated.");
+            }
+            if (periodSnapshots.size() > 1) {
+                // Never guess which batch an occurrence bills: each batch is invoiced on its own.
+                throw new GlobalExceptionHandler.ValidationException(
+                        "This billing period was acquired in " + periodSnapshots.size() + " billing batches; "
+                                + "generate each batch's invoice from its own Billing Snapshot.");
+            }
+            BillingSnapshot snapshot = periodSnapshots.get(0);
             
             if (snapshot.getStatus() != BillingSnapshotStatus.TAX_COMPLETED) {
                 throw new GlobalExceptionHandler.ValidationException(
@@ -1202,12 +1209,12 @@ public class InvoiceServiceImpl implements InvoiceService {
             }
 
             // A schedule that has a snapshot is represented by that snapshot.
-            if (billingSnapshotRepository
-                    .findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+            List<BillingSnapshot> scheduleSnapshots = billingSnapshotRepository
+                    .findAllByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
                             schedule.getBillingConfiguration().getBillingConfigurationId(),
                             schedule.getPeriodStartDate(),
-                            schedule.getPeriodEndDate())
-                    .isPresent()) {
+                            schedule.getPeriodEndDate());
+            if (scheduleSnapshots != null && !scheduleSnapshots.isEmpty()) {
                 continue;
             }
 
