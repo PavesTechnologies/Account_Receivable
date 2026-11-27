@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ManagerOnly;
 
 /**
  * Operational recovery of automatic billing runs (G-17/G-18) - replaces the
@@ -33,6 +34,7 @@ public class AutomaticBillingRunRecoveryController {
     private final AutomaticBillingRunRecoveryService recoveryService;
 
     /** Re-queue a FAILED (or interrupted) run for another attempt. */
+    @ManagerOnly
     @PostMapping("/{runId}/requeue")
     public ResponseEntity<ApiResponse<RecoveryResultDto>> requeue(@PathVariable UUID runId,
             @Valid @RequestBody RecoveryRequestDto request) {
@@ -40,12 +42,14 @@ public class AutomaticBillingRunRecoveryController {
     }
 
     /** Complete a PENDING_APPROVAL run whose invoice is already approved. */
+    @ManagerOnly
     @PostMapping("/{runId}/reconcile-approval")
     public ResponseEntity<ApiResponse<RecoveryResultDto>> reconcileApproval(@PathVariable UUID runId) {
         return respond(recoveryService.reconcileApproval(runId));
     }
 
     /** The run's recovery history: each requeue/reconciliation with the failure it replaced. */
+    @ManagerOnly
     @GetMapping("/{runId}/events")
     public ResponseEntity<ApiResponse<List<AutomaticBillingRunEventDto>>> events(@PathVariable UUID runId) {
         return ResponseEntity.ok(ApiResponse.<List<AutomaticBillingRunEventDto>>builder()

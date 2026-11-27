@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/v1/exchange-rates")
@@ -23,6 +24,7 @@ public class ExchangeRateController {
 
     private final ExchangeRateService exchangeRateService;
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<ExchangeRateResponseDto>>> getExchangeRates(
             @RequestParam(required = false) String sourceCurrency,
@@ -36,6 +38,7 @@ public class ExchangeRateController {
         return ok("Exchange rates retrieved successfully.", rates);
     }
 
+    @ExecutiveOnly
     @PostMapping("/batch")
     public ResponseEntity<ApiResponse<List<ExchangeRateResponseDto>>> createBatch(
             @Valid @RequestBody ExchangeRateBatchRequestDto request) {
@@ -45,6 +48,7 @@ public class ExchangeRateController {
         return created("Daily exchange rates saved successfully.", response);
     }
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<ExchangeRateResponseDto>> createSingle(
             @Valid @RequestBody ExchangeRateSingleRequestDto request) {
@@ -54,6 +58,7 @@ public class ExchangeRateController {
         return created("Exchange rate created successfully.", response);
     }
 
+    @ExecutiveOnly
     @GetMapping("/{id}")
     public ResponseEntity<ApiResponse<ExchangeRateResponseDto>> getById(@PathVariable String id) {
         ExchangeRateResponseDto response = exchangeRateService.getById(id);
@@ -61,6 +66,7 @@ public class ExchangeRateController {
         return ok("Exchange rate retrieved successfully.", response);
     }
 
+    @ExecutiveOnly
     @GetMapping("/lookup")
     public ResponseEntity<ApiResponse<ExchangeRateResponseDto>> lookup(
             @RequestParam String sourceCurrency,

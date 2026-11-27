@@ -141,6 +141,22 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 @ActiveProfiles("test")
 class OperationsMonitoringAndReconciliationTest {
 
+    /**
+     * Identity for the tests that build their fixtures by calling controllers
+     * directly, where {@code @EnableMethodSecurity} evaluates the access
+     * annotations against an otherwise empty SecurityContext.
+     *
+     * <p>Applied per test, never to the class: it authenticates every request
+     * made inside the test, which would turn the deliberately anonymous calls
+     * in {@code operationsReports_requireAConfiguredAuthority} from 401 into
+     * 403 and stop that test proving anything about unauthenticated access.
+     */
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+    @org.springframework.security.test.context.support.WithMockUser(
+            roles = {"FINANCE_EXECUTIVE", "FINANCE_MANAGER"})
+    private @interface AsFinanceUser {
+    }
+
     /** Financial and execution tables whose content monitoring must never change. */
     private static final List<String> FINANCIAL_TABLES = List.of("automatic_billing_run", "billing_schedule",
             "tax_calculation", "invoice", "invoice_item", "invoice_tax_component", "invoice_document",
@@ -212,6 +228,7 @@ class OperationsMonitoringAndReconciliationTest {
 
     // ================================================================ monitoring reflects persisted status
 
+    @AsFinanceUser
     @Test
     void realPipeline_reconcilesWithoutFindings_andSummaryMatchesPersistedRecords() {
         Pipeline pipeline = billFixedPriceAndProcessInvoices();
@@ -252,6 +269,7 @@ class OperationsMonitoringAndReconciliationTest {
         assertThat(summary.occurrences().overdueWithoutRun()).isZero();
     }
 
+    @AsFinanceUser
     @Test
     void successfulDelivery_correspondsToExactlyOneReceivable_forItsGrandTotal() {
         Pipeline pipeline = billFixedPriceAndProcessInvoices();
@@ -273,6 +291,7 @@ class OperationsMonitoringAndReconciliationTest {
 
     // ================================================================ reconciliation detects discrepancies
 
+    @AsFinanceUser
     @Test
     void reconciliation_detectsDeliberatelyIntroducedDiscrepancies() {
         Pipeline pipeline = billFixedPriceAndProcessInvoices();
@@ -441,6 +460,7 @@ class OperationsMonitoringAndReconciliationTest {
 
     // ================================================================ recovery conditions (E3/E4)
 
+    @AsFinanceUser
     @Test
     void recoveryConditions_areMeasured_andRaisedAgainstTheirThresholds() {
         Pipeline pipeline = billFixedPriceAndProcessInvoices();
@@ -469,6 +489,7 @@ class OperationsMonitoringAndReconciliationTest {
 
     // ================================================================ read-only
 
+    @AsFinanceUser
     @Test
     void repeatedMonitoringAndReconciliation_doNotModifyFinancialRecords() throws Exception {
         billFixedPriceAndProcessInvoices();
@@ -509,8 +530,11 @@ class OperationsMonitoringAndReconciliationTest {
         assertThat(status(get(paths[0]).with(operationsUser()))).isEqualTo(403);
         assertThat(new OperationsMonitoringProperties().getReportAuthorities()).isEmpty();
 
-        // Other APIs keep their existing rule (any authenticated user).
-        assertThat(status(get("/api/v1/invoices").with(jwt()))).isEqualTo(200);
+        // Other APIs now carry their own role rule: the invoice list is executive work, so a token
+        // without a finance role no longer reaches it. Before RBAC any authenticated caller did.
+        assertThat(status(get("/api/v1/invoices").with(jwt()))).isEqualTo(403);
+        assertThat(status(get("/api/v1/invoices")
+                .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_FINANCE_EXECUTIVE"))))).isEqualTo(200);
     }
 
     @Test

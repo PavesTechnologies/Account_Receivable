@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/ar/projects/{projectId}/tool-billing")
@@ -17,6 +18,7 @@ public class ProjectToolBillingConfigController {
 
     private final ProjectToolBillingConfigService projectToolBillingConfigService;
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<ProjectToolBillingConfigResponseDto>> getToolBillingConfig(
             @PathVariable Long projectId) {
@@ -32,6 +34,7 @@ public class ProjectToolBillingConfigController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<ProjectToolBillingConfigResponseDto>> createToolBillingConfig(
             @PathVariable Long projectId,
@@ -48,6 +51,7 @@ public class ProjectToolBillingConfigController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping
     public ResponseEntity<ApiResponse<ProjectToolBillingConfigResponseDto>> updateToolBillingConfig(
             @PathVariable Long projectId,

@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * Controller for tax structure discovery API.
@@ -21,6 +22,7 @@ public class TaxStructureController {
 
     private final TaxStructureService taxStructureService;
 
+    @ExecutiveOnly
     @GetMapping("/regions/{taxRegionId}")
     public ResponseEntity<ApiResponse<TaxStructureResponseDto>> getTaxStructureByRegion(
             @PathVariable UUID taxRegionId

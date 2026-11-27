@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/tax-regime-master")
@@ -20,6 +21,7 @@ public class TaxRegimeMasterController {
 
     private final TaxRegimeMasterService taxRegimeMasterService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<TaxRegimeResponseDto>> createTaxRegime(
             @Valid @RequestBody TaxRegimeRequestDto request
@@ -36,6 +38,7 @@ public class TaxRegimeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{taxRegimeId}")
     public ResponseEntity<ApiResponse<TaxRegimeResponseDto>> updateTaxRegime(
             @PathVariable UUID taxRegimeId,
@@ -56,6 +59,7 @@ public class TaxRegimeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{taxRegimeId}")
     public ResponseEntity<ApiResponse<TaxRegimeResponseDto>> getTaxRegimeById(
             @PathVariable UUID taxRegimeId
@@ -69,6 +73,7 @@ public class TaxRegimeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<TaxRegimeResponseDto>>> getAllTaxRegimes() {
 
@@ -80,6 +85,7 @@ public class TaxRegimeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<TaxRegimeResponseDto>>> getActiveTaxRegimes() {
 
@@ -91,6 +97,7 @@ public class TaxRegimeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PatchMapping("/{taxRegimeId}/deactivate")
     public ResponseEntity<ApiResponse<Void>> deactivateTaxRegime(
             @PathVariable UUID taxRegimeId

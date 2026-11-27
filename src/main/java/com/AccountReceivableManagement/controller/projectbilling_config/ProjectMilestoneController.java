@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 /**
  * The PMS milestones synchronised into AR, for the billing-setup screens. Read-only: milestones are owned by PMS and
@@ -29,6 +30,7 @@ public class ProjectMilestoneController {
      * returns an empty list (not an error) for a known project that has no synchronised milestones yet, and 404 for a
      * project AR does not know.
      */
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<ProjectMilestoneResponseDto>>> getMilestones(
             @PathVariable Long pmsProjectId,

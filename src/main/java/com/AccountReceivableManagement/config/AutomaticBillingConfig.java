@@ -2,6 +2,7 @@ package com.AccountReceivableManagement.config;
 
 import com.AccountReceivableManagement.config.properties.AutomaticBillingSchedulerProperties;
 import com.AccountReceivableManagement.config.properties.OperationsMonitoringProperties;
+import com.AccountReceivableManagement.config.properties.TaxCalculationProperties;
 import com.AccountReceivableManagement.config.properties.UmsServiceAuthProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
@@ -12,6 +13,6 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 @EnableConfigurationProperties({AutomaticBillingSchedulerProperties.class, OperationsMonitoringProperties.class,
-        UmsServiceAuthProperties.class})
+        UmsServiceAuthProperties.class, TaxCalculationProperties.class})
 public class AutomaticBillingConfig {
 }

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/billing-types")
@@ -20,6 +21,7 @@ public class BillingTypeMasterController {
 
     private final BillingTypeMasterService billingTypeService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<BillingTypeResponseDto>> createBillingType(
             @Valid @RequestBody BillingTypeRequestDto request) {
@@ -35,6 +37,7 @@ public class BillingTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{billingTypeId}")
     public ResponseEntity<ApiResponse<BillingTypeResponseDto>> updateBillingType(
             @PathVariable UUID billingTypeId,
@@ -51,6 +54,7 @@ public class BillingTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{billingTypeId}")
     public ResponseEntity<ApiResponse<BillingTypeResponseDto>> getBillingTypeById(
             @PathVariable UUID billingTypeId) {
@@ -66,6 +70,7 @@ public class BillingTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<BillingTypeResponseDto>>> getAllBillingTypes() {
 
@@ -80,6 +85,7 @@ public class BillingTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/active")
     public ResponseEntity<ApiResponse<List<BillingTypeResponseDto>>> getActiveBillingTypes() {
 
@@ -94,6 +100,7 @@ public class BillingTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @DeleteMapping("/{billingTypeId}")
     public ResponseEntity<ApiResponse<Void>> deleteBillingType(
             @PathVariable UUID billingTypeId) {
@@ -108,6 +115,7 @@ public class BillingTypeMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PatchMapping("/{billingTypeId}/activate")
     public ResponseEntity<ApiResponse<BillingTypeResponseDto>> activateBillingType(
             @PathVariable UUID billingTypeId) {

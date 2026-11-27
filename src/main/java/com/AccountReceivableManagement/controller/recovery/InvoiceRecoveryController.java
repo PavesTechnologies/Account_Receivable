@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ManagerOnly;
 
 /**
  * Operational recovery of invoice deliveries and receivables (G-19/G-20/G-21).
@@ -43,6 +44,7 @@ public class InvoiceRecoveryController {
      * (invoicing is refused until then). The old calculation is kept as
      * superseded history.
      */
+    @ManagerOnly
     @PostMapping("/billing-occurrences/{occurrenceId}/recalculate-tax")
     public ResponseEntity<ApiResponse<RecoveryResultDto>> recalculateStaleTax(@PathVariable UUID occurrenceId,
             @Valid @RequestBody RecoveryRequestDto request) {
@@ -51,6 +53,7 @@ public class InvoiceRecoveryController {
     }
 
     /** Create the missing receivable of a sent invoice (never re-sends it). */
+    @ManagerOnly
     @PostMapping("/invoices/{invoiceId}/receivable")
     public ResponseEntity<ApiResponse<RecoveryResultDto>> recoverReceivable(@PathVariable UUID invoiceId,
             @Valid @RequestBody RecoveryRequestDto request) {
@@ -62,6 +65,7 @@ public class InvoiceRecoveryController {
      * Resolve a delivery whose outcome is unknown (UNCERTAIN, or PENDING past
      * its in-flight timeout) after checking the sending mailbox.
      */
+    @ManagerOnly
     @PostMapping("/invoice-deliveries/{deliveryId}/resolve")
     public ResponseEntity<ApiResponse<InvoiceDeliveryResponseDto>> resolveDelivery(@PathVariable UUID deliveryId,
             @Valid @RequestBody ResolveDeliveryRequest request) {

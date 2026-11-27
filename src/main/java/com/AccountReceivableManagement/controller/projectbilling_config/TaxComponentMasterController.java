@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.AccountReceivableManagement.security.ExecutiveOnly;
 
 @RestController
 @RequestMapping("/api/tax-component-master")
@@ -20,6 +21,7 @@ public class TaxComponentMasterController {
 
     private final TaxComponentMasterService taxComponentMasterService;
 
+    @ExecutiveOnly
     @PostMapping
     public ResponseEntity<ApiResponse<TaxComponentResponseDto>> createTaxComponent(
             @Valid @RequestBody TaxComponentRequestDto request
@@ -36,6 +38,7 @@ public class TaxComponentMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PutMapping("/{taxComponentId}")
     public ResponseEntity<ApiResponse<TaxComponentResponseDto>> updateTaxComponent(
             @PathVariable UUID taxComponentId,
@@ -56,6 +59,7 @@ public class TaxComponentMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/{taxComponentId}")
     public ResponseEntity<ApiResponse<TaxComponentResponseDto>> getTaxComponentById(
             @PathVariable UUID taxComponentId
@@ -69,6 +73,7 @@ public class TaxComponentMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping
     public ResponseEntity<ApiResponse<List<TaxComponentResponseDto>>> getAllTaxComponents() {
 
@@ -80,6 +85,7 @@ public class TaxComponentMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @GetMapping("/regime/{taxRegimeId}")
     public ResponseEntity<ApiResponse<List<TaxComponentResponseDto>>> getTaxComponentsByRegime(
             @PathVariable UUID taxRegimeId
@@ -93,6 +99,7 @@ public class TaxComponentMasterController {
                         .build());
     }
 
+    @ExecutiveOnly
     @PatchMapping("/{taxComponentId}/deactivate")
     public ResponseEntity<ApiResponse<Void>> deactivateTaxComponent(
             @PathVariable UUID taxComponentId
