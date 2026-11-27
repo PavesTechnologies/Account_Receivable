@@ -5,14 +5,14 @@ import com.AccountReceivableManagement.cdc.mapping.ColumnMapping;
 import com.AccountReceivableManagement.cdc.parsing.CdcValueConverter;
 import com.AccountReceivableManagement.cdc.payload.CdcEventPayload;
 import com.AccountReceivableManagement.entity.project_entity.ProjectMasterReference;
-import com.AccountReceivableManagement.repo.client.ClientBudgetSummaryRepository;
 import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceRepository;
 import com.AccountReceivableManagement.service_interface.client.ClientBudgetSummaryService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
@@ -22,12 +22,29 @@ import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ProjectDataProcessorImpl implements ProjectDataProcessor {
 
     private final ProjectMasterReferenceRepository projectMasterReferenceRepository;
     private final CdcValueConverter valueConverter;
     private final ClientBudgetSummaryService clientBudgetSummaryService;
+    // @Transactional on a private method is silently ignored by Spring's proxy-based AOP (self-invocation
+    // never goes through the proxy), so these boundaries are expressed with TransactionTemplate instead,
+    // which works regardless of how the method is called.
+    private final TransactionTemplate requiredTemplate;
+    private final TransactionTemplate requiresNewTemplate;
+
+    @Autowired
+    public ProjectDataProcessorImpl(ProjectMasterReferenceRepository projectMasterReferenceRepository,
+            CdcValueConverter valueConverter,
+            ClientBudgetSummaryService clientBudgetSummaryService,
+            PlatformTransactionManager transactionManager) {
+        this.projectMasterReferenceRepository = projectMasterReferenceRepository;
+        this.valueConverter = valueConverter;
+        this.clientBudgetSummaryService = clientBudgetSummaryService;
+        this.requiredTemplate = new TransactionTemplate(transactionManager);
+        this.requiresNewTemplate = new TransactionTemplate(transactionManager);
+        this.requiresNewTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
 
     @Override
     public void process(CdcEventPayload payload) {
@@ -95,40 +112,41 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
     }
 
     /** @return the created project, or {@code null} when it already existed (event skipped) */
-    @Transactional
     private ProjectMasterReference handleCreate(Map<String, Object> data) {
         Long pmsProjectId = getPmsProjectId(data);
         log.info("[PROJECT-CDC] CREATE START - Extracted pmsProjectId: {}", pmsProjectId);
-        
+
         if (pmsProjectId == null) {
             log.error("PMS Project ID is null for create operation.");
             throw new IllegalArgumentException("PMS Project ID cannot be null for create operations.");
         }
 
-        boolean projectExists = projectMasterReferenceRepository.existsBypmsProjectId(pmsProjectId);
-        log.info("[PROJECT-CDC] Existing project check - pmsProjectId: {}, exists: {}", pmsProjectId, projectExists);
-        
-        if (projectExists) {
-            log.warn("Project with PMS ID {} already exists. Skipping create operation.", pmsProjectId);
-            return null;
-        }
+        // The exists-check and the save must happen in one transaction: without it, a redelivered or
+        // concurrently-processed duplicate "c" event can pass the exists-check twice before either save lands.
+        return requiredTemplate.execute(status -> {
+            boolean projectExists = projectMasterReferenceRepository.existsBypmsProjectId(pmsProjectId);
+            log.info("[PROJECT-CDC] Existing project check - pmsProjectId: {}, exists: {}", pmsProjectId, projectExists);
 
-        log.info("[PROJECT-CDC] Creating new ProjectMasterReference for pmsProjectId: {}", pmsProjectId);
-        ProjectMasterReference project = new ProjectMasterReference();
-        updateProjectFromMap(data, project);
-        project.setPmsProjectId(pmsProjectId); // Ensure the ID is set
-        
-        log.info("[PROJECT-CDC] Saving project_master_reference - pmsProjectId: {}, clientId: {}, budget: {}, currency: {}",
-                project.getPmsProjectId(), project.getClientId(), project.getProjectBudget(), project.getProjectBudgetCurrency());
-        
-        ProjectMasterReference savedProject =
-                projectMasterReferenceRepository.save(project);
-        
-        log.info("[PROJECT-CDC] project_master_reference saved successfully - pmsProjectId: {}",
-                savedProject.getPmsProjectId());
-        
-        log.info("[PROJECT-CDC] CREATE COMPLETE - Created project with PMS ID: {}", project.getPmsProjectId());
-        return savedProject != null ? savedProject : project;
+            if (projectExists) {
+                log.warn("Project with PMS ID {} already exists. Skipping create operation.", pmsProjectId);
+                return null;
+            }
+
+            log.info("[PROJECT-CDC] Creating new ProjectMasterReference for pmsProjectId: {}", pmsProjectId);
+            ProjectMasterReference project = new ProjectMasterReference();
+            updateProjectFromMap(data, project);
+            project.setPmsProjectId(pmsProjectId); // Ensure the ID is set
+
+            log.info("[PROJECT-CDC] Saving project_master_reference - pmsProjectId: {}, clientId: {}, budget: {}, currency: {}",
+                    project.getPmsProjectId(), project.getClientId(), project.getProjectBudget(), project.getProjectBudgetCurrency());
+
+            ProjectMasterReference savedProject = projectMasterReferenceRepository.save(project);
+
+            log.info("[PROJECT-CDC] project_master_reference saved successfully - pmsProjectId: {}",
+                    savedProject.getPmsProjectId());
+            log.info("[PROJECT-CDC] CREATE COMPLETE - Created project with PMS ID: {}", project.getPmsProjectId());
+            return savedProject;
+        });
     }
 
     /**
@@ -181,19 +199,19 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
         return a.compareTo(b);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     private void refreshClientBudgetAsync(UUID clientId) {
         try {
-            log.info("[PROJECT-CDC] Refreshing client budget summary for clientId: {}", clientId);
-            clientBudgetSummaryService.refreshClientBudget(clientId);
+            requiresNewTemplate.executeWithoutResult(status -> {
+                log.info("[PROJECT-CDC] Refreshing client budget summary for clientId: {}", clientId);
+                clientBudgetSummaryService.refreshClientBudget(clientId);
+            });
             log.info("[PROJECT-CDC] Client budget summary refreshed successfully for clientId: {}", clientId);
         } catch (Exception e) {
-            log.error("Failed to refresh client budget summary for client {}. This runs in a separate transaction and does not affect project save.", 
+            log.error("Failed to refresh client budget summary for client {}. This runs in a separate transaction and does not affect project save.",
                     clientId, e);
         }
     }
 
-    @Transactional
     private void handleUpdate(Map<String, Object> data) {
         Long pmsProjectId = getPmsProjectId(data);
         if (pmsProjectId == null) {
@@ -201,17 +219,17 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
             throw new IllegalArgumentException("PMS Project ID cannot be null for update operations.");
         }
 
-        ProjectMasterReference existingProject = projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId)
-                .orElseThrow(() -> new IllegalArgumentException("Project not found for update with PMS ID: " + pmsProjectId));
+        requiredTemplate.executeWithoutResult(status -> {
+            ProjectMasterReference existingProject = projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId)
+                    .orElseThrow(() -> new IllegalArgumentException("Project not found for update with PMS ID: " + pmsProjectId));
 
-        updateProjectFromMap(data, existingProject);
-        ProjectMasterReference updatedProject =
-                projectMasterReferenceRepository.save(existingProject);
+            updateProjectFromMap(data, existingProject);
+            projectMasterReferenceRepository.save(existingProject);
 
-        log.info("Updated project with PMS ID: {}", pmsProjectId);
+            log.info("Updated project with PMS ID: {}", pmsProjectId);
+        });
     }
 
-    @Transactional
     private void handleDelete(Map<String, Object> data) {
 
         Long pmsProjectId = getPmsProjectId(data);
@@ -221,20 +239,21 @@ public class ProjectDataProcessorImpl implements ProjectDataProcessor {
             throw new IllegalArgumentException("PMS Project ID cannot be null for delete operations.");
         }
 
-        projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId)
-                .ifPresent(project -> {
+        // Delete commits here, in its own transaction, before the budget refresh (also its own
+        // separate transaction) runs below — so the refresh always sees the deletion already applied.
+        UUID clientId = requiredTemplate.execute(status ->
+                projectMasterReferenceRepository.findBypmsProjectId(pmsProjectId)
+                        .map(project -> {
+                            UUID id = project.getClientId();
+                            projectMasterReferenceRepository.delete(project);
+                            log.info("Deleted project with PMS ID: {}", pmsProjectId);
+                            return id;
+                        })
+                        .orElse(null));
 
-                    // Get clientId before deleting
-                    var clientId = project.getClientId();
-
-                    // Delete project
-                    projectMasterReferenceRepository.delete(project);
-
-                    log.info("Deleted project with PMS ID: {}", pmsProjectId);
-                    
-                    // Refresh summary in separate transaction after delete is committed
-                    refreshClientBudgetAsync(clientId);
-                });
+        if (clientId != null) {
+            refreshClientBudgetAsync(clientId);
+        }
     }
 
     private void updateProjectFromMap(Map<String, Object> data, ProjectMasterReference project) {

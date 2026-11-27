@@ -139,6 +139,11 @@ public class ClientDebeziumConfig {
                         .with("database.ssl.mode",
                                 clientCdcProperties.getSsl().getMode())
 
+                        // Pin the source read to UTC so DATETIME/TIMESTAMP columns are
+                        // interpreted consistently regardless of the source server's session timezone.
+                        .with("database.connectionTimeZone",
+                                "UTC")
+
                         .with("heartbeat.interval.ms",
                                 "30000")
 

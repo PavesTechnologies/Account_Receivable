@@ -19,6 +19,13 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class CdcInboxService {
 
+    /**
+     * Once an event's retryCount reaches this, {@link #findFailedEventsForRetry} permanently
+     * excludes it - there is no further automatic attempt. Shared with InboxEventProcessor's
+     * retry query so the "still eligible" and "exhausted" checks never drift apart.
+     */
+    public static final int MAX_RETRIES = 3;
+
     private final CdcInboxRepository cdcInboxRepository;
     private final ObjectMapper objectMapper;
 
@@ -77,6 +84,17 @@ public class CdcInboxService {
     }
 
     /**
+     * Atomically claim a pending event before processing it, so two application instances
+     * (e.g. overlapping pods during a rolling deploy) never process the same event concurrently.
+     *
+     * @return true if this caller now owns the event, false if another instance already claimed it
+     */
+    @Transactional
+    public boolean tryClaim(UUID eventId) {
+        return cdcInboxRepository.claim(eventId, LocalDateTime.now()) == 1;
+    }
+
+    /**
      * Mark event as processed
      */
     @Transactional
@@ -127,6 +145,19 @@ public class CdcInboxService {
         cdcInboxRepository.save(inboxEvent);
         log.error("Marked CDC event as failed: ID={}, RetryCount={}/{}, Error={}",
                 eventId, attempts, maxRetries, errorMessage);
+
+        if (inboxEvent.getRetryCount() >= MAX_RETRIES) {
+            // findFailedEventsForRetry excludes this row from here on - no further automatic
+            // attempt will ever be made. This line is the only signal that happens; without it,
+            // the event just sits in the table forever with nothing surfacing the data loss.
+            log.error("CDC event permanently failed after {} retries and will NOT be retried again - "
+                            + "requires manual intervention. ID={}, EntityType={}, EntityId={}, Operation={}, Error={}",
+                    MAX_RETRIES, eventId, inboxEvent.getEntityType(), inboxEvent.getEntityId(),
+                    inboxEvent.getOperation(), errorMessage);
+        } else {
+            log.error("Marked CDC event as failed: ID={}, RetryCount={}, Error={}",
+                    eventId, inboxEvent.getRetryCount(), errorMessage);
+        }
     }
 
     /**

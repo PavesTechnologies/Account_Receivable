@@ -8,7 +8,7 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.UUID;
@@ -185,8 +185,10 @@ public class CdcValueConverter {
                 } else { // Milliseconds
                     millis = longValue;
                 }
+                // Debezium temporal logical types are UTC-based epoch values,
+                // not local wall-clock time — never reproject through the server's zone.
                 return java.time.Instant.ofEpochMilli(millis)
-                        .atZone(ZoneId.systemDefault())
+                        .atZone(ZoneOffset.UTC)
                         .toLocalDate();
             }
         }
@@ -212,7 +214,7 @@ public class CdcValueConverter {
             try {
                 // Handles zoned timestamps (e.g., "2023-01-01T12:00:00Z")
                 return java.time.ZonedDateTime.parse(str)
-                        .withZoneSameInstant(ZoneId.systemDefault())
+                        .withZoneSameInstant(ZoneOffset.UTC)
                         .toLocalDateTime();
             } catch (java.time.format.DateTimeParseException e) {
                 // Fallback for non-zoned timestamps (e.g., "2023-01-01T12:00:00")
@@ -233,11 +235,11 @@ public class CdcValueConverter {
                 long seconds = micros / 1_000_000;
                 long nanos = (micros % 1_000_000) * 1000;
                 return java.time.Instant.ofEpochSecond(seconds, nanos)
-                        .atZone(ZoneId.systemDefault())
+                        .atZone(ZoneOffset.UTC)
                         .toLocalDateTime();
             } else { // Assume milliseconds
                 return java.time.Instant.ofEpochMilli(longValue)
-                        .atZone(ZoneId.systemDefault())
+                        .atZone(ZoneOffset.UTC)
                         .toLocalDateTime();
             }
         }

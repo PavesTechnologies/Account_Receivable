@@ -8,6 +8,7 @@ import com.AccountReceivableManagement.repo.project.ProjectMasterReferenceReposi
 import com.AccountReceivableManagement.service_interface.client.ClientBudgetSummaryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -41,7 +42,10 @@ class ProjectSnapshotProcessingTest {
             store.put(p.getPmsProjectId(), p);
             return p;
         });
-        processor = new ProjectDataProcessorImpl(repository, new CdcValueConverter(), budgetService);
+        // Only "r" (snapshot) operations are exercised here, which never go through the
+        // TransactionTemplate-backed create/update/delete paths, so a bare mock suffices.
+        processor = new ProjectDataProcessorImpl(repository, new CdcValueConverter(), budgetService,
+                mock(PlatformTransactionManager.class));
         clientId = UUID.randomUUID();
     }
 
