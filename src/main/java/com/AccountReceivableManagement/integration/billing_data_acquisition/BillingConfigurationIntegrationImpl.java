@@ -106,6 +106,12 @@ public class BillingConfigurationIntegrationImpl implements BillingConfiguration
                         epic1Configuration.getApprovalStatus()
                                 == ApprovalStatus.APPROVED)
 
+                .effectiveFrom(
+                        epic1Configuration.getEffectiveFrom())
+
+                .effectiveTo(
+                        epic1Configuration.getEffectiveTo())
+
                 .build();
     }
 

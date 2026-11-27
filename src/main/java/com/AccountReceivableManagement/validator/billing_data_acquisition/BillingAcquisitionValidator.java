@@ -123,14 +123,16 @@ public class BillingAcquisitionValidator {
 
         // Source-level idempotency: one TMS timesheet is billed by at most one
         // Billing Snapshot, whatever period, trigger or retry produced it.
-        List<String> alreadyBilled = billingSnapshotItemRepository.findClaimedSourceReferenceIds(
+        // However, if the conflicting snapshot belongs to an INACTIVE billing configuration,
+        // allow re-billing (the previous configuration is no longer active).
+        List<String> alreadyBilledByActive = billingSnapshotItemRepository.findClaimedSourceReferenceIdsByActiveConfiguration(
                 BillingItemType.TIME_ENTRY,
                 seenSourceReferenceIds,
                 BillingSnapshotStatus.CANCELLED,
                 owningSnapshotId);
-        if (alreadyBilled != null && !alreadyBilled.isEmpty()) {
+        if (alreadyBilledByActive != null && !alreadyBilledByActive.isEmpty()) {
             return ValidationResultDto.failure(
-                    "Timesheet(s) " + alreadyBilled + " are already included in another Billing Snapshot "
+                    "Timesheet(s) " + alreadyBilledByActive + " are already included in another Billing Snapshot "
                             + "and cannot be billed again.");
         }
 
