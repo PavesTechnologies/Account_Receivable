@@ -14,10 +14,13 @@ import com.AccountReceivableManagement.dto.projectbilling_config.BillingPeriodDt
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingScheduleType;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.MilestoneTaxReadiness;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PaymentStructure;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.RenewalDurationUnit;
 import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import org.springframework.dao.DataIntegrityViolationException;
+import com.AccountReceivableManagement.entity.project_entity.ProjectMilestoneReference;
+import com.AccountReceivableManagement.repo.project.ProjectMilestoneReferenceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingFixedPriceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingFrequencyMasterRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingPaymentEntryRepository;
@@ -59,6 +62,7 @@ public class BillingOccurrenceServiceImpl {
     private final TaxCalculationRepository taxCalculationRepository;
     private final com.AccountReceivableManagement.repo.automatic_billing.AutomaticBillingRunRepository automaticBillingRunRepository;
     private final BillingOccurrenceTransactionService billingOccurrenceTransactionService;
+    private final ProjectMilestoneReferenceRepository projectMilestoneReferenceRepository;
 
     /**
      * Logged immediately before every BillingSchedule insert so a duplicate
@@ -1156,6 +1160,12 @@ public class BillingOccurrenceServiceImpl {
      * job applies - inside the caller's transaction, so approval and its
      * occurrences commit or roll back together. Future occurrences stay
      * SCHEDULED for the job to pick up.
+     *
+     * <p>A Milestone Plan occurrence is additionally held back when the milestone it bills is not COMPLETED in PMS, or
+     * is completed but its planned due date is still in the future (the same rule the scheduled transition applies, via
+     * the shared {@code BillingOccurrenceTransactionServiceImpl.taxReadinessHoldReason}). Approving a plan therefore
+     * never hands unfinished or not-yet-due work to tax calculation; the held occurrence is picked up by the scheduler
+     * once PMS completes the milestone or its planned due date arrives.</p>
      */
     public void promoteDueOccurrencesToTaxPending(UUID billingConfigurationId) {
         BillingConfiguration configuration = billingConfigurationRepository
@@ -1181,11 +1191,86 @@ public class BillingOccurrenceServiceImpl {
                     && schedule.getTaxStatus() == BillingPeriodStatus.PENDING
                     && schedule.getBillingDate() != null
                     && !schedule.getBillingDate().isAfter(today)) {
+                String notReadyForTax = milestoneTaxReadinessHoldReason(configuration, schedule, today);
+                if (notReadyForTax != null) {
+                    log.info("Configuration {}: occurrence {} stays SCHEDULED because {}",
+                            configuration.getBillingConfigurationId(), schedule.getBillingScheduleId(), notReadyForTax);
+                    continue;
+                }
                 schedule.setPeriodStatus(BillingPeriodStatus.TAX_PENDING);
                 schedule.setTaxStatus(BillingPeriodStatus.TAX_PENDING);
                 billingScheduleRepository.save(schedule);
             }
         }
+    }
+
+    /**
+     * Where the milestone(s) this occurrence bills stand for tax hand-off, or null when the occurrence is not a
+     * Milestone Plan one (nothing else is gated on a milestone, so nothing else has this status).
+     *
+     * <p>Derived on read, never stored, so it moves with the calendar on its own: a milestone completed ahead of time
+     * reads UPCOMING until its planned due date and READY_FOR_TAX from that date on, with no job having to rewrite it.
+     * That is the same value the scheduled transition gates on, so what a screen shows and what the server does can
+     * never disagree. The worst status of the occurrence's milestones wins - NOT_COMPLETED over UPCOMING over
+     * READY_FOR_TAX - because one unfinished milestone holds the whole occurrence.</p>
+     */
+    @Transactional(readOnly = true)
+    public MilestoneTaxReadiness milestoneTaxReadiness(BillingSchedule schedule) {
+        BillingConfiguration configuration = schedule.getBillingConfiguration();
+        if (!BillingOccurrenceTransactionServiceImpl.isMilestonePlan(configuration)
+                || schedule.getPeriodStartDate() == null
+                || !schedule.getPeriodStartDate().equals(schedule.getPeriodEndDate())) {
+            return null;
+        }
+        LocalDate today = LocalDate.now();
+        MilestoneTaxReadiness worst = null;
+        for (BillingPaymentEntry entry : billingPaymentEntryRepository
+                .findActiveMilestoneEntries(configuration, schedule.getPeriodStartDate())) {
+            ProjectMilestoneReference milestone = projectMilestoneReferenceRepository
+                    .findById(entry.getPmsMilestoneId()).orElse(null);
+            if (milestone == null) {
+                continue;
+            }
+            MilestoneTaxReadiness readiness =
+                    BillingOccurrenceTransactionServiceImpl.taxReadiness(milestone, today);
+            if (worst == null || readiness.ordinal() > worst.ordinal()) {
+                worst = readiness;
+            }
+        }
+        return worst;
+    }
+
+    /**
+     * Why the milestone(s) this occurrence bills may not go to tax calculation yet, or null. Null for every billing type
+     * other than a Milestone Plan, and for an occurrence that spans more than one day (a milestone occurrence is a single
+     * day: the entry's billing date), so no other billing behaviour changes. The verdict itself comes from the shared
+     * helper the scheduled transition uses, so approval and the scheduler can never disagree. A milestone that is not
+     * synchronised or has been deleted in PMS is left to the existing checks on the scheduled path; it is not promoted
+     * here either, because an unsynchronised milestone cannot be shown to be ready.
+     */
+    private String milestoneTaxReadinessHoldReason(
+            BillingConfiguration configuration, BillingSchedule schedule, LocalDate today) {
+        if (!BillingOccurrenceTransactionServiceImpl.isMilestonePlan(configuration)
+                || schedule.getPeriodStartDate() == null
+                || !schedule.getPeriodStartDate().equals(schedule.getPeriodEndDate())) {
+            return null;
+        }
+        for (BillingPaymentEntry entry : billingPaymentEntryRepository
+                .findActiveMilestoneEntries(configuration, schedule.getPeriodStartDate())) {
+            ProjectMilestoneReference milestone = projectMilestoneReferenceRepository
+                    .findById(entry.getPmsMilestoneId()).orElse(null);
+            if (milestone == null) {
+                return "PMS milestone " + entry.getPmsMilestoneId() + " is not synchronised";
+            }
+            if (Boolean.TRUE.equals(milestone.getSourceDeleted())) {
+                return "PMS milestone " + entry.getPmsMilestoneId() + " has been deleted in PMS";
+            }
+            String reason = BillingOccurrenceTransactionServiceImpl.taxReadinessHoldReason(milestone, today);
+            if (reason != null) {
+                return "PMS milestone " + entry.getPmsMilestoneId() + " " + reason;
+            }
+        }
+        return null;
     }
 
     /**

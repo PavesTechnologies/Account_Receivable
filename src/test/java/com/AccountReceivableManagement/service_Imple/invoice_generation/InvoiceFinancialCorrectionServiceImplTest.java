@@ -194,13 +194,19 @@ class InvoiceFinancialCorrectionServiceImplTest {
                 new TimeAndMaterialBillingStrategy(timesheetIntegration, billingTMRateCardRepository);
         org.springframework.test.util.ReflectionTestUtils.setField(
                 timeAndMaterialStrategy, "billingTMRateDiscountRepository", billingTMRateDiscountRepository);
+        // One claim repository for the strategy and the validator, as the single Spring bean is in
+        // production: the rebuild excludes records claimed by other batches through it (no claims here).
+        com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository
+                billingSnapshotItemRepository = org.mockito.Mockito.mock(
+                        com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                timeAndMaterialStrategy, "billingSnapshotItemRepository", billingSnapshotItemRepository);
 
         BillingSnapshotServiceImpl billingSnapshotService = new BillingSnapshotServiceImpl(
                 billingSnapshotRepository,
                 billingConfigurationIntegration,
                 projectMasterDataService,
-                new BillingAcquisitionValidator(org.mockito.Mockito.mock(
-                        com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository.class)),
+                new BillingAcquisitionValidator(billingSnapshotItemRepository),
                 new BillingSnapshotBuilder(),
                 new BillingSnapshotMapper(),
                 currencyMasterRepository,

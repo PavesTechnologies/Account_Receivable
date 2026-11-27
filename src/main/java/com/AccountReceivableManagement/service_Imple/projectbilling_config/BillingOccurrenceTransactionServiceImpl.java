@@ -7,6 +7,7 @@ import com.AccountReceivableManagement.entity.projectbilling_config.BillingSched
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingPeriodStatus;
+import com.AccountReceivableManagement.entity_enums.projectbilling_config.MilestoneTaxReadiness;
 import com.AccountReceivableManagement.repo.project.ProjectMilestoneReferenceRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingPaymentEntryRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingScheduleRepository;
@@ -56,8 +57,9 @@ public class BillingOccurrenceTransactionServiceImpl implements BillingOccurrenc
      *   <li>its configuration is not APPROVED - an edited configuration waits in PENDING_APPROVAL for Finance, and a
      *       configuration pending approval is never billable;</li>
      *   <li>it belongs to a Milestone Plan and its configuration has EXPIRED, its milestone is deleted / not billable /
-     *       not READY_FOR_BILLING, or another configuration also holds or has billed the milestone
-     *       (see {@link #milestoneHoldReason}). Other billing types are not affected by the expiry rule.</li>
+     *       not READY_FOR_BILLING, not completed in PMS or completed but not yet due, or another configuration also
+     *       holds or has billed the milestone (see {@link #milestoneHoldReason}). Other billing types are not affected
+     *       by the expiry rule.</li>
      * </ul>
      */
     @Override
@@ -134,6 +136,10 @@ public class BillingOccurrenceTransactionServiceImpl implements BillingOccurrenc
      *       are released to other configurations), so an occurrence that has not started billing must not progress either -
      *       otherwise the released milestone could be invoiced twice. Occurrences already past SCHEDULED are not touched.</li>
      *   <li>The milestone is deleted, not billable or not READY_FOR_BILLING in PMS.</li>
+     *   <li>The milestone is not COMPLETED in PMS, or is completed but its planned due date is still in the future
+     *       (see {@link #taxReadinessHoldReason}). This is checked on top of the PMS readiness verdict, not instead of
+     *       it: both must pass. Tax is therefore never calculated for work PMS has not finished, nor before the date
+     *       the milestone was planned to be delivered on.</li>
      *   <li>Another configuration now holds a live claim on the milestone, or has already started billing it. Both
      *       configurations would otherwise be able to invoice it (e.g. a configuration that expired, released the milestone
      *       and became ACTIVE again when PMS extended the project end date). Both sides then wait; nothing is cancelled.</li>
@@ -166,6 +172,10 @@ public class BillingOccurrenceTransactionServiceImpl implements BillingOccurrenc
             if (reason != null) {
                 return "PMS milestone " + entry.getPmsMilestoneId() + " " + reason;
             }
+            String notReadyForTax = taxReadinessHoldReason(milestone, LocalDate.now());
+            if (notReadyForTax != null) {
+                return "PMS milestone " + entry.getPmsMilestoneId() + " " + notReadyForTax;
+            }
         }
 
         List<Long> milestoneIds = entries.stream().map(BillingPaymentEntry::getPmsMilestoneId).sorted().toList();
@@ -179,5 +189,50 @@ public class BillingOccurrenceTransactionServiceImpl implements BillingOccurrenc
             }
         }
         return null;
+    }
+
+    /** The PMS MilestoneExecutionStatus value that marks execution as finished. */
+    static final String COMPLETED = "COMPLETED";
+
+    /**
+     * Where the milestone stands for tax hand-off, from what CDC last synchronised out of PMS
+     * ({@code execution_status}, {@code planned_due_date}):
+     * <ul>
+     *   <li>not COMPLETED -> {@link MilestoneTaxReadiness#NOT_COMPLETED}; the due date is not looked at, an unfinished
+     *       milestone is never taxed however old its due date is;</li>
+     *   <li>COMPLETED and the planned due date is today or past -> {@link MilestoneTaxReadiness#READY_FOR_TAX};</li>
+     *   <li>COMPLETED and the planned due date is in the future -> {@link MilestoneTaxReadiness#UPCOMING}; PMS finished
+     *       the work early and the milestone waits until its planned date arrives.</li>
+     * </ul>
+     * A COMPLETED milestone with no planned due date counts as READY_FOR_TAX: nothing places it in the future, and
+     * holding it on a missing date would stall its billing for good with no date that could ever release it.
+     * The status is compared case-insensitively because {@code execution_status} is kept as free text, so a new or
+     * differently-cased PMS value never breaks the sync.
+     */
+    static MilestoneTaxReadiness taxReadiness(ProjectMilestoneReference milestone, LocalDate today) {
+        String status = milestone.getExecutionStatus();
+        if (status == null || !COMPLETED.equalsIgnoreCase(status.trim())) {
+            return MilestoneTaxReadiness.NOT_COMPLETED;
+        }
+        LocalDate plannedDueDate = milestone.getPlannedDueDate();
+        if (plannedDueDate == null || !plannedDueDate.isAfter(today)) {
+            return MilestoneTaxReadiness.READY_FOR_TAX;
+        }
+        return MilestoneTaxReadiness.UPCOMING;
+    }
+
+    /**
+     * Why the milestone may not be handed to tax calculation yet, phrased to follow "PMS milestone X ...", or null when
+     * it is {@link MilestoneTaxReadiness#READY_FOR_TAX}. Applied on top of the PMS billable / READY_FOR_BILLING verdict,
+     * so both must pass. A milestone held here becomes ready by itself - either when PMS completes it, or when its
+     * planned due date arrives - and the next scheduler run picks it up; nothing has to be re-planned.
+     */
+    static String taxReadinessHoldReason(ProjectMilestoneReference milestone, LocalDate today) {
+        return switch (taxReadiness(milestone, today)) {
+            case READY_FOR_TAX -> null;
+            case NOT_COMPLETED -> "is not completed in PMS (execution status: "
+                    + (milestone.getExecutionStatus() == null ? "unknown" : milestone.getExecutionStatus()) + ")";
+            case UPCOMING -> "is completed but upcoming: its planned due date is " + milestone.getPlannedDueDate();
+        };
     }
 }

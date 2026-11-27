@@ -21,6 +21,9 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID> {
 
     boolean existsByBillingSnapshotId(UUID billingSnapshotId);
 
+    /** Invoices of the given Billing Snapshots (at most one each, uk_invoice_billing_snapshot). */
+    java.util.List<Invoice> findAllByBillingSnapshotIdIn(java.util.Collection<UUID> billingSnapshotIds);
+
     Optional<Invoice> findByBillingScheduleId(UUID billingScheduleId);
 
     boolean existsByBillingScheduleId(UUID billingScheduleId);

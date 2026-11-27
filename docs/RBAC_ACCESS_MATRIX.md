@@ -103,7 +103,7 @@ These do something consequential, but no document names which of the two roles m
 | GET | `/api/billing-configurations/{billingConfigurationId}` | `getBillingConfiguration` | — | _open — needs a decision_ |
 | PUT | `/api/billing-configurations/{billingConfigurationId}` | `update` | — | _open — needs a decision_ |
 | PUT | `/api/billing-configurations/{billingConfigurationId}/approve` | `approve` | — | Approval action — AR_AUTH_CONFIGURATION_APPROVAL |
-| PATCH | `/api/billing-configurations/{billingConfigurationId}/deactivate` | `deactivateBillingConfiguration` | — | _open — needs a decision_ |
+| PATCH | `/api/billing-configurations/{billingConfigurationId}/deactivate` | `deactivateBillingConfiguration` | `@AnyFinanceRole` | FE + FM |
 | PUT | `/api/billing-configurations/{billingConfigurationId}/draft` | `saveDraft` | — | _open — needs a decision_ |
 | PUT | `/api/billing-configurations/{billingConfigurationId}/reject` | `reject` | — | Rejection action — AR_AUTH_CONFIGURATION_APPROVAL |
 | PUT | `/api/billing-configurations/{billingConfigurationId}/submit` | `submitForApproval` | — | _open — needs a decision_ |

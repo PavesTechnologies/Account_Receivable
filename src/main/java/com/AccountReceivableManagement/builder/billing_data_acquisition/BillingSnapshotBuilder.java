@@ -103,6 +103,9 @@ public class BillingSnapshotBuilder {
                 .itemType(BillingItemType.EXPENSE)
                 .itemName(name)
                 .sourceReferenceId(expense.getLineItemId())
+                // Claims the XMS expense line (uk_billing_snapshot_item_billed_source), exactly as a
+                // timesheet line claims its TMS timesheet: a second live batch cannot bill it again.
+                .billedSourceReferenceId(expense.getLineItemId())
                 .quantity(java.math.BigDecimal.ONE)
                 .rate(expense.getCostBasis())
                 .amount(expense.getCostBasis())

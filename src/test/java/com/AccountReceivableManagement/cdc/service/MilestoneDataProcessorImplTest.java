@@ -181,6 +181,70 @@ class MilestoneDataProcessorImplTest {
         assertTrue(tombstone.getSourceDeleted());
     }
 
+    /**
+     * PMS holds the milestone again (restored, or a spurious delete was corrected), proved by a strictly newer version.
+     * Before, source_deleted was a one-way latch: the row could never come back, not even through the startup re-read
+     * in MilestoneInitialSyncRunner, so it could never reach READY_FOR_TAX and its occurrences waited for good.
+     */
+    @Test
+    void milestoneRestoredInPmsClearsTheTombstone() {
+        ProjectMilestoneReference tombstone = ProjectMilestoneReference.builder()
+                .pmsMilestoneId(42L).sourceVersion(5L).sourceDeleted(true).build();
+        when(repository.findById(42L)).thenReturn(Optional.of(tombstone));
+
+        Map<String, Object> after = debeziumRow(6);
+        after.put("execution_status", "COMPLETED");
+        processor.process(event("u", null, after));
+
+        ProjectMilestoneReference saved = savedReference();
+        assertSame(tombstone, saved);
+        assertFalse(saved.getSourceDeleted());
+        assertEquals("COMPLETED", saved.getExecutionStatus());
+        assertEquals(6L, saved.getSourceVersion());
+    }
+
+    /** The full PMS re-read at startup can repair a wrongly tombstoned row the same way. */
+    @Test
+    void initialSyncSnapshotCanClearTheTombstone() {
+        ProjectMilestoneReference tombstone = ProjectMilestoneReference.builder()
+                .pmsMilestoneId(42L).sourceVersion(2L).sourceDeleted(true).build();
+        when(repository.findById(42L)).thenReturn(Optional.of(tombstone));
+
+        processor.process(event("r", null, debeziumRow(3)));
+
+        assertFalse(savedReference().getSourceDeleted());
+    }
+
+    /**
+     * The initial-sync runner reads PMS with its own SELECT while live CDC streams, so its snapshot can be older than a
+     * delete already applied. Such a row is not newer than the tombstone and must not bring the milestone back.
+     */
+    @Test
+    void snapshotOlderThanTheDeleteDoesNotResurrect() {
+        ProjectMilestoneReference tombstone = ProjectMilestoneReference.builder()
+                .pmsMilestoneId(42L).sourceVersion(7L).sourceDeleted(true).build();
+        when(repository.findById(42L)).thenReturn(Optional.of(tombstone));
+
+        processor.process(event("r", null, debeziumRow(7)));
+        processor.process(event("r", null, debeziumRow(6)));
+
+        verify(repository, never()).save(any());
+        assertTrue(tombstone.getSourceDeleted());
+    }
+
+    /** An unknown version on either side is not evidence that PMS holds the row again. */
+    @Test
+    void unknownVersionDoesNotResurrect() {
+        ProjectMilestoneReference tombstone = ProjectMilestoneReference.builder()
+                .pmsMilestoneId(42L).sourceVersion(null).sourceDeleted(true).build();
+        when(repository.findById(42L)).thenReturn(Optional.of(tombstone));
+
+        processor.process(event("u", null, debeziumRow(9)));
+
+        verify(repository, never()).save(any());
+        assertTrue(tombstone.getSourceDeleted());
+    }
+
     @Test
     void unknownOperationIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> processor.process(event("x", null, debeziumRow(0))));

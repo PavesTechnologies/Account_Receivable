@@ -5,6 +5,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -54,8 +56,12 @@ public class CdcInbox {
     /**
      * Processing status
      */
+    // Stored as VARCHAR(20), not a native MySQL ENUM: ddl-auto=update never alters an existing column, so a native
+    // ENUM silently drifts from the Java enum and a new constant (DEAD_LETTER) fails with "Data truncated for column
+    // 'status'" on any database created before it. See V18__cdc_inbox_status_varchar.sql.
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(name = "status", nullable = false, length = 20)
     @Builder.Default
     private ProcessingStatus status = ProcessingStatus.PENDING;
 
@@ -100,6 +106,15 @@ public class CdcInbox {
         PENDING,
         PROCESSING,
         PROCESSED,
-        FAILED
+        FAILED,
+
+        /**
+         * Retries are exhausted: the event is no longer retried automatically and the mirror it should have updated is
+         * stale until someone acts. Previously such an event simply stayed FAILED with its retry count above the
+         * threshold, so the retry sweep stopped selecting it and nothing ever said so - a silent data-staleness bug.
+         * A dead-lettered event is counted and reported by {@code CdcInboxDeadLetterMonitor} and can be put back in the
+         * queue with {@code CdcInboxService.replayDeadLetters()}.
+         */
+        DEAD_LETTER
     }
 }

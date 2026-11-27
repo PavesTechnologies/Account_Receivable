@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.time.LocalDate;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -143,6 +144,9 @@ public class ProjectMilestoneServiceImpl implements ProjectMilestoneService {
                 .billingConfigurationId(holder == null ? null : holder.billingConfigurationId())
                 .eligibleForBilling(reason == null)
                 .ineligibilityReason(reason)
+                // Derived here too, from the same helper the tax transition gates on, so the screen and the server
+                // never disagree about why a completed milestone has not been handed to tax calculation yet.
+                .milestoneTaxReadiness(BillingOccurrenceTransactionServiceImpl.taxReadiness(m, LocalDate.now()))
                 .build();
     }
 }

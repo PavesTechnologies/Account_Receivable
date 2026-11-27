@@ -1,6 +1,7 @@
 package com.AccountReceivableManagement.service_Imple.billing_data_acquisition;
 
 import com.AccountReceivableManagement.dto.billing_data_acquisition.AcquireDataResponseDto;
+import com.AccountReceivableManagement.dto.billing_data_acquisition.AcquisitionScope;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingAcquisitionResultDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnapshotCreateRequestDto;
@@ -56,6 +57,14 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     private static final DateTimeFormatter SNAPSHOT_NUMBER_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final int SNAPSHOT_NUMBER_SUFFIX_LENGTH = 8;
     private static final String BILLED_SOURCE_CONSTRAINT = "uk_billing_snapshot_item_billed_source";
+    private static final String PERIOD_BATCH_CONSTRAINT = "uk_billing_snapshot_period_batch";
+    private static final String IDEMPOTENCY_CONSTRAINT = "uk_billing_snapshot_config_idempotency";
+    /**
+     * Period-level keys removed by the DBA script that follows migration V19: while either still exists,
+     * a period cannot take a second batch.
+     */
+    private static final String LEGACY_SNAPSHOT_PERIOD_CONSTRAINT = "uk_billing_snapshot_project_period";
+    private static final String LEGACY_ACQUISITION_PERIOD_CONSTRAINT = "uk_billing_acq_config_period";
 
     private final BillingSnapshotRepository billingSnapshotRepository;
     private final BillingConfigurationIntegration billingConfigurationIntegration;
@@ -70,6 +79,12 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     private final BillingAcquisitionService billingAcquisitionService;
     private final com.AccountReceivableManagement.repo.invoice_generation.InvoiceRepository invoiceRepository;
     private final TransactionTemplate transactionTemplate;
+
+    /** Resolves a T&amp;M configuration's billing periods (see {@link #timeAndMaterialPeriodError}). */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.AccountReceivableManagement.service_Imple.projectbilling_config.BillingOccurrenceServiceImpl
+            billingOccurrenceService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public BillingSnapshotServiceImpl(BillingSnapshotRepository billingSnapshotRepository,
@@ -119,16 +134,100 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 strategies, billingAcquisitionService, transactionManager, null);
     }
 
+    /**
+     * Original single-snapshot acquisition: when the project's billing period already has a snapshot, that
+     * snapshot is returned as stored (its first live batch, see {@link #primarySnapshot}); otherwise batch 1
+     * is acquired, and any already-claimed source record fails the acquisition. Automatic billing relies on
+     * this reuse to resume a run without calling TMS again. Newly approved records of an already-acquired
+     * period are acquired with {@link #createIncrementalBatch}.
+     */
     @Override
     public ApiResponse<BillingSnapshotResponseDto> createBillingSnapshot(BillingSnapshotCreateRequestDto request) {
         if (request.getBillingPeriodStart().isAfter(request.getBillingPeriodEnd())) {
             return ApiResponse.failure("Billing period start date cannot be after end date.");
         }
 
-        Optional<BillingSnapshot> existingOpt = findExistingSnapshot(request);
-        if (existingOpt.isPresent()) {
-            return reuseOrRejectExistingSnapshot(existingOpt.get(), request);
+        List<BillingSnapshot> existing = findExistingSnapshots(request);
+        if (!existing.isEmpty()) {
+            return reuseOrRejectExistingSnapshot(existing, request);
         }
+
+        String periodError = timeAndMaterialPeriodError(request);
+        if (periodError != null) {
+            return ApiResponse.failure(periodError);
+        }
+
+        return acquireAndPersist(request, AcquisitionScope.FAIL_ON_CLAIMED, null);
+    }
+
+    /**
+     * A new Time &amp; Material snapshot must cover exactly one of the configuration's billing periods (frequency
+     * and Effective From), as incremental batches already must - an arbitrary range (e.g. a calendar month on
+     * a weekly schedule) would not match any period. Only new snapshots are checked: an existing snapshot is
+     * reused or rejected above, unchanged. {@code null} when the period is acceptable or not T&amp;M.
+     */
+    private String timeAndMaterialPeriodError(BillingSnapshotCreateRequestDto request) {
+        if (billingOccurrenceService == null) {
+            return null; // instance built without Spring (unit tests); production always injects it
+        }
+        BillingConfigurationResponseDto configuration = loadApprovedBillingConfiguration(request);
+        if (configuration == null || !configuration.isApproved()
+                || configuration.getBillingType() != BillingType.TIME_AND_MATERIAL
+                || configuration.getBillingConfigurationId() == null) {
+            return null; // acquireAndPersist reports a missing/unapproved configuration itself
+        }
+        boolean configuredPeriod = billingOccurrenceService
+                .resolveTimeAndMaterialBillingPeriods(configuration.getBillingConfigurationId(),
+                        request.getBillingPeriodEnd())
+                .stream()
+                .anyMatch(period -> period.getPeriodStartDate().equals(request.getBillingPeriodStart())
+                        && period.getPeriodEndDate().equals(request.getBillingPeriodEnd()));
+        return configuredPeriod ? null
+                : "Billing period " + request.getBillingPeriodStart() + " to " + request.getBillingPeriodEnd()
+                        + " is not one of this Time & Material configuration's billing periods ("
+                        + configuration.getBillingFrequencyName() + "). Use a period returned by period discovery.";
+    }
+
+    /** Longest idempotency key the billing_snapshot.idempotency_key column holds. */
+    static final int MAX_IDEMPOTENCY_KEY_LENGTH = 100;
+
+    /**
+     * Incremental Time &amp; Material acquisition - see the interface Javadoc. Never reuses, changes or
+     * re-prices an existing snapshot of the period: it acquires only source records no live snapshot claims
+     * yet, into a new batch (snapshot + acquisition record, committed together), or creates nothing.
+     */
+    @Override
+    public ApiResponse<BillingSnapshotResponseDto> createIncrementalBatch(BillingSnapshotCreateRequestDto request,
+            String idempotencyKey) {
+        if (request.getBillingPeriodStart().isAfter(request.getBillingPeriodEnd())) {
+            return ApiResponse.failure("Billing period start date cannot be after end date.");
+        }
+        if (request.getBillingConfigurationId() == null) {
+            return ApiResponse.failure("Billing Configuration is required for incremental acquisition.");
+        }
+        String key = idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.trim();
+        if (key != null && key.length() > MAX_IDEMPOTENCY_KEY_LENGTH) {
+            return ApiResponse.failure("Idempotency key must be at most " + MAX_IDEMPOTENCY_KEY_LENGTH
+                    + " characters.");
+        }
+        if (key != null) {
+            Optional<BillingSnapshot> replay = billingSnapshotRepository
+                    .findByBillingConfigurationIdAndIdempotencyKey(request.getBillingConfigurationId(), key);
+            if (replay.isPresent()) {
+                return replayBatch(replay.get(), request, key);
+            }
+        }
+        return acquireAndPersist(request, AcquisitionScope.newBatch(), key);
+    }
+
+    /**
+     * Acquires, validates and persists one new snapshot (acquisition batch) for the request's period.
+     * {@code scope} decides how already-claimed source records are treated; a non-{@link
+     * AcquisitionScope#FAIL_ON_CLAIMED} scope is the incremental path.
+     */
+    private ApiResponse<BillingSnapshotResponseDto> acquireAndPersist(BillingSnapshotCreateRequestDto request,
+            AcquisitionScope scope, String idempotencyKey) {
+        boolean incremental = !AcquisitionScope.FAIL_ON_CLAIMED.equals(scope);
 
         BillingConfigurationResponseDto configuration = loadApprovedBillingConfiguration(request);
         if (configuration == null || !configuration.isApproved()) {
@@ -175,13 +274,25 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         log.info("[BillingSnapshotStage] stage=acquire projectId={} billingConfigurationId={} period={}..{} billingType={}",
                 request.getProjectId(), request.getBillingConfigurationId(),
                 request.getBillingPeriodStart(), request.getBillingPeriodEnd(), configuration.getBillingType());
-        BillingAcquisitionResultDto acquisitionResult = strategy.acquire(configuration, request);
-        log.info("[BillingSnapshotStage] stage=acquired projectId={} timesheets={} expenses={}",
+        BillingAcquisitionResultDto acquisitionResult = incremental
+                ? strategy.acquire(configuration, request, scope)
+                : strategy.acquire(configuration, request);
+        log.info("[BillingSnapshotStage] stage=acquired projectId={} timesheets={} expenses={} alreadyClaimed={}",
                 request.getProjectId(),
                 acquisitionResult != null && acquisitionResult.getTimesheets() != null
                         ? acquisitionResult.getTimesheets().size() : 0,
                 acquisitionResult != null && acquisitionResult.getExpenses() != null
-                        ? acquisitionResult.getExpenses().size() : 0);
+                        ? acquisitionResult.getExpenses().size() : 0,
+                acquisitionResult != null ? acquisitionResult.getAlreadyClaimedTimesheetCount() : 0);
+
+        if (incremental && hasNoSourceRecords(acquisitionResult)) {
+            // Never an empty snapshot: nothing new means no batch at all.
+            int alreadyClaimed = acquisitionResult != null ? acquisitionResult.getAlreadyClaimedTimesheetCount() : 0;
+            return ApiResponse.failure("No new approved, billable timesheets or eligible expenses were found for "
+                    + "billing period " + request.getBillingPeriodStart() + " to " + request.getBillingPeriodEnd()
+                    + (alreadyClaimed > 0 ? " (" + alreadyClaimed + " approved timesheet(s) are already billed in "
+                    + "earlier batches)" : "") + "; no billing batch was created.");
+        }
 
         ValidationResultDto validationResult = billingAcquisitionValidator.validate(acquisitionResult);
         if (!validationResult.isSuccess()) {
@@ -202,11 +313,15 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 sourceTaxJurisdictionCode, destinationTaxJurisdictionCode);
 
         BillingSnapshot snapshot = billingSnapshotBuilder.build(context);
+        snapshot.setIdempotencyKey(idempotencyKey);
 
         try {
             // Snapshot and its acquisition record commit together or not at all,
             // so a persisted snapshot can no longer be left without its record.
             SnapshotCreation creation = transactionTemplate.execute(txStatus -> {
+                // Next batch number of the project's period; a concurrent batch taking the same
+                // number fails on uk_billing_snapshot_period_batch and nothing of this one is kept.
+                snapshot.setBatchSequence(nextBatchSequence(request));
                 BillingSnapshot savedSnapshot = persistSnapshot(snapshot);
                 AcquireDataResponseDto acquisition = billingAcquisitionService.createManualAcquisition(
                         savedSnapshot.getBillingConfigurationId(),
@@ -219,17 +334,26 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
             BillingSnapshotResponseDto responseDto = billingSnapshotMapper.toResponse(creation.snapshot(), configuration);
             responseDto.setExistingSnapshot(false);
             applyAcquisitionStatus(responseDto, creation.acquisition());
+            if (incremental) {
+                responseDto.setExcludedAlreadyBilledTimesheetCount(
+                        validationResult.getAcquisitionResult().getAlreadyClaimedTimesheetCount());
+                return ApiResponse.success("Billing batch " + creation.snapshot().getBatchSequence()
+                        + " created successfully.", responseDto);
+            }
             return ApiResponse.success("Billing Snapshot created successfully.", responseDto);
         } catch (DataIntegrityViolationException ex) {
+            if (incremental) {
+                return resolveConcurrentBatchConflict(request, idempotencyKey, ex);
+            }
             // A concurrent request for the same project and period committed first
             // (uk_billing_snapshot_project_period). This transaction has been rolled
             // back; re-read in a fresh one and reuse the winner's snapshot.
-            Optional<BillingSnapshot> concurrentSnapshot = findExistingSnapshot(request);
-            if (concurrentSnapshot.isPresent()) {
+            List<BillingSnapshot> concurrentSnapshots = findExistingSnapshots(request);
+            if (!concurrentSnapshots.isEmpty()) {
                 log.warn("[BillingSnapshotConcurrentCreate] Snapshot for projectId={}, period {} to {} was created "
                                 + "by a concurrent request; reusing it.",
                         request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
-                return reuseOrRejectExistingSnapshot(concurrentSnapshot.get(), request);
+                return reuseOrRejectExistingSnapshot(concurrentSnapshots, request);
             }
             if (isBilledSourceConflict(ex)) {
                 // A concurrent snapshot - another period, possibly overlapping this
@@ -238,8 +362,8 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 log.warn("[BillingSnapshotSourceAlreadyClaimed] projectId={}, period {} to {}: {}",
                         request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd(),
                         ex.getMostSpecificCause().getMessage());
-                return ApiResponse.failure("One or more timesheets of this billing period were included in "
-                        + "another Billing Snapshot at the same time and cannot be billed again.");
+                return ApiResponse.failure("One or more timesheets or expenses of this billing period were "
+                        + "included in another Billing Snapshot at the same time and cannot be billed again.");
             }
             log.error("[BillingSnapshotPersistenceError] Snapshot creation failed for projectId={}: {}",
                     request.getProjectId(), ex.getMostSpecificCause().getMessage(), ex);
@@ -271,26 +395,32 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
     @Override
     public ApiResponse<BillingSnapshotResponseDto> getByProjectAndPeriod(Long projectId,
             LocalDate billingPeriodStart, LocalDate billingPeriodEnd, UUID billingConfigurationId) {
-        Optional<BillingSnapshot> snapshotOptional = billingSnapshotRepository
-                .findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(projectId, billingPeriodStart,
-                        billingPeriodEnd);
+        List<BillingSnapshot> snapshots = billingSnapshotRepository
+                .findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(projectId,
+                        billingPeriodStart, billingPeriodEnd);
 
-        if (snapshotOptional.isEmpty()) {
+        if (snapshots == null || snapshots.isEmpty()) {
             return ApiResponse.failure(
                     "Billing Snapshot not found for the selected project and billing period.");
         }
 
-        BillingSnapshot snapshot = snapshotOptional.get();
-
-        // The (project, period) key is shared by every configuration the project has
+        // The (project, period) is shared by every configuration the project has
         // had, so a snapshot of another configuration is not this configuration's.
-        if (billingConfigurationId != null && !billingConfigurationId.equals(snapshot.getBillingConfigurationId())) {
+        List<BillingSnapshot> candidates = billingConfigurationId == null ? snapshots : snapshots.stream()
+                .filter(candidate -> billingConfigurationId.equals(candidate.getBillingConfigurationId()))
+                .toList();
+        if (candidates.isEmpty()) {
+            BillingSnapshot other = snapshots.get(0);
             log.warn("[BillingSnapshotConfigurationMismatch] snapshotId={} belongs to billingConfigurationId={}, "
                             + "requested billingConfigurationId={}; not returned.",
-                    snapshot.getId(), snapshot.getBillingConfigurationId(), billingConfigurationId);
+                    other.getId(), other.getBillingConfigurationId(), billingConfigurationId);
             return ApiResponse.failure(
                     "Billing Snapshot not found for the selected billing configuration and billing period.");
         }
+
+        // A period acquired in several batches: its first live batch, as createBillingSnapshot reuses.
+        // Every batch is listed by GET /billing-snapshots?billingConfigurationId=.
+        BillingSnapshot snapshot = primarySnapshot(candidates);
 
         BillingConfigurationResponseDto configuration =
                 resolveHistoricalConfiguration(snapshot.getBillingConfigurationId());
@@ -367,8 +497,11 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
                 .build();
 
         // The real TMS call happens here, for Time & Material - reusing the
-        // existing strategy exactly as first-time acquisition does.
-        BillingAcquisitionResultDto acquisitionResult = strategy.acquire(configuration, request);
+        // existing strategy as first-time acquisition does. The period may hold
+        // other batches: their records are left out (never moved into this one);
+        // this snapshot's own records and any still-unclaimed ones are re-acquired.
+        BillingAcquisitionResultDto acquisitionResult =
+                strategy.acquire(configuration, request, AcquisitionScope.rebuildOf(snapshot.getId()));
 
         // The snapshot's own items are excluded - they are what is being replaced.
         ValidationResultDto validationResult =
@@ -539,9 +672,97 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
         }
     }
 
-    private Optional<BillingSnapshot> findExistingSnapshot(BillingSnapshotCreateRequestDto request) {
-        return billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
+    /** Every snapshot (batch) of the request's project and period, oldest first. */
+    private List<BillingSnapshot> findExistingSnapshots(BillingSnapshotCreateRequestDto request) {
+        List<BillingSnapshot> snapshots = billingSnapshotRepository
+                .findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                        request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
+        return snapshots != null ? snapshots : List.of();
+    }
+
+    /**
+     * The snapshot that stands for a period acquired in one or more batches: the first batch that is not
+     * CANCELLED, or - every batch cancelled - the latest. {@code snapshots} is oldest first and not empty.
+     */
+    static BillingSnapshot primarySnapshot(List<BillingSnapshot> snapshots) {
+        return snapshots.stream()
+                .sorted(java.util.Comparator
+                        .comparing((BillingSnapshot s) -> s.getBatchSequence() != null ? s.getBatchSequence() : 1)
+                        .thenComparing(BillingSnapshot::getCreatedDate,
+                                java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                .filter(s -> s.getStatus() != BillingSnapshotStatus.CANCELLED)
+                .findFirst()
+                .orElse(snapshots.get(snapshots.size() - 1));
+    }
+
+    private Integer nextBatchSequence(BillingSnapshotCreateRequestDto request) {
+        Integer highest = billingSnapshotRepository.findMaxBatchSequence(request.getProjectId(),
+                request.getBillingPeriodStart(), request.getBillingPeriodEnd());
+        return highest == null ? 1 : highest + 1;
+    }
+
+    private static boolean hasNoSourceRecords(BillingAcquisitionResultDto result) {
+        return result == null
+                || ((result.getTimesheets() == null || result.getTimesheets().isEmpty())
+                && (result.getExpenses() == null || result.getExpenses().isEmpty()));
+    }
+
+    /**
+     * A repeated incremental request (same configuration and idempotency key) returns the batch the first
+     * request created, unchanged - never a second batch. The key is bound to one billing period.
+     */
+    private ApiResponse<BillingSnapshotResponseDto> replayBatch(BillingSnapshot existing,
+            BillingSnapshotCreateRequestDto request, String idempotencyKey) {
+        if (!existing.getBillingPeriodStart().equals(request.getBillingPeriodStart())
+                || !existing.getBillingPeriodEnd().equals(request.getBillingPeriodEnd())) {
+            return ApiResponse.failure("Idempotency key '" + idempotencyKey + "' was already used for billing "
+                    + "period " + existing.getBillingPeriodStart() + " to " + existing.getBillingPeriodEnd()
+                    + " (Billing Snapshot " + existing.getSnapshotNumber() + "); use a new key for another period.");
+        }
+        log.info("[BillingBatchReplay] billingConfigurationId={} idempotencyKey={} -> snapshotId={} batch={}",
+                existing.getBillingConfigurationId(), idempotencyKey, existing.getId(), existing.getBatchSequence());
+        ApiResponse<BillingSnapshotResponseDto> reused = reuseExistingSnapshot(existing);
+        return ApiResponse.success("Billing batch " + existing.getBatchSequence()
+                + " was already created by this request; returned unchanged.", reused.getData());
+    }
+
+    /**
+     * An incremental batch lost a race - nothing of it was saved (one transaction). The same request
+     * (idempotency key) committed first: its batch is returned. Otherwise the caller is told why; a retry
+     * acquires only what is still unclaimed, so it can never bill a record twice.
+     */
+    private ApiResponse<BillingSnapshotResponseDto> resolveConcurrentBatchConflict(
+            BillingSnapshotCreateRequestDto request, String idempotencyKey, DataIntegrityViolationException ex) {
+        if (idempotencyKey != null) {
+            Optional<BillingSnapshot> winner = billingSnapshotRepository
+                    .findByBillingConfigurationIdAndIdempotencyKey(request.getBillingConfigurationId(),
+                            idempotencyKey);
+            if (winner.isPresent()) {
+                return replayBatch(winner.get(), request, idempotencyKey);
+            }
+        }
+        String cause = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
+        String lower = cause != null ? cause.toLowerCase() : "";
+        log.warn("[BillingBatchConflict] projectId={} period {} to {}: {}", request.getProjectId(),
+                request.getBillingPeriodStart(), request.getBillingPeriodEnd(), cause);
+        if (lower.contains(LEGACY_SNAPSHOT_PERIOD_CONSTRAINT) || lower.contains(LEGACY_ACQUISITION_PERIOD_CONSTRAINT)) {
+            return ApiResponse.failure("This billing period already has a Billing Snapshot and the database does not "
+                    + "yet allow additional billing batches per period (the DBA script "
+                    + "scripts/dba/V19_incremental_tm_billing_batches_dba.sql that follows migration V19 has not been "
+                    + "applied). Nothing was created.");
+        }
+        if (lower.contains(BILLED_SOURCE_CONSTRAINT)) {
+            return ApiResponse.failure("One or more of these timesheets or expenses were included in another billing "
+                    + "batch at the same time; nothing was created. Refresh Data Acquisition and retry - only "
+                    + "records that are still unbilled will be acquired.");
+        }
+        if (lower.contains(PERIOD_BATCH_CONSTRAINT) || lower.contains(IDEMPOTENCY_CONSTRAINT)) {
+            return ApiResponse.failure("Another billing batch for this period was created at the same time; nothing "
+                    + "was created. Refresh Data Acquisition and retry.");
+        }
+        log.error("[BillingSnapshotPersistenceError] Batch creation failed for projectId={}: {}",
+                request.getProjectId(), cause, ex);
+        return ApiResponse.failure("Failed to save Billing Snapshot: " + cause);
     }
 
     /**
@@ -554,23 +775,26 @@ public class BillingSnapshotServiceImpl implements BillingSnapshotService {
      * configuration is checked against the project's currently approved one,
      * when that can be resolved.
      */
-    private ApiResponse<BillingSnapshotResponseDto> reuseOrRejectExistingSnapshot(BillingSnapshot existing,
+    private ApiResponse<BillingSnapshotResponseDto> reuseOrRejectExistingSnapshot(List<BillingSnapshot> snapshots,
             BillingSnapshotCreateRequestDto request) {
         UUID requestedConfigurationId = resolveRequestedConfigurationId(request);
-        if (requestedConfigurationId != null
-                && !requestedConfigurationId.equals(existing.getBillingConfigurationId())) {
-            log.warn("[BillingSnapshotConfigurationMismatch] projectId={}, period {} to {}: snapshotId={} ({}, {}) "
-                            + "belongs to billingConfigurationId={}, requested billingConfigurationId={}; not reused.",
-                    request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd(),
-                    existing.getId(), existing.getSnapshotNumber(), existing.getStatus(),
-                    existing.getBillingConfigurationId(), requestedConfigurationId);
-            return ApiResponse.failure("Billing Snapshot " + existing.getSnapshotNumber() + " (status "
-                    + existing.getStatus() + ") already exists for this project and billing period under a "
-                    + "different Billing Configuration (" + existing.getBillingConfigurationId() + "). It cannot "
-                    + "be reused for the selected Billing Configuration; choose another billing period or "
-                    + "resolve the earlier snapshot.");
+        List<BillingSnapshot> ownBatches = requestedConfigurationId == null ? snapshots : snapshots.stream()
+                .filter(candidate -> requestedConfigurationId.equals(candidate.getBillingConfigurationId()))
+                .toList();
+        if (!ownBatches.isEmpty()) {
+            return reuseExistingSnapshot(primarySnapshot(ownBatches));
         }
-        return reuseExistingSnapshot(existing);
+        BillingSnapshot existing = snapshots.get(0);
+        log.warn("[BillingSnapshotConfigurationMismatch] projectId={}, period {} to {}: snapshotId={} ({}, {}) "
+                        + "belongs to billingConfigurationId={}, requested billingConfigurationId={}; not reused.",
+                request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd(),
+                existing.getId(), existing.getSnapshotNumber(), existing.getStatus(),
+                existing.getBillingConfigurationId(), requestedConfigurationId);
+        return ApiResponse.failure("Billing Snapshot " + existing.getSnapshotNumber() + " (status "
+                + existing.getStatus() + ") already exists for this project and billing period under a "
+                + "different Billing Configuration (" + existing.getBillingConfigurationId() + "). It cannot "
+                + "be reused for the selected Billing Configuration; choose another billing period or "
+                + "resolve the earlier snapshot.");
     }
 
     private UUID resolveRequestedConfigurationId(BillingSnapshotCreateRequestDto request) {

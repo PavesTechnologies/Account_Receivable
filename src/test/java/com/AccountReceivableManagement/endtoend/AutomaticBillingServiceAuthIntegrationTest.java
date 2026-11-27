@@ -54,6 +54,8 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -216,14 +218,22 @@ class AutomaticBillingServiceAuthIntegrationTest {
             projectId = String.valueOf(Long.parseLong(projectId) + 1);
         }
         String key = projectId + "-" + start;
+        // Billable flag variants: none at all (the real billing endpoint - billable by its contract),
+        // "isBillable", the original "billable", or both disagreeing.
+        String flag = switch (TMS_MODE.get()) {
+            case "noBillableFlag" -> "";
+            case "isBillable" -> ",\"isBillable\":true";
+            case "conflictingBillable" -> ",\"billable\":true,\"isBillable\":false";
+            default -> ",\"billable\":true";
+        };
         respond(exchange, 200, """
                 {"projectId":%s,"billingPeriodStart":"%s","billingPeriodEnd":"%s","timesheets":[
                   {"timesheetId":"TS-%s-1","resourceId":1,"resourceName":"Test Resource A","workDate":"%s",
-                   "hours":8,"role":"Developer","approvalStatus":"APPROVED","billable":true},
+                   "hours":8,"role":"Developer","approvalStatus":"APPROVED"%s},
                   {"timesheetId":"TS-%s-2","resourceId":2,"resourceName":"Test Resource B","workDate":"%s",
-                   "hours":5,"role":"Senior Developer","approvalStatus":"APPROVED","billable":true}]}
-                """.formatted(projectId, start, query.get("billingPeriodEnd"), key, start.plusDays(2), key,
-                start.plusDays(3)));
+                   "hours":5,"role":"Senior Developer","approvalStatus":"APPROVED"%s}]}
+                """.formatted(projectId, start, query.get("billingPeriodEnd"), key, start.plusDays(2), flag, key,
+                start.plusDays(3), flag));
     }
 
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
@@ -538,5 +548,43 @@ class AutomaticBillingServiceAuthIntegrationTest {
         int loginsAfterRejection = UMS_LOGINS.get();
         scheduler.runOnce();
         assertThat(UMS_LOGINS.get()).isEqualTo(loginsAfterRejection);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"noBillableFlag", "isBillable"})
+    @Order(7)
+    void billingEndpointRecords_withoutAFlagOrWithIsBillable_areBilledToPendingApproval(String mode) {
+        // The real billing endpoint sends no flag (billable by its contract); "isBillable" is read too.
+        TMS_MODE.set(mode);
+
+        scheduler.runOnce();
+
+        AutomaticBillingRun run = runs().get(0);
+        assertThat(run.getStatus()).isEqualTo(AutomaticBillingRunStatus.PENDING_APPROVAL);
+        assertThat(run.getBillingSnapshotId()).isNotNull();
+        List<Invoice> invoices = invoices();
+        assertThat(invoices).hasSize(1);
+        // Same lines and amounts as with "billable": 8 x 1500 + 5 x 2000.
+        assertThat(itemsOf(invoices.get(0))).extracting(InvoiceItem::getAmount)
+                .usingElementComparator(BigDecimal::compareTo)
+                .containsExactlyInAnyOrder(new BigDecimal("12000.00"), new BigDecimal("10000.00"));
+        assertThat(invoices.get(0).getSubtotal()).isEqualByComparingTo("22000.00");
+    }
+
+    @Test
+    @Order(8)
+    void conflictingBillableFlags_failTheRunWithoutSnapshotOrInvoice() {
+        TMS_MODE.set("conflictingBillable");
+
+        scheduler.runOnce();
+
+        AutomaticBillingRun run = runs().get(0);
+        assertThat(run.getStatus()).isEqualTo(AutomaticBillingRunStatus.FAILED);
+        assertThat(run.getFailureStep()).isEqualTo(AutomaticBillingStep.SOURCE_DATA_ACQUISITION);
+        assertThat(run.getFailureReason()).contains("conflicting billable flags");
+        // A contract violation is permanent: not retried automatically.
+        assertThat(run.getNextRetryAt()).isNull();
+        assertThat(run.getBillingSnapshotId()).isNull();
+        assertThat(invoices()).isEmpty();
     }
 }
