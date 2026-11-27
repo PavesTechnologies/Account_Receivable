@@ -1,9 +1,12 @@
 package com.AccountReceivableManagement.service_Imple.billing_data_acquisition;
 
+import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingAcquisitionSummaryDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingDataAcquisitionResponseDto;
+import com.AccountReceivableManagement.dto.centralizeddto.PagedResponse;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingAcquisition;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
 import com.AccountReceivableManagement.entity.projectbilling_config.BillingConfiguration;
+import com.AccountReceivableManagement.entity.projectbilling_config.BillingTypeMaster;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingAcquisitionStatus;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.ApprovalStatus;
@@ -12,17 +15,25 @@ import com.AccountReceivableManagement.integration.billing_data_acquisition.Bill
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingAcquisitionRepository;
 import com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotRepository;
 import com.AccountReceivableManagement.repo.projectbilling_config.BillingConfigurationRepository;
+import com.AccountReceivableManagement.repo.projectbilling_config.BillingTypeMasterRepository;
 import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingDataAcquisitionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Fetches active billing configurations and matches the most recent billing
@@ -51,6 +62,7 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
     private final BillingConfigurationRepository billingConfigurationRepository;
     private final BillingAcquisitionRepository billingAcquisitionRepository;
     private final BillingSnapshotRepository billingSnapshotRepository;
+    private final BillingTypeMasterRepository billingTypeMasterRepository;
 
     @Override
     @Transactional(readOnly = true)
@@ -70,14 +82,81 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
                 .toList();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public PagedResponse<BillingAcquisitionSummaryDto> getAcquisitionOverview(
+            BillingType billingType, int page, int size) {
+
+        // Unsorted on purpose: the ordering (project start date DESC, nulls last,
+        // id as tiebreaker) is part of the repository query itself.
+        Pageable pageable = PageRequest.of(page, size);
+
+        Page<BillingConfiguration> result;
+        if (billingType == null) {
+            result = billingConfigurationRepository.findAcquisitionOverviewPage(
+                    ApprovalStatus.APPROVED, BillingConfigurationStatus.ACTIVE, pageable);
+        } else {
+            Set<String> billingTypeNames = resolveBillingTypeNames(billingType);
+            if (billingTypeNames.isEmpty()) {
+                // No master row maps to this billing type, so no configuration can
+                // match. Returning an empty page keeps "nothing configured" distinct
+                // from an error, and avoids an `IN ()` query.
+                log.warn("[BillingDataAcquisition] No billing_type_master row maps to billing type {}; "
+                        + "the listing has nothing to return for it.", billingType);
+                return PagedResponse.empty(page, size);
+            }
+            result = billingConfigurationRepository.findAcquisitionOverviewPageByBillingTypeNames(
+                    ApprovalStatus.APPROVED, BillingConfigurationStatus.ACTIVE, billingTypeNames, pageable);
+        }
+
+        List<BillingAcquisitionSummaryDto> content = result.getContent().stream()
+                .map(this::mapToSummaryDto)
+                .toList();
+
+        return PagedResponse.of(result, content);
+    }
+
+    /**
+     * The {@code billing_type_master} names that classify as {@code billingType}.
+     *
+     * Derived from master data through the same normalizer automatic billing uses
+     * ({@link BillingConfigurationIntegrationImpl#toBillingTypeEnum}) rather than
+     * from a hardcoded list, so a new spelling added to the master table is picked
+     * up without a code change. Names are lower-cased and trimmed to match the
+     * {@code LOWER(TRIM(...))} comparison in the query.
+     */
+    private Set<String> resolveBillingTypeNames(BillingType billingType) {
+        return billingTypeMasterRepository.findAll().stream()
+                .map(BillingTypeMaster::getBillingTypeName)
+                .filter(Objects::nonNull)
+                .filter(name -> BillingConfigurationIntegrationImpl.toBillingTypeEnum(name) == billingType)
+                .map(name -> name.trim().toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet());
+    }
+
     // -----------------------------------------------------------------------
-    // Private mapping helper
+    // Private mapping helpers
     // -----------------------------------------------------------------------
+
+    private BillingAcquisitionSummaryDto mapToSummaryDto(BillingConfiguration bc) {
+        return BillingAcquisitionSummaryDto.builder()
+                .billingConfigurationId(bc.getBillingConfigurationId())
+                .clientName(bc.getClient().getClientName())
+                .projectName(bc.getProject().getProjectName())
+                // The real project_master_reference.project_code column, null when unset.
+                // getActiveConfigurations() instead synthesises a legacy "PRJ-{id}" string.
+                .projectCode(bc.getProject().getProjectCode())
+                .billingType(bc.getBillingType().getBillingTypeName())
+                .status(resolveAcquisitionState(bc.getBillingConfigurationId()).status())
+                .build();
+    }
 
     private BillingDataAcquisitionResponseDto mapToDto(BillingConfiguration bc) {
 
-        // Project code: use pmsProjectId formatted as PRJ-{id} since
-        // no dedicated code column exists on project_master_reference.
+        // Legacy project code: pmsProjectId formatted as PRJ-{id}. A real
+        // project_code column does exist on project_master_reference, but this
+        // endpoint's existing consumers are built against the synthesised value,
+        // so it is left alone; the paginated listing exposes the real column.
         String projectCode = "PRJ-" + bc.getProject().getPmsProjectId();
 
         // Generation mode: read from invoice_generation_type column
@@ -86,17 +165,59 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
                 ? bc.getInvoiceGenerationType().name()
                 : null;
 
+        AcquisitionState state = resolveAcquisitionState(bc.getBillingConfigurationId());
+
+        return BillingDataAcquisitionResponseDto.builder()
+                .billingConfigurationId(bc.getBillingConfigurationId())
+                .projectId(bc.getProject().getPmsProjectId())
+                .projectName(bc.getProject().getProjectName())
+                .projectCode(projectCode)
+                .clientName(bc.getClient().getClientName())
+                .billingType(bc.getBillingType().getBillingTypeName())
+                .frequency(resolveFrequency(bc))
+                .currency(bc.getCurrency() != null ? bc.getCurrency().getCurrencyCode() : null)
+                .billingPeriodStart(state.billingPeriodStart())
+                .billingPeriodEnd(state.billingPeriodEnd())
+                .generationMode(generationMode)
+                .status(state.status())
+                .lastInvoice(state.lastInvoice())
+                .snapshotId(state.snapshotId())
+                .build();
+    }
+
+    /**
+     * Acquisition-level state of one configuration, as both the unpaginated
+     * overview and the paginated listing report it.
+     */
+    private record AcquisitionState(
+            String status,
+            String lastInvoice,
+            LocalDate billingPeriodStart,
+            LocalDate billingPeriodEnd,
+            UUID snapshotId) {
+    }
+
+    /**
+     * Resolves the acquisition-level state of {@code billingConfigurationId}.
+     *
+     * Shared by every Billing Data Acquisition read path so the two listings
+     * cannot report different statuses for the same configuration. Costs two
+     * queries per configuration, which is why the paginated listing bounds the
+     * row count.
+     */
+    private AcquisitionState resolveAcquisitionState(UUID billingConfigurationId) {
+
         // Resolve the most recent BillingAcquisition execution record for this
         // configuration. Its billingPeriodStart/End are the dates the user
         // actually selected on Acquire Snapshot — never the Billing
         // Configuration's own effectiveFrom/effectiveTo validity window.
         Optional<BillingAcquisition> acquisitionOpt = billingAcquisitionRepository
-                .findFirstByBillingConfiguration_BillingConfigurationIdOrderByCreatedAtDesc(bc.getBillingConfigurationId());
+                .findFirstByBillingConfiguration_BillingConfigurationIdOrderByCreatedAtDesc(billingConfigurationId);
 
         // A persisted snapshot whose acquisition record was never written must
         // not be reported as NOT_ACQUIRED, or the console offers to acquire it again.
         Optional<BillingSnapshot> orphanedSnapshotOpt = billingSnapshotRepository
-                .findFirstByBillingConfigurationIdOrderByCreatedDateDesc(bc.getBillingConfigurationId())
+                .findFirstByBillingConfigurationIdOrderByCreatedDateDesc(billingConfigurationId)
                 .filter(snapshot -> isNewerThanAcquisition(snapshot, acquisitionOpt));
 
         String status = BillingAcquisitionStatus.NOT_ACQUIRED.name();
@@ -121,22 +242,7 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
             snapshotId = acquisition.getSnapshotId();
         }
 
-        return BillingDataAcquisitionResponseDto.builder()
-                .billingConfigurationId(bc.getBillingConfigurationId())
-                .projectId(bc.getProject().getPmsProjectId())
-                .projectName(bc.getProject().getProjectName())
-                .projectCode(projectCode)
-                .clientName(bc.getClient().getClientName())
-                .billingType(bc.getBillingType().getBillingTypeName())
-                .frequency(resolveFrequency(bc))
-                .currency(bc.getCurrency() != null ? bc.getCurrency().getCurrencyCode() : null)
-                .billingPeriodStart(billingPeriodStart)
-                .billingPeriodEnd(billingPeriodEnd)
-                .generationMode(generationMode)
-                .status(status)
-                .lastInvoice(lastInvoice)
-                .snapshotId(snapshotId)
-                .build();
+        return new AcquisitionState(status, lastInvoice, billingPeriodStart, billingPeriodEnd, snapshotId);
     }
 
     /** Shown as the frequency of a Milestone Plan: its billing dates come from the plan's payment entries. */

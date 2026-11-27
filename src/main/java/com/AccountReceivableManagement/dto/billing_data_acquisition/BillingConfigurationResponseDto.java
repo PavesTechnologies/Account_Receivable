@@ -3,6 +3,7 @@ package com.AccountReceivableManagement.dto.billing_data_acquisition;
 import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.InvoiceGenerationType;
 import com.AccountReceivableManagement.entity_enums.projectbilling_config.PricingModel;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -10,6 +11,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -77,4 +79,18 @@ public class BillingConfigurationResponseDto {
     private boolean expenseEligible;
 
     private boolean approved;
+
+    /**
+     * The date this billing configuration becomes effective. Null means no start
+     * restriction (effective from the past). Serialized as ISO date string "YYYY-MM-DD".
+     */
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
+    private LocalDate effectiveFrom;
+
+    /**
+     * The date this billing configuration expires. Null means no end restriction
+     * (effective indefinitely). Serialized as ISO date string "YYYY-MM-DD".
+     */
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
+    private LocalDate effectiveTo;
 }

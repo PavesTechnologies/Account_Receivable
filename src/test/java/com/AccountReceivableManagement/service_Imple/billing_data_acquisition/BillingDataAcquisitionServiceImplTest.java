@@ -50,6 +50,11 @@ class BillingDataAcquisitionServiceImplTest {
     @Mock
     private BillingSnapshotRepository billingSnapshotRepository;
 
+    /** Only used by the paginated listing; this test exercises the unpaginated overview. */
+    @Mock
+    private com.AccountReceivableManagement.repo.projectbilling_config.BillingTypeMasterRepository
+            billingTypeMasterRepository;
+
     private BillingDataAcquisitionServiceImpl service;
 
     private BillingConfiguration configuration;
@@ -58,7 +63,8 @@ class BillingDataAcquisitionServiceImplTest {
     @BeforeEach
     void setUp() {
         service = new BillingDataAcquisitionServiceImpl(
-                billingConfigurationRepository, billingAcquisitionRepository, billingSnapshotRepository);
+                billingConfigurationRepository, billingAcquisitionRepository, billingSnapshotRepository,
+                billingTypeMasterRepository);
 
         billingConfigurationId = UUID.randomUUID();
 

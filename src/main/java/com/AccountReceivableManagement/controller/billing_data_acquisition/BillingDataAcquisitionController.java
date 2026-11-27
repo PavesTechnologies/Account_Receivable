@@ -2,12 +2,16 @@ package com.AccountReceivableManagement.controller.billing_data_acquisition;
 
 import com.AccountReceivableManagement.dto.billing_data_acquisition.AcquireDataResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingAcquisitionRequestDto;
+import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingAcquisitionSummaryDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingDataAcquisitionResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingPeriodDiscoveryResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnapshotResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.IncrementalBatchRequestDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.NextBillingPeriodResponseDto;
 import com.AccountReceivableManagement.dto.centralizeddto.ApiResponse;
+import com.AccountReceivableManagement.dto.centralizeddto.PagedResponse;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType;
+import com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler;
 import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingAcquisitionService;
 import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingDataAcquisitionService;
 import com.AccountReceivableManagement.service_interface.billing_data_acquisition.BillingPeriodAcquisitionService;
@@ -17,7 +21,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import com.AccountReceivableManagement.security.ExecutiveOnly;
 
@@ -25,6 +31,7 @@ import com.AccountReceivableManagement.security.ExecutiveOnly;
  * REST controller for the Billing Data Acquisition feature.
  *
  * Endpoints:
+ *   GET  /api/billing-data-acquisition
  *   GET  /api/billing-data-acquisition/active-configurations
  *   POST /api/billing-data-acquisition/acquire
  *   GET  /api/billing-data-acquisition/configurations/{billingConfigurationId}/periods
@@ -39,6 +46,62 @@ public class BillingDataAcquisitionController {
     private final BillingDataAcquisitionService billingDataAcquisitionService;
     private final BillingAcquisitionService billingAcquisitionService;
     private final BillingPeriodAcquisitionService billingPeriodAcquisitionService;
+
+    /** Rows per page when the caller does not ask for a size. */
+    static final int DEFAULT_PAGE_SIZE = 10;
+
+    /** Upper bound on {@code size}, so one request cannot ask for the whole table. */
+    static final int MAX_PAGE_SIZE = 100;
+
+    /**
+     * One page of the Billing Data Acquisition listing, ordered by project start
+     * date with the newest first; projects without a start date sort last.
+     *
+     * {@code billingType} is optional and accepts a
+     * {@link com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingType}
+     * name, case-insensitively (e.g. {@code TIME_AND_MATERIAL}); omitting it returns
+     * every billing type. {@code size} is clamped to {@value #MAX_PAGE_SIZE}.
+     */
+    @ExecutiveOnly
+    @GetMapping
+    public ResponseEntity<ApiResponse<PagedResponse<BillingAcquisitionSummaryDto>>> getAcquisitionOverview(
+            @RequestParam(name = "billingType", required = false) String billingType,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "" + DEFAULT_PAGE_SIZE) int size) {
+
+        PagedResponse<BillingAcquisitionSummaryDto> data =
+                billingDataAcquisitionService.getAcquisitionOverview(
+                        parseBillingType(billingType),
+                        Math.max(page, 0),
+                        Math.min(Math.max(size, 1), MAX_PAGE_SIZE));
+
+        return ResponseEntity.ok(
+                ApiResponse.<PagedResponse<BillingAcquisitionSummaryDto>>builder()
+                        .success(true)
+                        .message("Billing data acquisition records retrieved successfully.")
+                        .data(data)
+                        .timestamp(LocalDateTime.now())
+                        .build()
+        );
+    }
+
+    /**
+     * The requested billing type, or null when the caller did not filter.
+     * Parsed here rather than bound directly so an unknown value is rejected with
+     * a message naming the accepted values, instead of a bare type-mismatch.
+     */
+    private BillingType parseBillingType(String billingType) {
+        if (billingType == null || billingType.isBlank()) {
+            return null;
+        }
+        try {
+            return BillingType.valueOf(billingType.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw new GlobalExceptionHandler.ValidationException(
+                    "Unknown billingType '" + billingType + "'. Accepted values: "
+                            + Arrays.toString(BillingType.values()) + ".");
+        }
+    }
 
     /**
      * Returns all ACTIVE billing configurations formatted for the

@@ -64,4 +64,26 @@ public interface BillingSnapshotItemRepository extends JpaRepository<BillingSnap
             @Param("sourceReferenceIds") Collection<String> sourceReferenceIds,
             @Param("ignoredStatus") BillingSnapshotStatus ignoredStatus,
             @Param("excludedSnapshotId") UUID excludedSnapshotId);
+
+    /**
+     * Source-level idempotency with billing configuration status check:
+     * returns claimed timesheet source reference IDs only if their snapshot's
+     * billing configuration is ACTIVE. INACTIVE billing configurations can be
+     * re-used. Used to determine if already-billed timesheets should block
+     * a new acquisition attempt.
+     */
+    @Query("SELECT DISTINCT i.billedSourceReferenceId FROM BillingSnapshotItem i "
+            + "JOIN BillingConfiguration bc ON i.billingSnapshot.billingConfigurationId = bc.billingConfigurationId "
+            + "WHERE i.itemType = :itemType "
+            + "AND i.billedSourceReferenceId IN :sourceReferenceIds "
+            + "AND i.billedSourceReferenceId IS NOT NULL "
+            + "AND i.billingSnapshot.status <> :ignoredStatus "
+            + "AND (:excludedSnapshotId IS NULL OR i.billingSnapshot.id <> :excludedSnapshotId) "
+            + "AND bc.billingStatus = "
+            + "com.AccountReceivableManagement.entity_enums.projectbilling_config.BillingConfigurationStatus.ACTIVE")
+    List<String> findClaimedSourceReferenceIdsByActiveConfiguration(
+            @Param("itemType") BillingItemType itemType,
+            @Param("sourceReferenceIds") Collection<String> sourceReferenceIds,
+            @Param("ignoredStatus") BillingSnapshotStatus ignoredStatus,
+            @Param("excludedSnapshotId") UUID excludedSnapshotId);
 }

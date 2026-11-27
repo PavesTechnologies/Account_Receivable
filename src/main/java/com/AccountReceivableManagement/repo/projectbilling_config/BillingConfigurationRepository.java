@@ -49,6 +49,67 @@ public interface BillingConfigurationRepository extends JpaRepository<BillingCon
     findByProjectPmsProjectId(Long projectId);
 
     /**
+     * One page of the Billing Data Acquisition listing: approved configurations in
+     * the given billing status, newest project start date first.
+     *
+     * The ordering lives in the query rather than in the {@code Pageable}'s
+     * {@code Sort} so that it cannot interact with the fetch joins, and so the
+     * null handling is explicit: MySQL and H2 disagree on where NULLs land in a
+     * DESC order, and a project without a start date must never head the list.
+     * {@code billingConfigurationId} breaks ties - project start dates are not
+     * unique, and without a deterministic total order rows duplicate or disappear
+     * across page boundaries.
+     *
+     * The fetch joins are all to-one, so they do not multiply rows and pagination
+     * still happens in SQL. Never add a to-many fetch join here: Hibernate would
+     * silently fall back to paginating in memory (HHH000104).
+     */
+    @Query(value = "SELECT c FROM BillingConfiguration c "
+            + "JOIN FETCH c.project p "
+            + "JOIN FETCH c.client "
+            + "JOIN FETCH c.billingType "
+            + "WHERE c.approvalStatus = :approvalStatus "
+            + "AND c.billingStatus = :billingStatus "
+            + "ORDER BY CASE WHEN p.startDate IS NULL THEN 1 ELSE 0 END, "
+            + "p.startDate DESC, c.billingConfigurationId ASC",
+            countQuery = "SELECT COUNT(c) FROM BillingConfiguration c "
+            + "WHERE c.approvalStatus = :approvalStatus "
+            + "AND c.billingStatus = :billingStatus")
+    org.springframework.data.domain.Page<BillingConfiguration> findAcquisitionOverviewPage(
+            @org.springframework.data.repository.query.Param("approvalStatus") ApprovalStatus approvalStatus,
+            @org.springframework.data.repository.query.Param("billingStatus") BillingConfigurationStatus billingStatus,
+            org.springframework.data.domain.Pageable pageable);
+
+    /**
+     * As {@link #findAcquisitionOverviewPage}, restricted to configurations whose
+     * billing type master name is one of {@code lowerCaseBillingTypeNames}.
+     *
+     * The billing type is matched on the stored master name, not on
+     * {@code BillingType}: that enum is derived at read time and is never
+     * persisted. Filtering has to happen here rather than in Java, or
+     * {@code totalElements} would count rows the caller filtered out.
+     */
+    @Query(value = "SELECT c FROM BillingConfiguration c "
+            + "JOIN FETCH c.project p "
+            + "JOIN FETCH c.client "
+            + "JOIN FETCH c.billingType bt "
+            + "WHERE c.approvalStatus = :approvalStatus "
+            + "AND c.billingStatus = :billingStatus "
+            + "AND LOWER(TRIM(bt.billingTypeName)) IN :lowerCaseBillingTypeNames "
+            + "ORDER BY CASE WHEN p.startDate IS NULL THEN 1 ELSE 0 END, "
+            + "p.startDate DESC, c.billingConfigurationId ASC",
+            countQuery = "SELECT COUNT(c) FROM BillingConfiguration c "
+            + "WHERE c.approvalStatus = :approvalStatus "
+            + "AND c.billingStatus = :billingStatus "
+            + "AND LOWER(TRIM(c.billingType.billingTypeName)) IN :lowerCaseBillingTypeNames")
+    org.springframework.data.domain.Page<BillingConfiguration> findAcquisitionOverviewPageByBillingTypeNames(
+            @org.springframework.data.repository.query.Param("approvalStatus") ApprovalStatus approvalStatus,
+            @org.springframework.data.repository.query.Param("billingStatus") BillingConfigurationStatus billingStatus,
+            @org.springframework.data.repository.query.Param("lowerCaseBillingTypeNames")
+            java.util.Collection<String> lowerCaseBillingTypeNames,
+            org.springframework.data.domain.Pageable pageable);
+
+    /**
      * Every configuration of the project, row-locked, in a fixed order. A
      * locking read sees the latest committed state and serializes concurrent
      * approvals on the same project, so two of them cannot both pass the
