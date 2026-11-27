@@ -220,6 +220,9 @@ class LocalDemoBeanGatingTest {
                 .withPropertyValues(
                         "spring.datasource.url=jdbc:mysql://127.0.0.1:3399/gating_test",
                         "spring.datasource.username=gating-test", "spring.datasource.password=gating-test",
+                        // Matches the real default in application.properties, so ClientCdcRunner
+                        // (gated on this same flag) is created here just like in production.
+                        "client-cdc.enabled=true",
                         "client-cdc.hostname=cdc-source.test.invalid", "client-cdc.port=3306",
                         "client-cdc.database-name=rms", "client-cdc.username=u", "client-cdc.password=p",
                         "client-cdc.table-include-list=rms.client",
