@@ -54,6 +54,14 @@ public class InboxEventProcessor {
      * Process a single inbox event with idempotency and error handling.
      */
     private void processSingleEvent(CdcInbox inboxEvent) {
+        // The batch fetch in processPendingEvents() is a plain SELECT, so two instances (e.g. two pods
+        // overlapping during a rolling deploy, since this app's rollingUpdate uses maxSurge=1/maxUnavailable=0)
+        // can both see the same PENDING row. Claim it atomically first; lose the race, skip it.
+        if (!cdcInboxService.tryClaim(inboxEvent.getId())) {
+            log.debug("CDC inbox event already claimed by another instance - ID: {}", inboxEvent.getId());
+            return;
+        }
+
         try {
             log.info("Processing CDC inbox event - ID: {}, EntityType: {}, EntityId: {}, Operation: {}",
                     inboxEvent.getId(), inboxEvent.getEntityType(), inboxEvent.getEntityId(), inboxEvent.getOperation());
@@ -137,8 +145,7 @@ public class InboxEventProcessor {
     @Scheduled(fixedDelay = 30000, initialDelay = 30000)
     public void retryFailedEvents() {
         try {
-            int maxRetries = 3;
-            List<CdcInbox> failedEvents = cdcInboxService.findFailedEventsForRetry(maxRetries);
+            List<CdcInbox> failedEvents = cdcInboxService.findFailedEventsForRetry(CdcInboxService.MAX_RETRIES);
 
             if (failedEvents.isEmpty()) {
                 return;

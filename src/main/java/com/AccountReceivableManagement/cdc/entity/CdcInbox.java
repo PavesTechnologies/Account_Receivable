@@ -98,6 +98,7 @@ public class CdcInbox {
 
     public enum ProcessingStatus {
         PENDING,
+        PROCESSING,
         PROCESSED,
         FAILED
     }

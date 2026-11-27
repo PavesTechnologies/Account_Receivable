@@ -2,8 +2,12 @@ package com.AccountReceivableManagement.cdc.repository;
 
 import com.AccountReceivableManagement.cdc.entity.CdcInbox;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -14,6 +18,19 @@ public interface CdcInboxRepository extends JpaRepository<CdcInbox, UUID> {
      * Find all pending events
      */
     List<CdcInbox> findByStatus(CdcInbox.ProcessingStatus status);
+
+    /**
+     * Atomic claim: one conditional UPDATE, so of any number of instances racing to pick up
+     * the same row (e.g. two pods overlapping during a rolling deploy) exactly one sees {@code 1}
+     * - the database row lock decides, not a read-then-write in Java.
+     *
+     * @return 1 if this caller now owns the event, 0 if another instance already claimed it
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE CdcInbox c SET c.status = com.AccountReceivableManagement.cdc.entity.CdcInbox.ProcessingStatus.PROCESSING, "
+            + "c.updatedAt = :now "
+            + "WHERE c.id = :id AND c.status = com.AccountReceivableManagement.cdc.entity.CdcInbox.ProcessingStatus.PENDING")
+    int claim(@Param("id") UUID id, @Param("now") LocalDateTime now);
 
     /**
      * Find pending events for a specific connector

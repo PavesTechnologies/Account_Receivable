@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Configuration;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 
 @Slf4j
 @Configuration
@@ -25,9 +26,11 @@ import java.util.concurrent.Executors;
 )
 public class ProjectCdcConfig {
 
-    @Bean
+    // Not a @Bean: the runner below calls this directly (self-invocation) to build a
+    // fresh engine instance every time it needs to restart after an unexpected stop.
+    // A @Bean method would self-invoke through the CGLIB proxy and keep returning the
+    // same cached singleton, defeating the restart.
     public DebeziumEngine<ChangeEvent<String, String>> projectDebeziumEngine(
-            @Qualifier("projectDebeziumConfiguration")
             io.debezium.config.Configuration configuration,
             ProjectCdcHandler projectCdcHandler
     ) {
@@ -52,41 +55,102 @@ public class ProjectCdcConfig {
 
     @Bean
     public DebeziumEngineRunner projectDebeziumEngineRunner(
-            @Qualifier("projectDebeziumEngine")
-            DebeziumEngine<ChangeEvent<String, String>> projectDebeziumEngine
+            @Qualifier("projectDebeziumConfiguration")
+            io.debezium.config.Configuration configuration,
+            ProjectCdcHandler projectCdcHandler
     ) {
-        return new DebeziumEngineRunner(projectDebeziumEngine);
+        Supplier<DebeziumEngine<ChangeEvent<String, String>>> engineSupplier =
+                () -> projectDebeziumEngine(configuration, projectCdcHandler);
+
+        return new DebeziumEngineRunner("Project", engineSupplier);
     }
 
     public static class DebeziumEngineRunner implements SmartLifecycle {
-        private final DebeziumEngine<ChangeEvent<String, String>> debeziumEngine;
+
+        private static final long DEFAULT_RESTART_DELAY_MS = 10_000;
+
+        private final String engineName;
+        private final Supplier<DebeziumEngine<ChangeEvent<String, String>>> engineSupplier;
+        private final long restartDelayMs;
         private final ExecutorService executorService;
+        private volatile DebeziumEngine<ChangeEvent<String, String>> currentEngine;
         private volatile boolean running = false;
 
-        public DebeziumEngineRunner(DebeziumEngine<ChangeEvent<String, String>> debeziumEngine) {
-            this.debeziumEngine = debeziumEngine;
-            this.executorService = Executors.newSingleThreadExecutor();
+        public DebeziumEngineRunner(String engineName, Supplier<DebeziumEngine<ChangeEvent<String, String>>> engineSupplier) {
+            this(engineName, engineSupplier, DEFAULT_RESTART_DELAY_MS);
+        }
+
+        // Package-private: lets tests use a short restart delay instead of waiting on the real one.
+        DebeziumEngineRunner(String engineName, Supplier<DebeziumEngine<ChangeEvent<String, String>>> engineSupplier, long restartDelayMs) {
+            this.engineName = engineName;
+            this.engineSupplier = engineSupplier;
+            this.restartDelayMs = restartDelayMs;
+            this.executorService = Executors.newSingleThreadExecutor(r -> {
+                Thread thread = new Thread(r, engineName + "-debezium-engine");
+                thread.setDaemon(true);
+                return thread;
+            });
         }
 
         @Override
         public void start() {
-            log.info("Starting Project Debezium Engine...");
-            executorService.execute(() -> debeziumEngine.run());
-            this.running = true;
-            log.info("Project Debezium Engine started successfully.");
+            log.info("Starting {} Debezium Engine...", engineName);
+            running = true;
+            executorService.execute(this::runWithAutoRestart);
+            log.info("{} Debezium Engine started successfully.", engineName);
+        }
+
+        /**
+         * The embedded engine's run() call is expected to block for the lifetime of the
+         * connector. If it ever returns or throws — a transient DB hiccup, a handler
+         * exception, a lost PMS connection — nothing upstream restarts it, so CDC capture
+         * silently goes dark until the whole application is restarted. This loop is the fix:
+         * it rebuilds a fresh engine and keeps retrying (with backoff) until stop() runs.
+         */
+        private void runWithAutoRestart() {
+            while (running) {
+                DebeziumEngine<ChangeEvent<String, String>> engine = engineSupplier.get();
+                currentEngine = engine;
+                try {
+                    engine.run();
+                } catch (Exception e) {
+                    log.error("{} Debezium Engine terminated with an exception.", engineName, e);
+                } finally {
+                    closeQuietly(engine);
+                }
+
+                if (!running) {
+                    break;
+                }
+
+                log.warn("{} Debezium Engine stopped unexpectedly. Restarting in {} ms...", engineName, restartDelayMs);
+                try {
+                    Thread.sleep(restartDelayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        private void closeQuietly(DebeziumEngine<ChangeEvent<String, String>> engine) {
+            if (engine == null) {
+                return;
+            }
+            try {
+                engine.close();
+            } catch (java.io.IOException e) {
+                log.error("Error closing {} Debezium Engine", engineName, e);
+            }
         }
 
         @Override
         public void stop() {
-            log.info("Stopping Project Debezium Engine...");
-            this.running = false;
-            try {
-                debeziumEngine.close();
-            } catch (java.io.IOException e) {
-                log.error("Error closing Project Debezium Engine", e);
-            }
-            executorService.shutdown();
-            log.info("Project Debezium Engine stopped.");
+            log.info("Stopping {} Debezium Engine...", engineName);
+            running = false;
+            closeQuietly(currentEngine);
+            executorService.shutdownNow();
+            log.info("{} Debezium Engine stopped.", engineName);
         }
 
         @Override

@@ -12,6 +12,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -34,6 +36,9 @@ class ProjectDataProcessorImplTest {
     @Mock
     private ClientBudgetSummaryService clientBudgetSummaryService;
 
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
     @InjectMocks
     private ProjectDataProcessorImpl projectDataProcessor;
 
@@ -51,6 +56,11 @@ class ProjectDataProcessorImplTest {
         afterData.put("client_id", clientId.toString());
         afterData.put("project_budget", new BigDecimal("67000.00"));
         afterData.put("project_budget_currency", "USD");
+
+        // handleCreate/handleUpdate/handleDelete run through a real TransactionTemplate (so their
+        // check-then-act sequences are genuinely atomic); it just needs a transaction manager that
+        // hands back a usable status without a real datasource.
+        lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
 
         // The converter is a mock, so without a default every mapped field (including client_id) would be
         // converted to null and overwrite the entity's clientId. Default: client_id -> UUID, others as-is.
