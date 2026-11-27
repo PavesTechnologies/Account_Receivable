@@ -166,16 +166,19 @@ public class BillingDataAcquisitionServiceImpl implements BillingDataAcquisition
     /**
      * True when {@code snapshot} has no acquisition record of its own: either
      * none exists for the configuration, or the latest one belongs to a
-     * different billing period and predates the snapshot.
+     * different batch - another billing period, or another acquisition batch
+     * of the same period - and predates the snapshot.
      */
     private boolean isNewerThanAcquisition(BillingSnapshot snapshot, Optional<BillingAcquisition> acquisitionOpt) {
         if (acquisitionOpt.isEmpty()) {
             return true;
         }
         BillingAcquisition acquisition = acquisitionOpt.get();
-        boolean samePeriod = snapshot.getBillingPeriodStart().equals(acquisition.getBillingPeriodStart())
-                && snapshot.getBillingPeriodEnd().equals(acquisition.getBillingPeriodEnd());
-        return !samePeriod
+        boolean sameBatch = acquisition.getSnapshotId() != null
+                ? acquisition.getSnapshotId().equals(snapshot.getId())
+                : snapshot.getBillingPeriodStart().equals(acquisition.getBillingPeriodStart())
+                        && snapshot.getBillingPeriodEnd().equals(acquisition.getBillingPeriodEnd());
+        return !sameBatch
                 && snapshot.getCreatedDate() != null
                 && acquisition.getCreatedAt() != null
                 && snapshot.getCreatedDate().isAfter(acquisition.getCreatedAt());

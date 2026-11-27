@@ -189,9 +189,9 @@ class BillingSnapshotServiceImplTest {
 
     @Test
     void getByProjectAndPeriod_historicalConfigurationMissing_returnsSnapshotWithEnrichmentOmitted() {
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, PERIOD_START, PERIOD_END))
-                .thenReturn(Optional.of(existingSnapshot));
+                .thenReturn(List.of(existingSnapshot));
 
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenThrow(new GlobalExceptionHandler.ResourceNotFoundException(
@@ -241,9 +241,9 @@ class BillingSnapshotServiceImplTest {
                 .billingPeriodEnd(PERIOD_END)
                 .build();
 
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, PERIOD_START, PERIOD_END))
-                .thenReturn(Optional.of(existingSnapshot));
+                .thenReturn(List.of(existingSnapshot));
 
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenThrow(new GlobalExceptionHandler.ResourceNotFoundException(
@@ -271,9 +271,9 @@ class BillingSnapshotServiceImplTest {
         UUID activeConfigurationId = UUID.randomUUID();
         existingSnapshot.setBillingConfigurationId(activeConfigurationId);
 
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, PERIOD_START, PERIOD_END))
-                .thenReturn(Optional.of(existingSnapshot));
+                .thenReturn(List.of(existingSnapshot));
 
         BillingConfigurationResponseDto configuration = BillingConfigurationResponseDto.builder()
                 .billingConfigurationId(activeConfigurationId)
@@ -296,9 +296,9 @@ class BillingSnapshotServiceImplTest {
 
     @Test
     void getByProjectAndPeriod_noSnapshot_returnsFailureWithoutThrowing() {
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, PERIOD_START, PERIOD_END))
-                .thenReturn(Optional.empty());
+                .thenReturn(List.of());
 
         ApiResponse<BillingSnapshotResponseDto> response =
                 service.getByProjectAndPeriod(PROJECT_ID, PERIOD_START, PERIOD_END);
@@ -314,9 +314,9 @@ class BillingSnapshotServiceImplTest {
 
     @Test
     void getByProjectAndPeriod_unexpectedExceptionFromIntegration_propagates() {
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, PERIOD_START, PERIOD_END))
-                .thenReturn(Optional.of(existingSnapshot));
+                .thenReturn(List.of(existingSnapshot));
 
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenThrow(new IllegalStateException("Database connection lost"));
@@ -338,9 +338,9 @@ class BillingSnapshotServiceImplTest {
                 .billingPeriodEnd(PERIOD_END)
                 .build();
 
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, PERIOD_START, PERIOD_END))
-                .thenReturn(Optional.empty());
+                .thenReturn(List.of());
 
         UUID configurationId = UUID.randomUUID();
         BillingConfigurationResponseDto configuration = BillingConfigurationResponseDto.builder()
@@ -421,8 +421,8 @@ class BillingSnapshotServiceImplTest {
         BillingSnapshotCreateRequestDto request = BillingSnapshotCreateRequestDto.builder()
                 .projectId(PROJECT_ID).billingPeriodStart(PERIOD_START).billingPeriodEnd(PERIOD_END).build();
 
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
 
         UUID configurationId = UUID.randomUUID();
         BillingConfigurationResponseDto configuration = BillingConfigurationResponseDto.builder()
@@ -480,8 +480,8 @@ class BillingSnapshotServiceImplTest {
     void createBillingSnapshot_xmsFailure_persistsNothingAndSurfacesTheIntegrationError() {
         BillingSnapshotCreateRequestDto request = BillingSnapshotCreateRequestDto.builder()
                 .projectId(PROJECT_ID).billingPeriodStart(PERIOD_START).billingPeriodEnd(PERIOD_END).build();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = BillingConfigurationResponseDto.builder()
                 .billingConfigurationId(UUID.randomUUID()).billingType(BillingType.TIME_AND_MATERIAL)
                 .currencyId(UUID.randomUUID()).currencyCode("USD").taxRegionCode("DOM")
@@ -513,9 +513,9 @@ class BillingSnapshotServiceImplTest {
     void getByProjectAndPeriod_snapshotWithNoItems_returnsEmptyTimesheetsSuccessfully() {
         existingSnapshot.setItems(List.of());
 
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, PERIOD_START, PERIOD_END))
-                .thenReturn(Optional.of(existingSnapshot));
+                .thenReturn(List.of(existingSnapshot));
 
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenThrow(new GlobalExceptionHandler.ResourceNotFoundException("not found"));
@@ -643,7 +643,8 @@ class BillingSnapshotServiceImplTest {
         // Re-acquisition genuinely returns nothing this time (e.g. TMS has no
         // approved timesheets left for the period) - must fail validation,
         // not silently persist an empty/zero snapshot.
-        when(timeAndMaterialStrategy.acquire(eq(configuration), any(BillingSnapshotCreateRequestDto.class)))
+        when(timeAndMaterialStrategy.acquire(eq(configuration), any(BillingSnapshotCreateRequestDto.class),
+                eq(com.AccountReceivableManagement.dto.billing_data_acquisition.AcquisitionScope.rebuildOf(snapshotId))))
                 .thenReturn(BillingAcquisitionResultDto.builder()
                         .billingConfigurationId(orphanedConfigurationId)
                         .timesheets(List.of())
@@ -686,7 +687,8 @@ class BillingSnapshotServiceImplTest {
                         .sourceAmount(new BigDecimal("400.0000")).sourceCurrency("INR")
                         .exchangeRate(new BigDecimal("0.01500000")).exchangeRateDate(LocalDate.of(2026, 8, 13))
                         .exchangeRateSource("NEWER-REF").build();
-        when(timeAndMaterialStrategy.acquire(eq(configuration), any(BillingSnapshotCreateRequestDto.class)))
+        when(timeAndMaterialStrategy.acquire(eq(configuration), any(BillingSnapshotCreateRequestDto.class),
+                eq(com.AccountReceivableManagement.dto.billing_data_acquisition.AcquisitionScope.rebuildOf(snapshotId))))
                 .thenReturn(BillingAcquisitionResultDto.builder().billingConfigurationId(orphanedConfigurationId)
                         .timesheets(List.of(timesheet)).expenses(List.of(reconverted)).build());
         when(billingSnapshotRepository.save(any(BillingSnapshot.class)))
@@ -707,8 +709,8 @@ class BillingSnapshotServiceImplTest {
     void createBillingSnapshot_withConvertedExpense_totalsContainOnlyBillingCurrencyAmounts() {
         BillingSnapshotCreateRequestDto request = BillingSnapshotCreateRequestDto.builder()
                 .projectId(PROJECT_ID).billingPeriodStart(PERIOD_START).billingPeriodEnd(PERIOD_END).build();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         UUID configurationId = UUID.randomUUID();
         BillingConfigurationResponseDto configuration = BillingConfigurationResponseDto.builder()
                 .billingConfigurationId(configurationId)
@@ -777,7 +779,8 @@ class BillingSnapshotServiceImplTest {
                 .approved(true)
                 .billable(true)
                 .build();
-        when(timeAndMaterialStrategy.acquire(eq(configuration), any(BillingSnapshotCreateRequestDto.class)))
+        when(timeAndMaterialStrategy.acquire(eq(configuration), any(BillingSnapshotCreateRequestDto.class),
+                eq(com.AccountReceivableManagement.dto.billing_data_acquisition.AcquisitionScope.rebuildOf(snapshotId))))
                 .thenReturn(BillingAcquisitionResultDto.builder()
                         .billingConfigurationId(orphanedConfigurationId)
                         .timesheets(List.of(correctedTimesheet))
@@ -891,8 +894,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_newSnapshot_recordsAcquisitionForSavedSnapshotInSameTransaction() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(true));
 
@@ -931,8 +934,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_conversionFailsDuringAcquisition_nothingIsPersistedAndNoTransactionIsStarted() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         stubConfigurationAndJurisdictions();
         // Labor was acquired fine; an expense then fails currency conversion inside the same acquisition.
         when(timeAndMaterialStrategy.acquire(any(), eq(request))).thenThrow(new GlobalExceptionHandler.ValidationException(
@@ -952,8 +955,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_persistenceFailsForAMixedConvertedSnapshot_rollsBackAndReportsFailure() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         com.AccountReceivableManagement.dto.billing_data_acquisition.ExpenseLineDto converted =
                 com.AccountReceivableManagement.dto.billing_data_acquisition.ExpenseLineDto.builder()
@@ -980,8 +983,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_acquisitionRecordRejected_rollsBackSnapshotAndPropagatesMessage() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(true));
         when(billingSnapshotRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -1002,8 +1005,8 @@ class BillingSnapshotServiceImplTest {
     // Test 2 - existing snapshot without an acquisition record
     @Test
     void createBillingSnapshot_existingSnapshotWithoutAcquisitionRecord_reconcilesAndReturnsIt() {
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenReturn(approvedTimeAndMaterialConfiguration(orphanedConfigurationId));
         when(billingAcquisitionService.recordAcquisitionForSnapshot(
@@ -1032,8 +1035,8 @@ class BillingSnapshotServiceImplTest {
     @EnumSource(value = BillingSnapshotStatus.class, names = {"TAX_COMPLETED", "INVOICED"})
     void createBillingSnapshot_existingProgressedSnapshot_isReturnedUnchanged(BillingSnapshotStatus status) {
         existingSnapshot.setStatus(status);
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenReturn(approvedTimeAndMaterialConfiguration(orphanedConfigurationId));
         when(billingAcquisitionService.recordAcquisitionForSnapshot(
@@ -1058,8 +1061,8 @@ class BillingSnapshotServiceImplTest {
 
     @Test
     void createBillingSnapshot_existingSnapshot_configurationNoLongerRecordable_stillReturnsSnapshot() {
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenReturn(approvedTimeAndMaterialConfiguration(orphanedConfigurationId));
         when(billingAcquisitionService.recordAcquisitionForSnapshot(
@@ -1081,9 +1084,9 @@ class BillingSnapshotServiceImplTest {
         // The concurrent winner is the same configuration's snapshot.
         existingSnapshot.setBillingConfigurationId(NEW_CONFIGURATION_ID);
         // Not there on the first check; committed by the concurrent request by the re-read.
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, PERIOD_START, PERIOD_END))
-                .thenReturn(Optional.empty(), Optional.of(existingSnapshot));
+                .thenReturn(List.of(), List.of(existingSnapshot));
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(true));
         when(billingSnapshotRepository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException(
@@ -1111,8 +1114,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_integrityViolationWithoutMatchingSnapshot_returnsFailure() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(true));
         when(billingSnapshotRepository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException(
@@ -1130,8 +1133,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_timesheetClaimedByConcurrentOverlappingSnapshot_returnsAlreadyBilledFailure() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(true));
         when(billingSnapshotRepository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException(
@@ -1141,8 +1144,8 @@ class BillingSnapshotServiceImplTest {
         ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
 
         assertThat(response.isSuccess()).isFalse();
-        assertThat(response.getMessage()).isEqualTo("One or more timesheets of this billing period were included "
-                + "in another Billing Snapshot at the same time and cannot be billed again.");
+        assertThat(response.getMessage()).isEqualTo("One or more timesheets or expenses of this billing period were "
+                + "included in another Billing Snapshot at the same time and cannot be billed again.");
         verify(transactionManager).rollback(any());
         verify(billingAcquisitionService, never()).recordAcquisitionForSnapshot(any(), any(), any(), any());
     }
@@ -1151,8 +1154,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_readinessValidationFails_returnsMessageAndPersistsNothing() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(false));
 
@@ -1168,8 +1171,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_tmsSourceFailure_propagatesAndRecordsNoAcquisition() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         when(timeAndMaterialStrategy.acquire(configuration, request))
                 .thenThrow(new IllegalStateException("TMS service failed with status 503."));
@@ -1197,8 +1200,8 @@ class BillingSnapshotServiceImplTest {
                 .billingPeriodStart(PERIOD_START)
                 .billingPeriodEnd(PERIOD_END)
                 .build();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
 
         ApiResponse<BillingSnapshotResponseDto> response = service.createBillingSnapshot(request);
 
@@ -1215,8 +1218,8 @@ class BillingSnapshotServiceImplTest {
     // Same, when the request names no configuration: the project's approved one is used.
     @Test
     void createBillingSnapshot_snapshotOfOtherConfiguration_noConfigIdInRequest_usesActiveConfiguration() {
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
         when(billingConfigurationIntegration.getApprovedBillingConfiguration(PROJECT_ID))
                 .thenReturn(approvedTimeAndMaterialConfiguration(NEW_CONFIGURATION_ID));
 
@@ -1236,8 +1239,8 @@ class BillingSnapshotServiceImplTest {
                 .billingPeriodStart(PERIOD_START)
                 .billingPeriodEnd(PERIOD_END)
                 .build();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenReturn(approvedTimeAndMaterialConfiguration(orphanedConfigurationId));
         when(billingAcquisitionService.recordAcquisitionForSnapshot(
@@ -1259,9 +1262,9 @@ class BillingSnapshotServiceImplTest {
                 .billingPeriodStart(PERIOD_END.plusDays(1))
                 .billingPeriodEnd(PERIOD_END.plusMonths(1))
                 .build();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 PROJECT_ID, request.getBillingPeriodStart(), request.getBillingPeriodEnd()))
-                .thenReturn(Optional.empty());
+                .thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(true));
         when(billingSnapshotRepository.saveAndFlush(any(BillingSnapshot.class)))
@@ -1283,8 +1286,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void getByProjectAndPeriod_snapshotOfOtherConfiguration_returnsNotFound() {
         existingSnapshot.setStatus(BillingSnapshotStatus.INVOICED);
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
 
         ApiResponse<BillingSnapshotResponseDto> response =
                 service.getByProjectAndPeriod(PROJECT_ID, PERIOD_START, PERIOD_END, NEW_CONFIGURATION_ID);
@@ -1295,8 +1298,8 @@ class BillingSnapshotServiceImplTest {
 
     @Test
     void getByProjectAndPeriod_snapshotOfSameConfiguration_isReturned() {
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(orphanedConfigurationId))
                 .thenReturn(approvedTimeAndMaterialConfiguration(orphanedConfigurationId));
 
@@ -1344,8 +1347,8 @@ class BillingSnapshotServiceImplTest {
     void createBillingSnapshot_anyConfiguredPeriod_isUsedExactlyAsRequested(LocalDate start, LocalDate end) {
         BillingSnapshotCreateRequestDto request = BillingSnapshotCreateRequestDto.builder()
                 .projectId(PROJECT_ID).billingPeriodStart(start).billingPeriodEnd(end).build();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(PROJECT_ID, start, end))
-                .thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(PROJECT_ID, start, end))
+                .thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(true));
         ArgumentCaptor<BillingSnapshot> saved = ArgumentCaptor.forClass(BillingSnapshot.class);
@@ -1369,8 +1372,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_multipleApprovedTimesheets_billsEachLineAndSumsSubtotal() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
 
         TimesheetDto developer = timesheet(true);
@@ -1407,8 +1410,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_nonBillableTimesheet_returnsMessageAndPersistsNothing() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         TimesheetDto nonBillable = timesheet(true);
         nonBillable.setBillable(false);
@@ -1431,8 +1434,8 @@ class BillingSnapshotServiceImplTest {
     @Test
     void createBillingSnapshot_timesheetAlreadyBilledInAnotherSnapshot_persistsNothing() {
         BillingSnapshotCreateRequestDto request = newRequest();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.empty());
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of());
         BillingConfigurationResponseDto configuration = stubConfigurationAndJurisdictions();
         stubAcquiredTimesheets(configuration, request, timesheet(true));
         when(billingSnapshotItemRepository.findClaimedSourceReferenceIds(any(), any(), any(), any()))
@@ -1453,8 +1456,8 @@ class BillingSnapshotServiceImplTest {
         BillingSnapshotCreateRequestDto request = BillingSnapshotCreateRequestDto.builder()
                 .projectId(PROJECT_ID).billingConfigurationId(NEW_CONFIGURATION_ID)
                 .billingPeriodStart(PERIOD_START).billingPeriodEnd(PERIOD_END).build();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(NEW_CONFIGURATION_ID))
                 .thenReturn(approvedTimeAndMaterialConfiguration(NEW_CONFIGURATION_ID));
         when(billingAcquisitionService.recordAcquisitionForSnapshot(
@@ -1675,7 +1678,7 @@ class BillingSnapshotServiceImplTest {
         service.getByBillingConfiguration(configurationId);
 
         verify(billingSnapshotRepository).findAllByBillingConfigurationIdOrderByBillingPeriodStartDesc(configurationId);
-        verify(billingSnapshotRepository, never()).findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+        verify(billingSnapshotRepository, never()).findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
                 any(), any(), any());
         verify(billingSnapshotRepository, never()).findAll();
         verify(billingConfigurationIntegration, never()).getApprovedBillingConfiguration(any());
@@ -1719,8 +1722,8 @@ class BillingSnapshotServiceImplTest {
     void getByProjectAndPeriod_deactivatedVsReplacementConfiguration_returnsOnlyTheRecordedOwner() {
         UUID deactivatedConfigurationId = orphanedConfigurationId;
         UUID replacementConfigurationId = UUID.randomUUID();
-        when(billingSnapshotRepository.findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
-                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(Optional.of(existingSnapshot));
+        when(billingSnapshotRepository.findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
+                PROJECT_ID, PERIOD_START, PERIOD_END)).thenReturn(List.of(existingSnapshot));
         when(billingConfigurationIntegration.getApprovedBillingConfigurationById(deactivatedConfigurationId))
                 .thenReturn(BillingConfigurationResponseDto.builder()
                         .billingConfigurationId(deactivatedConfigurationId).build());

@@ -59,6 +59,7 @@ public class BillingSnapshotMapper {
                 .destinationTaxJurisdictionCode(snapshot.getDestinationTaxJurisdictionCode())
                 .billingPeriodStart(snapshot.getBillingPeriodStart())
                 .billingPeriodEnd(snapshot.getBillingPeriodEnd())
+                .batchSequence(snapshot.getBatchSequence() != null ? snapshot.getBatchSequence() : 1)
                 .subtotal(snapshot.getSubtotal())
                 .expenseAmount(snapshot.getExpenseAmount())
                 .totalAmount(snapshot.getTotalAmount())

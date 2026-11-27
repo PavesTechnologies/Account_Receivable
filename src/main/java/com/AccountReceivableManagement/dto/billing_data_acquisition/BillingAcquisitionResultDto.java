@@ -28,4 +28,10 @@ public class BillingAcquisitionResultDto {
     /** Validated client-billable expenses (XMS); empty when none or expense billing is off. */
     @Builder.Default
     private List<ExpenseLineDto> expenses = new ArrayList<>();
+
+    /**
+     * Approved timesheets TMS returned that were left out because another live
+     * Billing Snapshot already claims them (incremental acquisition only).
+     */
+    private int alreadyClaimedTimesheetCount;
 }

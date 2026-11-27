@@ -12,11 +12,15 @@ import java.util.UUID;
 @Repository
 public interface BillingAcquisitionRepository extends JpaRepository<BillingAcquisition, UUID> {
 
-    Optional<BillingAcquisition> findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+    /** Every acquisition record (one per acquisition batch) of the configuration's billing period. */
+    List<BillingAcquisition> findAllByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
             UUID billingConfigurationId,
             LocalDate billingPeriodStart,
             LocalDate billingPeriodEnd
     );
+
+    /** The acquisition record of one acquisition batch (uk_billing_acq_snapshot). */
+    Optional<BillingAcquisition> findFirstBySnapshotId(UUID snapshotId);
 
     Optional<BillingAcquisition> findFirstByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
             UUID billingConfigurationId,

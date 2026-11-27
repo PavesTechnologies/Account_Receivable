@@ -1,5 +1,6 @@
 package com.AccountReceivableManagement.integration.billing_data_acquisition;
 
+import com.AccountReceivableManagement.dto.billing_data_acquisition.AcquisitionScope;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.ExpenseLineDto;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshot;
 import com.AccountReceivableManagement.entity.billing_data_acquisition.BillingSnapshotItem;
@@ -71,6 +72,14 @@ public class XmsExpenseIntegrationImpl implements ExpenseIntegration {
     @Override
     public List<ExpenseLineDto> getBillableExpenses(Long projectId, LocalDate periodStart,
                                                     LocalDate periodEnd, String expectedCurrency) {
+        return getBillableExpenses(projectId, periodStart, periodEnd, expectedCurrency,
+                AcquisitionScope.FAIL_ON_CLAIMED);
+    }
+
+    @Override
+    public List<ExpenseLineDto> getBillableExpenses(Long projectId, LocalDate periodStart, LocalDate periodEnd,
+                                                    String expectedCurrency, AcquisitionScope scope) {
+        AcquisitionScope effectiveScope = scope != null ? scope : AcquisitionScope.FAIL_ON_CLAIMED;
 
         ProjectMasterReference project = projectMasterReferenceRepository.findBypmsProjectId(projectId)
                 .orElseThrow(() -> new GlobalExceptionHandler.ValidationException(
@@ -127,7 +136,12 @@ public class XmsExpenseIntegrationImpl implements ExpenseIntegration {
                 continue;
             }
             validateAmount(lineItemId, record.getCostBasis(), "handed-off record");
-            rejectIfAlreadyBilledElsewhere(lineItemId, record, projectId, periodStart, periodEnd);
+            if (alreadyBilledElsewhere(lineItemId, record, effectiveScope)) {
+                excludedByReason.merge("already billed in another snapshot", 1, Integer::sum);
+                log.info("[XmsExpenseExcluded] lineItemId={} projectId={} already claimed by another billing "
+                        + "snapshot; not acquired again", lineItemId, projectId);
+                continue;
+            }
 
             XmsBillingPayloadDto payload = xmsExpenseClient.getBillingPayload(lineItemId);
             lines.add(toLine(record, current.supersededSyncIds(), payload, periodStart, periodEnd, expectedCurrency));
@@ -237,15 +251,21 @@ public class XmsExpenseIntegrationImpl implements ExpenseIntegration {
     }
 
     /**
-     * Never bills an expense twice: a line item already on another live snapshot is rejected. The message
-     * says whether it is a repeat of the same handoff or a correction of an already-billed expense.
+     * Never bills an expense twice. A line item already on another live snapshot (any snapshot other than
+     * {@code scope.owningSnapshotId()}, whatever its period or batch) is:
+     * <ul>
+     *   <li>left out ({@code true} returned) when it is a repeat of the billed handoff and the scope skips
+     *       already-claimed records - incremental acquisition of a period that was billed before;</li>
+     *   <li>rejected otherwise. The message says whether it is a repeat of the same handoff or a correction
+     *       of an already-billed expense; a correction is rejected in every scope.</li>
+     * </ul>
      */
-    private void rejectIfAlreadyBilledElsewhere(String lineItemId, XmsHandedOffExpenseDto record, Long projectId,
-                                                LocalDate periodStart, LocalDate periodEnd) {
+    private boolean alreadyBilledElsewhere(String lineItemId, XmsHandedOffExpenseDto record,
+                                           AcquisitionScope scope) {
         List<BillingSnapshotItem> existing = billingSnapshotItemRepository.findExpenseItemsInOtherSnapshots(
-                lineItemId, projectId, periodStart, periodEnd);
+                lineItemId, scope.owningSnapshotId());
         if (existing == null || existing.isEmpty()) {
-            return;
+            return false;
         }
         BillingSnapshotItem item = existing.get(0);
         BillingSnapshot snapshot = item.getBillingSnapshot();
@@ -255,6 +275,9 @@ public class XmsExpenseIntegrationImpl implements ExpenseIntegration {
         String billedEvent = trim(item.getSourceEventId());
         boolean correction = billedEvent != null && !billedEvent.equals(trim(record.getSyncId()));
         if (!correction) {
+            if (scope.skipAlreadyClaimed()) {
+                return true;
+            }
             throw invalid(lineItemId, "it is already included in another billing snapshot (" + where + ")");
         }
         if (invoiced) {

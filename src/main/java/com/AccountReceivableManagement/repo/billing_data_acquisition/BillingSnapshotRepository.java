@@ -25,8 +25,27 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
      * on {@link BillingSnapshot#getItems()}).
      */
     @EntityGraph(attributePaths = "items")
-    Optional<BillingSnapshot> findByProjectIdAndBillingPeriodStartAndBillingPeriodEnd(
+    java.util.List<BillingSnapshot> findAllByProjectIdAndBillingPeriodStartAndBillingPeriodEndOrderByCreatedDateAsc(
             Long projectId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
+
+    /**
+     * Highest acquisition batch number of the project's billing period (a
+     * pre-batch snapshot with no number counts as batch 1); {@code null} when
+     * the period has no snapshot yet.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT MAX(COALESCE(s.batchSequence, 1)) FROM BillingSnapshot s "
+                    + "WHERE s.projectId = :projectId AND s.billingPeriodStart = :periodStart "
+                    + "AND s.billingPeriodEnd = :periodEnd")
+    Integer findMaxBatchSequence(
+            @org.springframework.data.repository.query.Param("projectId") Long projectId,
+            @org.springframework.data.repository.query.Param("periodStart") LocalDate periodStart,
+            @org.springframework.data.repository.query.Param("periodEnd") LocalDate periodEnd);
+
+    /** The batch a previous acquisition request with this idempotency key created. */
+    @EntityGraph(attributePaths = "items")
+    Optional<BillingSnapshot> findByBillingConfigurationIdAndIdempotencyKey(
+            UUID billingConfigurationId, String idempotencyKey);
 
     Optional<BillingSnapshot> findBySnapshotNumber(String snapshotNumber);
 
@@ -56,11 +75,11 @@ public interface BillingSnapshotRepository extends JpaRepository<BillingSnapshot
             com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus status);
 
     /**
-     * Finds a billing snapshot for a specific billing configuration and billing period.
+     * Every billing snapshot (acquisition batch) of a billing configuration and billing period.
      * Used for Time & Material invoice generation to locate the snapshot associated
      * with a billing schedule occurrence.
      */
-    Optional<BillingSnapshot> findByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+    java.util.List<BillingSnapshot> findAllByBillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
             UUID billingConfigurationId, LocalDate billingPeriodStart, LocalDate billingPeriodEnd);
 
     /**

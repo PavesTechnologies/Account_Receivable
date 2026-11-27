@@ -1,6 +1,9 @@
 package com.AccountReceivableManagement.strategy.billing_data_acquisition;
 
+import com.AccountReceivableManagement.dto.billing_data_acquisition.AcquisitionScope;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingAcquisitionResultDto;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingItemType;
+import com.AccountReceivableManagement.entity_enums.billing_data_acquisition.BillingSnapshotStatus;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingConfigurationResponseDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.BillingSnapshotCreateRequestDto;
 import com.AccountReceivableManagement.dto.billing_data_acquisition.TimesheetDto;
@@ -26,7 +29,10 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.UUID;
 
@@ -59,6 +65,11 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
     @Autowired(required = false)
     private ExpenseIntegration expenseIntegration;
 
+    // Optional for the same reason; incremental acquisition needs it and fails closed without it.
+    @Autowired(required = false)
+    private com.AccountReceivableManagement.repo.billing_data_acquisition.BillingSnapshotItemRepository
+            billingSnapshotItemRepository;
+
     @Autowired(required = false)
     private XmsProperties xmsProperties;
 
@@ -69,31 +80,92 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
 
     @Override
     public BillingAcquisitionResultDto acquire(BillingConfigurationResponseDto configuration, BillingSnapshotCreateRequestDto request) {
-        List<TimesheetDto> timesheets = timesheetIntegration.getApprovedTimesheets(
-                request.getProjectId(), request.getBillingPeriodStart(), request.getBillingPeriodEnd());
+        return acquire(configuration, request, AcquisitionScope.FAIL_ON_CLAIMED);
+    }
 
-        if (timesheets == null) {
-            timesheets = Collections.emptyList();
-        }
+    /**
+     * Fetches the period's approved timesheets, leaves out those already claimed by another live snapshot
+     * when {@code scope} asks for it (before pricing, so a record billed earlier can never block a new
+     * batch), prices each remaining timesheet against the rate schedule of its own work date, and acquires
+     * the period's expenses when expense billing is on.
+     */
+    @Override
+    public BillingAcquisitionResultDto acquire(BillingConfigurationResponseDto configuration,
+                                               BillingSnapshotCreateRequestDto request, AcquisitionScope scope) {
+        AcquisitionScope effectiveScope = scope != null ? scope : AcquisitionScope.FAIL_ON_CLAIMED;
+        FetchedTimesheets fetched = fetchTimesheets(request.getProjectId(), request.getBillingPeriodStart(),
+                request.getBillingPeriodEnd(), effectiveScope);
 
         UUID configId = request.getBillingConfigurationId() != null
                 ? request.getBillingConfigurationId()
                 : (configuration != null ? configuration.getBillingConfigurationId() : null);
 
-        boolean roleBased = configuration != null
-                && configuration.getPricingModel() == PricingModel.ROLE_BASED;
-
-        for (TimesheetDto timesheet : timesheets) {
-            LocalDate workDate = timesheet.getWorkDate() != null ? timesheet.getWorkDate() : request.getBillingPeriodStart();
-            applyRate(timesheet, configuration, configId, workDate);
-        }
+        applyRates(configuration, configId, fetched.eligible(), request.getBillingPeriodStart());
 
         return BillingAcquisitionResultDto.builder()
                 .billingConfigurationId(configId)
-                .timesheets(timesheets)
-                .expenses(acquireExpenses(configuration, request))
+                .timesheets(fetched.eligible())
+                .expenses(fetchExpenses(configuration, request.getProjectId(), request.getBillingPeriodStart(),
+                        request.getBillingPeriodEnd(), effectiveScope))
                 .expensesChecked(configuration != null && configuration.isExpenseEligible())
+                .alreadyClaimedTimesheetCount(fetched.alreadyClaimed())
                 .build();
+    }
+
+    /** Timesheets eligible for acquisition, and how many approved ones were left out as already claimed. */
+    public record FetchedTimesheets(List<TimesheetDto> eligible, int alreadyClaimed) {
+    }
+
+    /**
+     * Approved billable timesheets of the project dated {@code start}..{@code end} (TMS), unpriced. With
+     * {@code scope.skipAlreadyClaimed()}, those whose TMS id another live (non-cancelled) Billing Snapshot -
+     * other than {@code scope.owningSnapshotId()} - already claims are removed. A timesheet without a TMS id
+     * is kept, so validation still rejects it instead of it being billed untracked.
+     */
+    public FetchedTimesheets fetchTimesheets(Long projectId, LocalDate start, LocalDate end, AcquisitionScope scope) {
+        List<TimesheetDto> timesheets = timesheetIntegration.getApprovedTimesheets(projectId, start, end);
+        List<TimesheetDto> eligible = timesheets == null ? new ArrayList<>() : new ArrayList<>(timesheets);
+        if (scope == null || !scope.skipAlreadyClaimed() || eligible.isEmpty()) {
+            return new FetchedTimesheets(eligible, 0);
+        }
+        if (billingSnapshotItemRepository == null) {
+            // Fail closed: without the claim lookup an already-billed timesheet could be billed again.
+            throw new IllegalStateException("Incremental acquisition needs the billing snapshot item repository "
+                    + "to exclude already-billed timesheets; nothing was acquired.");
+        }
+        Set<String> ids = new HashSet<>();
+        for (TimesheetDto timesheet : eligible) {
+            if (timesheet.getSourceReferenceId() != null && !timesheet.getSourceReferenceId().isBlank()) {
+                ids.add(timesheet.getSourceReferenceId());
+            }
+        }
+        if (ids.isEmpty()) {
+            return new FetchedTimesheets(eligible, 0);
+        }
+        List<String> claimedList = billingSnapshotItemRepository.findClaimedSourceReferenceIds(
+                BillingItemType.TIME_ENTRY, ids, BillingSnapshotStatus.CANCELLED, scope.owningSnapshotId());
+        Set<String> claimed = claimedList == null ? Set.of() : new HashSet<>(claimedList);
+        if (claimed.isEmpty()) {
+            return new FetchedTimesheets(eligible, 0);
+        }
+        int before = eligible.size();
+        eligible.removeIf(timesheet -> claimed.contains(timesheet.getSourceReferenceId()));
+        log.info("[TimeAndMaterialAcquisition] projectId={} period={}..{} excluded {} already-claimed timesheet(s); "
+                + "{} newly eligible", projectId, start, end, before - eligible.size(), eligible.size());
+        return new FetchedTimesheets(eligible, before - eligible.size());
+    }
+
+    /**
+     * Prices every timesheet against the rate schedule in force on its own work date ({@code fallbackDate}
+     * only for a timesheet without one). Throws {@code ValidationException} for an ambiguous or unusable
+     * rate schedule; a timesheet with no rate at all is left without one for the validator to reject.
+     */
+    public void applyRates(BillingConfigurationResponseDto configuration, UUID configId,
+                           List<TimesheetDto> timesheets, LocalDate fallbackDate) {
+        for (TimesheetDto timesheet : timesheets) {
+            LocalDate workDate = timesheet.getWorkDate() != null ? timesheet.getWorkDate() : fallbackDate;
+            applyRate(timesheet, configuration, configId, workDate);
+        }
     }
 
     /**
@@ -213,21 +285,22 @@ public class TimeAndMaterialBillingStrategy implements BillingAcquisitionStrateg
      * silently omitted required expenses would under-bill, so the
      * acquisition fails with an actionable message instead.
      */
-    private List<ExpenseLineDto> acquireExpenses(BillingConfigurationResponseDto configuration,
-                                                 BillingSnapshotCreateRequestDto request) {
+    public List<ExpenseLineDto> fetchExpenses(BillingConfigurationResponseDto configuration, Long projectId,
+                                              LocalDate start, LocalDate end, AcquisitionScope scope) {
         if (configuration == null || !configuration.isExpenseEligible()) {
             return Collections.emptyList();
         }
         if (expenseIntegration == null || xmsProperties == null || !xmsProperties.isEnabled()) {
             log.error("[ExpenseBilling] projectId={} is expense-eligible but the XMS integration is disabled.",
-                    request.getProjectId());
+                    projectId);
             throw new com.AccountReceivableManagement.global_exception_handler.GlobalExceptionHandler.ValidationException(
                     "Expense billing is enabled for this billing configuration, but the Expense Management (XMS) "
                             + "integration is disabled (xms.api.enabled / XMS_ENABLED). Enable it or turn off expense "
                             + "billing for this configuration; the snapshot was not created.");
         }
-        return expenseIntegration.getBillableExpenses(request.getProjectId(),
-                request.getBillingPeriodStart(), request.getBillingPeriodEnd(),
-                configuration.getCurrencyCode());
+        if (scope == null || scope.equals(AcquisitionScope.FAIL_ON_CLAIMED)) {
+            return expenseIntegration.getBillableExpenses(projectId, start, end, configuration.getCurrencyCode());
+        }
+        return expenseIntegration.getBillableExpenses(projectId, start, end, configuration.getCurrencyCode(), scope);
     }
 }

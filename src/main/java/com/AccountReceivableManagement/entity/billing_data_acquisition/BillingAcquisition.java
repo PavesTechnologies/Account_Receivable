@@ -19,9 +19,17 @@ import java.util.UUID;
 @Entity
 @Table(
         name = "billing_acquisition",
+        // One acquisition record per acquisition batch (snapshot); a billing period
+        // can hold several batches. Replaces uk_billing_acq_config_period; both the new key
+        // and the removal of the old one are in scripts/dba/V19_incremental_tm_billing_batches_dba.sql
+        // (V19 adds the plain idx_billing_acq_config_period).
         uniqueConstraints = @UniqueConstraint(
-                name = "uk_billing_acq_config_period",
-                columnNames = {"billing_configuration_id", "billing_period_start", "billing_period_end"}
+                name = "uk_billing_acq_snapshot",
+                columnNames = {"snapshot_id"}
+        ),
+        indexes = @Index(
+                name = "idx_billing_acq_config_period",
+                columnList = "billing_configuration_id, billing_period_start, billing_period_end"
         )
 )
 @Getter

@@ -262,7 +262,7 @@ class BillingSnapshotItemClaimPersistenceTest {
                         .build());
         BillingAcquisitionStrategy strategy = mock(BillingAcquisitionStrategy.class);
         when(strategy.getSupportedBillingType()).thenReturn(BillingType.TIME_AND_MATERIAL);
-        when(strategy.acquire(any(), any())).thenReturn(BillingAcquisitionResultDto.builder()
+        when(strategy.acquire(any(), any(), any())).thenReturn(BillingAcquisitionResultDto.builder()
                 .billingConfigurationId(configurationId)
                 .timesheets(new ArrayList<>(List.of(timesheets)))
                 .build());

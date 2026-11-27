@@ -38,8 +38,14 @@ import java.util.function.Supplier;
  *   - acquiredAt timestamp
  *   - triggerMode (MANUAL)
  *
+ * One record per acquisition batch: a billing period acquired in several
+ * batches (incremental Time &amp; Material billing) has one record per batch,
+ * identified by its snapshot ({@code uk_billing_acq_snapshot}). A record
+ * written before batches existed, with no snapshot yet, is adopted by the
+ * period's first snapshot.
+ *
  * Transactions are programmatic (see {@link #executeWithDuplicateRetry}) so a
- * concurrent insert that loses the {@code uk_billing_acq_config_period} race
+ * concurrent insert that loses the {@code uk_billing_acq_snapshot} race
  * can be retried in a fresh transaction - retrying inside the transaction the
  * failed insert already marked rollback-only would not be safe. When called
  * from inside a caller's transaction (snapshot creation), the work joins that
@@ -97,7 +103,8 @@ public class BillingAcquisitionServiceImpl implements BillingAcquisitionService 
             UUID snapshotId
     ) {
         return executeWithDuplicateRetry(() -> {
-            Optional<BillingAcquisition> existingAcquisition = findAcquisition(billingConfigurationId, startDate, endDate);
+            Optional<BillingAcquisition> existingAcquisition =
+                    findAcquisition(billingConfigurationId, startDate, endDate, snapshotId);
 
             if (existingAcquisition.isEmpty()) {
                 return upsertAcquisition(billingConfigurationId, startDate, endDate, snapshotId,
@@ -198,9 +205,9 @@ public class BillingAcquisitionServiceImpl implements BillingAcquisitionService 
             }
         }
 
-        // 7. Find existing acquisition for this billing period
+        // 7. Find this batch's existing acquisition record
         Optional<BillingAcquisition> existingAcquisition =
-                findAcquisition(billingConfigurationId, startDate, endDate);
+                findAcquisition(billingConfigurationId, startDate, endDate, snapshotId);
 
         BillingAcquisition acquisition;
 
@@ -300,14 +307,30 @@ public class BillingAcquisitionServiceImpl implements BillingAcquisitionService 
         return effectiveTo.isBefore(projectEnd) ? effectiveTo : projectEnd;
     }
 
+    /**
+     * The acquisition record of the batch {@code snapshotId}; failing that, a record of the same
+     * configuration and period that references no snapshot yet (written before the snapshot existed),
+     * which this batch adopts. A record of another batch of the period is never re-pointed - every batch
+     * keeps its own record.
+     */
     private Optional<BillingAcquisition> findAcquisition(UUID billingConfigurationId, LocalDate startDate,
-            LocalDate endDate) {
-        return billingAcquisitionRepository
-                .findByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
+            LocalDate endDate, UUID snapshotId) {
+        if (snapshotId != null) {
+            Optional<BillingAcquisition> ofBatch = billingAcquisitionRepository.findFirstBySnapshotId(snapshotId);
+            if (ofBatch != null && ofBatch.isPresent()) {
+                return ofBatch;
+            }
+        }
+        java.util.List<BillingAcquisition> ofPeriod = billingAcquisitionRepository
+                .findAllByBillingConfiguration_BillingConfigurationIdAndBillingPeriodStartAndBillingPeriodEnd(
                         billingConfigurationId,
                         startDate,
                         endDate
                 );
+        if (ofPeriod == null) {
+            return Optional.empty();
+        }
+        return ofPeriod.stream().filter(acquisition -> acquisition.getSnapshotId() == null).findFirst();
     }
 
     private AcquireDataResponseDto toResponse(BillingAcquisition acquisition) {

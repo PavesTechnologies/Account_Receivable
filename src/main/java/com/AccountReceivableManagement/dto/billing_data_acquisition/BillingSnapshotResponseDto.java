@@ -164,6 +164,19 @@ public class BillingSnapshotResponseDto {
     private Boolean existingSnapshot;
 
     /**
+     * Acquisition batch number within the project's billing period (1, 2, 3 ...). A period
+     * can be billed in several batches when timesheets or expenses are approved after it
+     * was first acquired; each batch is its own snapshot and invoice.
+     */
+    private Integer batchSequence;
+
+    /**
+     * Incremental acquisition only: approved timesheets of the period left out because an
+     * earlier batch already bills them. Omitted elsewhere.
+     */
+    private Integer excludedAlreadyBilledTimesheetCount;
+
+    /**
      * Timesheet line items acquired from TMS — returned so the UI can
      * immediately render the Labor Charges Preview table without a
      * second round-trip. Each entry mirrors one TMS timesheet row with
